@@ -46,3 +46,6 @@
 [submodule "apps/ai/vllm"]
 	path = apps/ai/vllm
 	url = https://github.com/vllm-project/vllm.git
+[submodule "goal_gen/ai/nccl_generator_v2"]
+	path = goal_gen/ai/nccl_generator_v2
+	url = git@github.com:Yanksi/nccl_generator_v2.git
