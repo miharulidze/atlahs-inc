@@ -1,0 +1,212 @@
+# Adding ATLAHS NVTX Annotations to NCCL
+
+## Goal
+
+Build and use an NCCL library with **ATLAHS NVTX annotations** so the ATLAHS pipeline (nsys → sqlite → GOAL → LGS) can parse NCCL activity reliably.
+
+This directory is intended to host version-specific artifacts (patches and/or annotated source drops) for multiple NCCL releases.
+
+## Supported NCCL versions (current)
+
+| NCCL version | How it is distributed here | Artifact |
+|---|---|---|
+| 2.20.x | Annotated source tree (historical baseline used by ATLAHS; distributed as modified source) | `nccl_nvtx_v2.20.5/` (if present) |
+| 2.28.3-1 | Patch to apply to clean NCCL sources | `nccl_atlahs_228.patch` |
+
+## Forward compatibility
+
+Depending on upstream NCCL changes, a patch for one release may apply cleanly to a newer release (especially minor/patch updates), but this is not guaranteed.
+
+Practical rule of thumb:
+
+- Try `git apply --check` against your target NCCL version.
+- If it applies, rebuild and verify NVTX markers show up in the trace.
+- If it does not apply, expect to update the patch around the enqueue/init/collectives codepaths.
+
+## What the ATLAHS annotations add (NCCL behavior unchanged)
+
+- NVTX ranges for:
+  - **API** (collectives)
+  - **Enqueue** (WorkElemColl / CollInfo metadata: `nWarps`, chunking, buffers)
+  - **Group** start/end
+  - **Init** (initComm + channel topology)
+- Build-time flags injected into both host + device compilation via `TRACING_FLAGS`:
+  - `-DENABLE_API_NVTX -DENABLE_INIT_NVTX -DENABLE_ENQUEUE_NVTX`
+- Expected NCCL files touched (exact paths may vary slightly by version):
+  - `makefiles/common.mk` (propagate `TRACING_FLAGS` into `CXXFLAGS` / `NVCUFLAGS`)
+  - `src/collectives.cc`, `src/enqueue.cc`, `src/group.cc`, `src/init.cc`
+
+## Requirements
+
+- Clean NCCL source tree matching the version you want to annotate (tarball or git tag).
+- CUDA toolkit + compatible host compiler.
+- Nsight Systems (`nsys`) available in the same environment you will **export** traces from.
+- Correct GPU target(s) for your system (set `NVCC_GENCODE`). Examples:
+   - H100/GH200 (SM90): `-gencode=arch=compute_90,code=sm_90`
+   - A100 (SM80): `-gencode=arch=compute_80,code=sm_80`
+
+## Build steps
+
+Choose one of the supported version paths below.
+
+### Option A: NCCL 2.28.3-1 (apply patch)
+
+#### 1) Apply the patch
+
+Apply the patch shipped in this directory to a clean NCCL `2.28.3-1` source tree.
+
+```bash
+tar xf nccl-2.28.3-1.tar.gz
+cd nccl-2.28.3-1
+git apply <repo_root>/goal_gen/ai/nccl_versions/nccl_atlahs_228.patch
+```
+
+#### 2) Build NCCL with NVTX enabled
+
+```bash
+make clean
+
+export TRACING_FLAGS="-DENABLE_API_NVTX -DENABLE_INIT_NVTX -DENABLE_ENQUEUE_NVTX"
+export NVCC_GENCODE="-gencode=arch=compute_90,code=sm_90"  # adjust for your GPU
+
+make -j src.build \
+   CUDA_HOME=${CUDA_HOME:-/usr/local/cuda} \
+   NVCC_GENCODE="$NVCC_GENCODE" \
+   TRACING_FLAGS="$TRACING_FLAGS"
+```
+
+Result: `build/lib/libnccl.so` (NVTX-enabled).
+
+#### 3) Use the built library
+
+For NCCL 2.28, prefer selecting the library via `LD_LIBRARY_PATH`:
+
+```bash
+export LD_LIBRARY_PATH=/path/to/nccl-2.28.3-1/build/lib:"$LD_LIBRARY_PATH"
+```
+
+Use `LD_PRELOAD` only if you must override a bundled/system NCCL that gets picked first:
+
+```bash
+export LD_PRELOAD=/path/to/nccl-2.28.3-1/build/lib/libnccl.so
+```
+
+Avoid setting both unless you have a specific reason.
+
+### Option B: NCCL 2.20.x (annotated source drop)
+
+Historically, ATLAHS started from an NCCL 2.20-based annotated source tree.
+If you have that annotated source drop available, build it as you would a normal NCCL release, and keep `TRACING_FLAGS` enabled.
+
+Notes:
+
+- This repo may contain an example drop under `nccl_nvtx_v2.20.5/`.
+- If the directory is empty in your checkout, it may be intentionally omitted from version control and distributed separately.
+
+## Collect traces (nsys)
+
+Run your workload under `nsys` with NVTX enabled (you can use any launcher: direct run, mpirun, srun, sbatch, etc.).
+
+Typical flags that work well with ATLAHS post-processing:
+
+```bash
+nsys profile \
+   --trace=nvtx,cuda \
+   --cuda-memory-usage=false \
+   --cuda-um-cpu-page-faults=false \
+   --cuda-um-gpu-page-faults=false \
+   -s none \
+   -o <trace_dir>/nsys_report \
+   <your_command_here>
+```
+
+If you are using the repository scripts, you can adapt:
+
+- `apps/ai/scripts/run_megatron.sh`
+- `apps/ai/scripts/run_vllm.sh`
+
+## Export traces to SQLite
+
+Preferred: use the helper script (from the repo root):
+
+```bash
+bash scripts/nsys_reports_to_sqlite.sh <trace_dir>
+```
+
+If you hit an `nsys export` version mismatch, run export using the same container/module/environment that created the `.nsys-rep` files.
+
+## Quick NVTX sanity check
+
+Pick one exported SQLite file and verify NCCL NVTX ranges exist:
+
+```bash
+python3 - <<'PY'
+import os
+import sqlite3
+
+db = os.environ.get("NSYS_SQLITE", "<trace_dir>/nsys_report.sqlite")
+con = sqlite3.connect(db)
+cur = con.cursor()
+
+cur.execute("select count(*) from NVTX_EVENTS where text like 'nccl%'")
+print("NCCL NVTX:", cur.fetchone()[0])
+
+cur.execute("select count(*) from NVTX_EVENTS where text like '%nWarps % sendbuff % recvbuff %'")
+print("Enqueue markers:", cur.fetchone()[0])
+PY
+```
+
+Alternative quick check (no export needed):
+
+```bash
+strings <trace_dir>/*.nsys-rep | grep -m1 nWarps
+```
+
+## GOAL → BIN → LGS
+
+1) Generate GOAL events from traces:
+
+```bash
+python3 goal_gen/ai/nccl_goal_generator/get_traced_events.py \
+   -i <trace_dir>/ -o <goal_dir>/ --unique-nic --merge-non-overlap \
+   -l goal_gen/ai/nccl_goal_generator/npkit_benchmark_results/<platform>/npkit_data_summary_LL.json \
+   -s goal_gen/ai/nccl_goal_generator/npkit_benchmark_results/<platform>/npkit_data_summary_Simple.json
+```
+
+`<platform>` should match one of the available directories under `goal_gen/ai/nccl_goal_generator/npkit_benchmark_results/` (e.g., `ault`, `clariden`, `play`).
+
+2) Convert text GOAL → binary:
+
+```bash
+sim/LogGOPSim/txt2bin \
+   -i <goal_dir>/InterNode_MicroEvents_Dependency.goal \
+   -o <goal_dir>/<name>.bin
+```
+
+3) Run LogGOPSim:
+
+```bash
+sim/LogGOPSim/LogGOPSim \
+   -f <goal_dir>/<name>.bin -L 3700 -o 200 -g 5 -O 0 -G 0.04 -S 0 \
+   | tee <goal_dir>/<name>.lgs.log
+```
+
+## Troubleshooting
+
+- **No NVTX markers**: ensure `TRACING_FLAGS` were set during the NCCL build and that your run is actually loading the patched `libnccl.so`.
+- **Wrong NCCL picked up**: check your environment (`LD_LIBRARY_PATH` / `LD_PRELOAD`) and verify with `ldd <your_binary> | grep nccl`.
+- **`nsys export` mismatch**: export using the same Nsight Systems version/environment that generated the `.nsys-rep`.
+- **Empty globs in scripts**: enable `nullglob` in bash before looping over `*.nsys-rep`:
+
+   ```bash
+   shopt -s nullglob
+   ```
+
+## Adding support for more NCCL versions
+
+To extend support, add a new patch (recommended) or an annotated source directory under this folder and update the table in this README.
+
+Suggested naming:
+
+- Patch: `nccl_atlahs_<major><minor>.patch` (example: `nccl_atlahs_228.patch`)
+- Source drop: `nccl_nvtx_v<nccl_version>/`
