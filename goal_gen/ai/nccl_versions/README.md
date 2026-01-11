@@ -10,7 +10,7 @@ This directory is intended to host version-specific artifacts (patches and/or an
 
 | NCCL version | How it is distributed here | Artifact |
 |---|---|---|
-| 2.20.x | Annotated source tree (historical baseline used by ATLAHS; distributed as modified source) | `nccl_nvtx_v2.20.5/` (if present) |
+| 2.20.x | Annotated source tree (historical baseline used by ATLAHS; distributed as modified source) | `nccl_nvtx_v2.20.5/` (git submodule) |
 | 2.28.3-1 | Patch to apply to clean NCCL sources | `nccl_atlahs_228.patch` |
 
 ## Forward compatibility
@@ -96,12 +96,22 @@ Avoid setting both unless you have a specific reason.
 ### Option B: NCCL 2.20.x (annotated source drop)
 
 Historically, ATLAHS started from an NCCL 2.20-based annotated source tree.
-If you have that annotated source drop available, build it as you would a normal NCCL release, and keep `TRACING_FLAGS` enabled.
 
-Notes:
+In this repo, NCCL 2.20.5 annotated source is provided as a **git submodule** at:
 
-- This repo may contain an example drop under `nccl_nvtx_v2.20.5/`.
-- If the directory is empty in your checkout, it may be intentionally omitted from version control and distributed separately.
+- `goal_gen/ai/nccl_versions/nccl_nvtx_v2.20.5/`
+
+Upstream repo + pinned commit:
+
+- https://github.com/ZhiyiHu1999/nccl_nvtx_v2.20.5-1/tree/afd5dc513dfc79822da1f97fa6cf557a90902a4c
+
+If you cloned this repo without submodules, initialize it with:
+
+```bash
+git submodule update --init --recursive
+```
+
+Then build the 2.20.5 tree as you would a normal NCCL release, keeping `TRACING_FLAGS` enabled.
 
 ## Collect traces (nsys)
 
