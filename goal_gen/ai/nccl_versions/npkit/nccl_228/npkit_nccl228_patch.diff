@@ -1,0 +1,263 @@
+diff --git a/makefiles/common.mk b/makefiles/common.mk
+index f8f455d..a2eeb42 100644
+--- a/makefiles/common.mk
++++ b/makefiles/common.mk
+@@ -76,12 +76,12 @@ endif
+ 
+ CXXFLAGS   := -DCUDA_MAJOR=$(CUDA_MAJOR) -DCUDA_MINOR=$(CUDA_MINOR) -fPIC -fvisibility=hidden \
+               -Wall -Wno-unused-function -Wno-sign-compare $(CXXSTD) -Wvla \
+-              -I $(CUDA_INC) -I $(CUDA_INC)/cccl \
++              -I $(CUDA_INC) -I $(CUDA_INC)/cccl $(TRACING_FLAGS) \
+               $(CXXFLAGS)
+ # Maxrregcount needs to be set accordingly to NCCL_MAX_NTHREADS (otherwise it will cause kernel launch errors)
+ # 512 : 120, 640 : 96, 768 : 80, 1024 : 60
+ # We would not have to set this if we used __launch_bounds__, but this only works on kernels, not on functions.
+-NVCUFLAGS  := -ccbin $(CXX) $(NVCC_GENCODE) $(CXXSTD) --expt-extended-lambda -Xptxas -maxrregcount=96 -Xfatbin -compress-all
++NVCUFLAGS  := -ccbin $(CXX) $(NVCC_GENCODE) $(CXXSTD) --expt-extended-lambda -Xptxas -maxrregcount=96 -Xfatbin -compress-all $(TRACING_FLAGS)
+ # Use addprefix so that we can specify more than one path
+ NVLDFLAGS  := -L${CUDA_LIB} -lcudart -lrt
+ 
+diff --git a/src/device/all_reduce.h b/src/device/all_reduce.h
+index f6b6e9c..65daaa9 100644
+--- a/src/device/all_reduce.h
++++ b/src/device/all_reduce.h
+@@ -7,6 +7,9 @@
+ #include "device.h"
+ #include "collectives.h"
+ #include "primitives.h"
++#if defined(ENABLE_NPKIT)
++#include "npkit/npkit.h"
++#endif
+ 
+ namespace {
+   template<typename T, typename RedOp, typename Proto>
+@@ -23,6 +26,16 @@ namespace {
+     int nelem;
+     int chunk;
+ 
++#if defined(ENABLE_NPKIT)
++    const int npKitCtxIdx = blockIdx.x;
++    auto* const npKitCtx = ncclShmem.comm.npKitEventCollectContexts + npKitCtxIdx;
++    const bool emitPrim = true;
++    const uint8_t primEvent =
++      Proto::Id == NCCL_PROTO_LL ? NPKIT_EVENT_PRIM_LL_DATA_PROCESS_EXIT :
++      (Proto::Id == NCCL_PROTO_LL128 ? NPKIT_EVENT_PRIM_LL128_DATA_PROCESS_EXIT :
++       NPKIT_EVENT_PRIM_SIMPLE_DATA_PROCESS_EXIT);
++#endif
++
+     // Coverity reports that the callee treats &ring->next as an array.  However, due to the use of
+     // FanSymmetric<1>, only the first element is ever accessed, so it's fine.
+     // coverity[callee_ptr_arith:FALSE]
+@@ -44,15 +57,54 @@ namespace {
+       chunkOffset = chunk * chunkCount;
+       offset = gridOffset + elemOffset + chunkOffset;
+       nelem = (int)min(chunkCount, remCount - chunkOffset);
++
++#if defined(ENABLE_NPKIT)
++      uint64_t npkit_ts_start = 0, npkit_ts_end = 0;
++      if (tid == 0) {
++        npkit_ts_start = clock64();
++        NpKit::CollectGpuEvent(NPKIT_EVENT_GPU_SEND_ENTRY, nelem*sizeof(T), 0, npkit_ts_start, npKitCtx);
++      }
++#endif
++
+       prims.directSend(offset, offset, nelem);
+ 
++#if defined(ENABLE_NPKIT)
++      if (tid == 0) {
++        npkit_ts_end = clock64();
++        uint32_t duration = (uint32_t)(npkit_ts_end - npkit_ts_start);
++        NpKit::CollectGpuEvent(NPKIT_EVENT_GPU_SEND_EXIT, nelem*sizeof(T), duration, npkit_ts_end, npKitCtx);
++        if (emitPrim) {
++          NpKit::CollectGpuEvent(primEvent, nelem*sizeof(T), duration, npkit_ts_end, npKitCtx);
++        }
++      }
++#endif
++
+       // k-2 steps: reduce and copy to next GPU
+       for (int j = 2; j < nranks; ++j) {
+         chunk = modRanks(ringIx + nranks - j);
+         chunkOffset = chunk * chunkCount;
+         offset = gridOffset + elemOffset + chunkOffset;
+         nelem = (int)min(chunkCount, remCount - chunkOffset);
++
++#if defined(ENABLE_NPKIT)
++        if (tid == 0) {
++          npkit_ts_start = clock64();
++          NpKit::CollectGpuEvent(NPKIT_EVENT_GPU_RECV_REDUCE_SEND_ENTRY, nelem*sizeof(T), 0, npkit_ts_start, npKitCtx);
++        }
++#endif
++
+         prims.directRecvReduceDirectSend(offset, offset, nelem);
++
++#if defined(ENABLE_NPKIT)
++        if (tid == 0) {
++          npkit_ts_end = clock64();
++          uint32_t duration = (uint32_t)(npkit_ts_end - npkit_ts_start);
++          NpKit::CollectGpuEvent(NPKIT_EVENT_GPU_RECV_REDUCE_SEND_EXIT, nelem*sizeof(T), duration, npkit_ts_end, npKitCtx);
++          if (emitPrim) {
++            NpKit::CollectGpuEvent(primEvent, nelem*sizeof(T), duration, npkit_ts_end, npKitCtx);
++          }
++        }
++#endif
+       }
+ 
+       // step k-1: reduce this buffer and data, which will produce the final
+@@ -61,15 +113,53 @@ namespace {
+       chunkOffset = chunk * chunkCount;
+       offset = gridOffset + elemOffset + chunkOffset;
+       nelem = (int)min(chunkCount, remCount - chunkOffset);
++
++#if defined(ENABLE_NPKIT)
++      if (tid == 0) {
++        npkit_ts_start = clock64();
++        NpKit::CollectGpuEvent(NPKIT_EVENT_GPU_DIRECT_RECV_REDUCE_COPY_SEND_ENTRY, nelem*sizeof(T), 0, npkit_ts_start, npKitCtx);
++      }
++#endif
++
+       prims.directRecvReduceCopyDirectSend(offset, offset, nelem, /*postOp=*/true);
+ 
++#if defined(ENABLE_NPKIT)
++      if (tid == 0) {
++        npkit_ts_end = clock64();
++        uint32_t duration = (uint32_t)(npkit_ts_end - npkit_ts_start);
++        NpKit::CollectGpuEvent(NPKIT_EVENT_GPU_DIRECT_RECV_REDUCE_COPY_SEND_EXIT, nelem*sizeof(T), duration, npkit_ts_end, npKitCtx);
++        if (emitPrim) {
++          NpKit::CollectGpuEvent(primEvent, nelem*sizeof(T), duration, npkit_ts_end, npKitCtx);
++        }
++      }
++#endif
++
+       // k-2 steps: copy to next GPU
+       for (int j = 1; j < nranks - 1; ++j) {
+         chunk = modRanks(ringIx + nranks - j);
+         chunkOffset = chunk * chunkCount;
+         offset = gridOffset + elemOffset + chunkOffset;
+         nelem = (int)min(chunkCount, remCount - chunkOffset);
++
++#if defined(ENABLE_NPKIT)
++        if (tid == 0) {
++          npkit_ts_start = clock64();
++          NpKit::CollectGpuEvent(NPKIT_EVENT_GPU_DIRECT_RECV_COPY_SEND_ENTRY, nelem*sizeof(T), 0, npkit_ts_start, npKitCtx);
++        }
++#endif
++
+         prims.directRecvCopyDirectSend(offset, offset, nelem);
++
++#if defined(ENABLE_NPKIT)
++        if (tid == 0) {
++          npkit_ts_end = clock64();
++          uint32_t duration = (uint32_t)(npkit_ts_end - npkit_ts_start);
++          NpKit::CollectGpuEvent(NPKIT_EVENT_GPU_DIRECT_RECV_COPY_SEND_EXIT, nelem*sizeof(T), duration, npkit_ts_end, npKitCtx);
++          if (emitPrim) {
++            NpKit::CollectGpuEvent(primEvent, nelem*sizeof(T), duration, npkit_ts_end, npKitCtx);
++          }
++        }
++#endif
+       }
+ 
+       // Make final copy from buffer to dest.
+@@ -78,7 +168,25 @@ namespace {
+       offset = gridOffset + elemOffset + chunkOffset;
+       nelem = (int)min(chunkCount, remCount - chunkOffset);
+ 
++#if defined(ENABLE_NPKIT)
++      if (tid == 0) {
++        npkit_ts_start = clock64();
++        NpKit::CollectGpuEvent(NPKIT_EVENT_GPU_DIRECT_RECV_ENTRY, nelem*sizeof(T), 0, npkit_ts_start, npKitCtx);
++      }
++#endif
++
+       prims.directRecv(offset, nelem);
++
++#if defined(ENABLE_NPKIT)
++      if (tid == 0) {
++        npkit_ts_end = clock64();
++        uint32_t duration = (uint32_t)(npkit_ts_end - npkit_ts_start);
++        NpKit::CollectGpuEvent(NPKIT_EVENT_GPU_DIRECT_RECV_EXIT, nelem*sizeof(T), duration, npkit_ts_end, npKitCtx);
++        if (emitPrim) {
++          NpKit::CollectGpuEvent(primEvent, nelem*sizeof(T), duration, npkit_ts_end, npKitCtx);
++        }
++      }
++#endif
+     }
+   }
+ 
+diff --git a/src/include/device.h b/src/include/device.h
+index 9ffc260..4357277 100644
+--- a/src/include/device.h
++++ b/src/include/device.h
+@@ -10,6 +10,9 @@
+ #include "nccl.h"
+ #include "nccl_tuner.h"
+ #include "bitops.h"
++#if defined(ENABLE_NPKIT)
++#include "npkit/npkit_struct.h"
++#endif
+ #include <algorithm>
+ #include <stdint.h>
+ #include <sys/types.h>
+@@ -425,6 +428,11 @@ struct ncclKernelComm {
+   struct ncclDevChannel* channels/*[MAXCHANNELS]*/;
+   int* rankToLocalRank;
+ 
++#if defined(ENABLE_NPKIT)
++  NpKitEventCollectContext* npKitEventCollectContexts;
++  uint64_t* cpuTimestamp;
++#endif
++
+   // Profiler counters
+   struct ncclDevProfiler* workStarted/*[MAXCHANNELS]*/;
+   struct ncclDevProfiler* workCompleted/*[MAXCHANNELS]*/;
+diff --git a/src/init.cc b/src/init.cc
+index ebf942c..1935f97 100644
+--- a/src/init.cc
++++ b/src/init.cc
+@@ -16,6 +16,9 @@
+ #include "enqueue.h"
+ #include "graph.h"
+ #include "argcheck.h"
++#if defined(ENABLE_NPKIT)
++#include "npkit/npkit.h"
++#endif
+ #include "tuner.h"
+ #include "ras.h"
+ #include "profiler.h"
+@@ -502,11 +505,17 @@ static ncclResult_t devCommSetup(ncclComm_t comm) {
+   tmpCommAndChans.comm.abortFlag = comm->abortFlagDev;
+   tmpCommAndChans.comm.isAllNvlink = comm->isAllNvlink;
+   for (int p=0; p < NCCL_NUM_PROTOCOLS; p++) {
+-    tmpCommAndChans.comm.buffSizes[p] = comm->buffSizes[p];
++  tmpCommAndChans.comm.buffSizes[p] = comm->buffSizes[p];
+   }
+   tmpCommAndChans.comm.p2pChunkSize = comm->p2pChunkSize;
+   tmpCommAndChans.comm.channels = &devCommAndChans->channels[0];
+ 
++#if defined(ENABLE_NPKIT)
++  NCCLCHECKGOTO(NpKit::Init(comm->rank), ret, fail);
++  tmpCommAndChans.comm.npKitEventCollectContexts = NpKit::GetGpuEventCollectContexts();
++  tmpCommAndChans.comm.cpuTimestamp = NpKit::GetCpuTimestamp();
++#endif
++
+   comm->workArgsBytes = std::min<size_t>(ncclParamWorkArgsBytes(), ncclMaxKernelArgsSize(comm->cudaArch));
+ 
+   memset(&ccStatus, 0, sizeof(ccStatus));
+@@ -2182,6 +2191,18 @@ static ncclResult_t commCleanup(ncclComm_t comm) {
+     NCCLCHECK(comm->tuner->finalize(comm->tunerContext));
+     NCCLCHECK(ncclTunerPluginUnload(comm));
+   }
++
++#if defined(ENABLE_NPKIT)
++  const char* npkitDumpDir = getenv("NPKIT_DUMP_DIR");
++  if (npkitDumpDir == nullptr) {
++    WARN("NPKIT_DUMP_DIR is empty");
++  } else {
++    INFO(NCCL_INIT, "NPKit Dump Started");
++    NCCLCHECK(NpKit::Dump(npkitDumpDir));
++  }
++  NCCLCHECK(NpKit::Shutdown());
++#endif
++
+   NCCLCHECK(commFree(comm));
+   return ncclSuccess;
+ }

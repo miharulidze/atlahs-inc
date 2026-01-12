@@ -19,6 +19,14 @@ This repository contains the source code for ATLAHS, a network simulator toolcha
 - GOAL (Group Operation Assembly Language) generators (`goal_gen/`): Tools that trace AI, HPC, and storage applications and converts them into network workloads usable by network simulators.
 - Simulation backends (`backends/`): Various backends for simulating network workloads, including LogGOPSim, HTSim, and NS-3 (in progress).
 
+## Custom NCCL builds (NVTX / tracing)
+
+ATLAHS supports **multiple NCCL versions** via version-specific patches and annotated source drops.
+
+If you need to build a custom NCCL with ATLAHS NVTX annotations (for `nsys → sqlite → GOAL → LGS`), start here:
+
+- `goal_gen/ai/nccl_versions/README.md`
+
 
 The paper of this work is available on arXiv: [https://arxiv.org/pdf/2505.08936](https://arxiv.org/pdf/2505.08936), and it has been accepted by The International Conference for High Performance Computing, Networking, Storage and Analysis (SC25).
 

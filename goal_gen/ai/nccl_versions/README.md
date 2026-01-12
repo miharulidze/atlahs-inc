@@ -2,9 +2,9 @@
 
 ## Goal
 
-Build and use an NCCL library with **ATLAHS NVTX annotations** so the ATLAHS pipeline (nsys → sqlite → GOAL → LGS) can parse NCCL activity reliably.
+Build NCCL with **ATLAHS NVTX annotations** so the ATLAHS pipeline (nsys → sqlite → GOAL → LGS) can reliably pick up NCCL activity.
 
-This directory is intended to host version-specific artifacts (patches and/or annotated source drops) for multiple NCCL releases.
+This folder is where we keep NCCL-version-specific bits (patches or annotated source trees).
 
 ## Supported NCCL versions (current)
 
@@ -17,7 +17,7 @@ This directory is intended to host version-specific artifacts (patches and/or an
 
 Depending on upstream NCCL changes, a patch for one release may apply cleanly to a newer release (especially minor/patch updates), but this is not guaranteed.
 
-Practical rule of thumb:
+Quick check:
 
 - Try `git apply --check` against your target NCCL version.
 - If it applies, rebuild and verify NVTX markers show up in the trace.
@@ -25,22 +25,21 @@ Practical rule of thumb:
 
 ## What the ATLAHS annotations add (NCCL behavior unchanged)
 
-- NVTX ranges for:
-  - **API** (collectives)
-  - **Enqueue** (WorkElemColl / CollInfo metadata: `nWarps`, chunking, buffers)
-  - **Group** start/end
-  - **Init** (initComm + channel topology)
-- Build-time flags injected into both host + device compilation via `TRACING_FLAGS`:
-  - `-DENABLE_API_NVTX -DENABLE_INIT_NVTX -DENABLE_ENQUEUE_NVTX`
-- Expected NCCL files touched (exact paths may vary slightly by version):
-  - `makefiles/common.mk` (propagate `TRACING_FLAGS` into `CXXFLAGS` / `NVCUFLAGS`)
-  - `src/collectives.cc`, `src/enqueue.cc`, `src/group.cc`, `src/init.cc`
+- NVTX ranges around:
+   - collectives API
+   - enqueue path (WorkElemColl / CollInfo metadata like `nWarps`, chunking, buffers)
+   - group start/end
+   - init/topology
+- Build flags (passed via `TRACING_FLAGS`): `-DENABLE_API_NVTX -DENABLE_INIT_NVTX -DENABLE_ENQUEUE_NVTX`
+- Typical files touched (paths vary by version):
+   - `makefiles/common.mk`
+   - `src/collectives.cc`, `src/enqueue.cc`, `src/group.cc`, `src/init.cc`
 
 ## Requirements
 
-- Clean NCCL source tree matching the version you want to annotate (tarball or git tag).
-- CUDA toolkit + compatible host compiler.
-- Nsight Systems (`nsys`) available in the same environment you will **export** traces from.
+- Clean NCCL source tree matching the version you want (tarball or git tag)
+- CUDA toolkit + compatible host compiler
+- Nsight Systems (`nsys`) available in the same environment you will **export** traces from
 - Correct GPU target(s) for your system (set `NVCC_GENCODE`). Examples:
    - H100/GH200 (SM90): `-gencode=arch=compute_90,code=sm_90`
    - A100 (SM80): `-gencode=arch=compute_80,code=sm_80`
@@ -54,6 +53,24 @@ Choose one of the supported version paths below.
 #### 1) Apply the patch
 
 Apply the patch shipped in this directory to a clean NCCL `2.28.3-1` source tree.
+
+If you don’t already have the sources, the easiest way is to clone the matching tag:
+
+```bash
+git clone https://github.com/NVIDIA/nccl.git -b v2.28.3 $SCRATCH/nccl_228_npkit/nccl
+```
+
+```bash
+cd $SCRATCH/nccl_228_npkit/nccl
+```
+
+Then apply the patch:
+
+```bash
+git apply <repo_root>/goal_gen/ai/nccl_versions/nccl_atlahs_228.patch
+```
+
+Alternatively, if you start from a tarball:
 
 ```bash
 tar xf nccl-2.28.3-1.tar.gz
@@ -79,13 +96,13 @@ Result: `build/lib/libnccl.so` (NVTX-enabled).
 
 #### 3) Use the built library
 
-For NCCL 2.28, prefer selecting the library via `LD_LIBRARY_PATH`:
+For NCCL 2.28, prefer `LD_LIBRARY_PATH`:
 
 ```bash
 export LD_LIBRARY_PATH=/path/to/nccl-2.28.3-1/build/lib:"$LD_LIBRARY_PATH"
 ```
 
-Use `LD_PRELOAD` only if you must override a bundled/system NCCL that gets picked first:
+Use `LD_PRELOAD` only if you must override a bundled/system NCCL:
 
 ```bash
 export LD_PRELOAD=/path/to/nccl-2.28.3-1/build/lib/libnccl.so
@@ -111,7 +128,7 @@ If you cloned this repo without submodules, initialize it with:
 git submodule update --init --recursive
 ```
 
-Then build the 2.20.5 tree as you would a normal NCCL release, keeping `TRACING_FLAGS` enabled.
+Then build the 2.20.5 tree like a normal NCCL release, keeping `TRACING_FLAGS` enabled.
 
 ## Collect traces (nsys)
 
@@ -214,7 +231,7 @@ sim/LogGOPSim/LogGOPSim \
 
 ## Adding support for more NCCL versions
 
-To extend support, add a new patch (recommended) or an annotated source directory under this folder and update the table in this README.
+To extend support, add a new patch (recommended) or an annotated source directory under this folder, then update the table above.
 
 Suggested naming:
 
