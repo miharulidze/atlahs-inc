@@ -134,6 +134,8 @@ Then build the 2.20.5 tree like a normal NCCL release, keeping `TRACING_FLAGS` e
 
 Run your workload under `nsys` with NVTX enabled (you can use any launcher: direct run, mpirun, srun, sbatch, etc.).
 
+Important: the NCCL 2.28 patch currently emits NVTX ranges in the **default NVTX domain** (i.e., it does not create/use a named `NCCL` domain). If you run `nsys` with `--nvtx-domain-include=NCCL`, you will filter these ranges out and ATLAHS will not see them. Omit `--nvtx-domain-include` unless you also change the patch to emit into a named domain.
+
 Typical flags that work well with ATLAHS post-processing:
 
 ```bash
@@ -146,6 +148,11 @@ nsys profile \
    -o <trace_dir>/nsys_report \
    <your_command_here>
 ```
+
+Both layouts work:
+
+- **Per-node** reports (historical NCCL 2.20 ETH traces): one `.nsys-rep` containing multiple ranks/GPUs.
+- **Per-rank/GPU** reports (common NCCL 2.28): one `.nsys-rep` per rank. If you export to SQLite, prefer filenames like `profile_<jobid>_<node>_<rank>.sqlite` so the goal generator can infer rank↔host mapping when comm-init markers are missing.
 
 If you are using the repository scripts, you can adapt:
 

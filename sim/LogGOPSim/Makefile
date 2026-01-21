@@ -1,7 +1,7 @@
 CXX=g++
-CXXFLAGS= -O3 -g -pedantic -Wno-deprecated -Wall -Wno-long-long -I/usr/include/graphviz
+CXXFLAGS= -O3 -g -pedantic -Wno-deprecated -Wall -Wno-long-long
 CCFLAGS= -O3 -g 
-LDFLAGS= -lcgraph -g
+LDFLAGS= -g
 
 AUTOGEN_SRC= cmdline.c cmdline.h 
 LOGGOPSIM_OBJECTS= LogGOPSim.o 
