@@ -35,7 +35,8 @@ def get_in_gpu_microevents_dependency(nccl_group_events, comm_init_events,
         # file.write(f"l{task_counter}: calc 0\n") ## End point of the node
         node_end_calc_id = task_counter
 
-        for gpuId, gpu_events in goal_events.items():
+        for gpuId in sorted(goal_events.keys(), key=int):
+            gpu_events = goal_events[gpuId]
             SendRecvEvents_To_TaskCounter[goal_rank][gpuId] = {}
 
             gpu_all_stream_start_time = None
@@ -44,7 +45,8 @@ def get_in_gpu_microevents_dependency(nccl_group_events, comm_init_events,
                 gpu_all_stream_start_time = profile_interval[gpuId]["start"]
                 gpu_all_stream_end_time = profile_interval[gpuId]["end"]
             else:
-                for streamId, stream_events in gpu_events.items():
+                for streamId in sorted(gpu_events.keys(), key=int):
+                    stream_events = gpu_events[streamId]
                     if gpu_all_stream_start_time is None:
                         gpu_all_stream_start_time = stream_events[0]['ts_group_gpu_start']
                     else:
@@ -53,7 +55,9 @@ def get_in_gpu_microevents_dependency(nccl_group_events, comm_init_events,
             
             print(f"[DEBUG] GPU {gpuId} profiling interval: [{gpu_all_stream_start_time}, {gpu_all_stream_end_time}]")
 
-            for streamId, stream_events in tqdm(gpu_events.items()):
+            for streamId in tqdm(sorted(gpu_events.keys(), key=int)):
+                stream_events = gpu_events[streamId]
+                stream_events = sorted(stream_events, key=lambda e: e.get('ts_group_gpu_start', 0))
                 last_group_event_end_time =  gpu_all_stream_start_time
                 last_group_event_end_id = node_start_calc_id
                 for group_event_index, group_event in enumerate(stream_events):
@@ -181,7 +185,7 @@ def get_in_gpu_microevents_dependency(nccl_group_events, comm_init_events,
                                 stepSize = event['stepSize']
 
                                 if algo == '1': ## Ring AllReduce
-                                    ringIx = comm_info[commId]['gpuId_To_rank'][gpuId]  ## local rank index in the communicator
+                                    ringIx = str(comm_info[commId]['gpuId_To_rank'][gpuId])  ## local rank index in the communicator
                                     channel_info = comm_info[commId]['rank_To_rankInfo'][ringIx]['channel_info']['Ring']
 
                                     elems = event['elems']
@@ -190,9 +194,9 @@ def get_in_gpu_microevents_dependency(nccl_group_events, comm_init_events,
                                         SendRecvEvents_To_TaskCounter[goal_rank][gpuId][commId][event['event_type']][event['seq']][channel_id]['send'] = {}
                                         SendRecvEvents_To_TaskCounter[goal_rank][gpuId][commId][event['event_type']][event['seq']][channel_id]['recv'] = {}
                                         nranks = comm_info[event['commId']]['nranks']  ## 2
-                                        prevIx = channel_info[channel_id]['previous_rank']  ## local rank index in the communicator  ## potentially some allreduce use more elems than channels, maybe modify channel_id to 0
+                                        prevIx = str(channel_info[channel_id]['previous_rank'])  ## local rank index in the communicator  ## potentially some allreduce use more elems than channels, maybe modify channel_id to 0
                                         SendRecvEvents_To_TaskCounter[goal_rank][gpuId][commId][event['event_type']][event['seq']][channel_id]['recv'][prevIx] = []
-                                        nextIx = channel_info[channel_id]['next_rank']  ## local rank index in the communicator
+                                        nextIx = str(channel_info[channel_id]['next_rank'])  ## local rank index in the communicator
                                         SendRecvEvents_To_TaskCounter[goal_rank][gpuId][commId][event['event_type']][event['seq']][channel_id]['send'][nextIx] = []
                                         
                                         chunkCount = elem['chunkCount']
@@ -768,7 +772,7 @@ def get_in_gpu_microevents_dependency(nccl_group_events, comm_init_events,
                                 sliceSteps = event['sliceSteps']
                                 stepSize = event['stepSize']
 
-                                ringIx = comm_info[commId]['gpuId_To_rank'][gpuId]  ## local rank index in the communicator
+                                ringIx = str(comm_info[commId]['gpuId_To_rank'][gpuId])  ## local rank index in the communicator
                                 channel_info = comm_info[commId]['rank_To_rankInfo'][ringIx]['channel_info']['Ring']
 
                                 elems = event['elems']
@@ -777,9 +781,9 @@ def get_in_gpu_microevents_dependency(nccl_group_events, comm_init_events,
                                     SendRecvEvents_To_TaskCounter[goal_rank][gpuId][commId][event['event_type']][event['seq']][channel_id]['send'] = {}
                                     SendRecvEvents_To_TaskCounter[goal_rank][gpuId][commId][event['event_type']][event['seq']][channel_id]['recv'] = {}
                                     nranks = comm_info[event['commId']]['nranks']  ## 2
-                                    prevIx = channel_info[channel_id]['previous_rank']  ## local rank index in the communicator
+                                    prevIx = str(channel_info[channel_id]['previous_rank'])  ## local rank index in the communicator
                                     SendRecvEvents_To_TaskCounter[goal_rank][gpuId][commId][event['event_type']][event['seq']][channel_id]['recv'][prevIx] = []
-                                    nextIx = channel_info[channel_id]['next_rank']  ## local rank index in the communicator
+                                    nextIx = str(channel_info[channel_id]['next_rank'])  ## local rank index in the communicator
                                     SendRecvEvents_To_TaskCounter[goal_rank][gpuId][commId][event['event_type']][event['seq']][channel_id]['send'][nextIx] = []
                                     
                                     chunkCount = elem['chunkCount']
@@ -951,7 +955,7 @@ def get_in_gpu_microevents_dependency(nccl_group_events, comm_init_events,
                                 stepSize = event['stepSize']
 
                                 # if algo == '1': ## Ring AllGather
-                                ringIx = comm_info[commId]['gpuId_To_rank'][gpuId]  ## local rank index in the communicator
+                                ringIx = str(comm_info[commId]['gpuId_To_rank'][gpuId])  ## local rank index in the communicator
                                 channel_info = comm_info[commId]['rank_To_rankInfo'][ringIx]['channel_info']['Ring']
 
                                 elems = event['elems']
@@ -960,9 +964,9 @@ def get_in_gpu_microevents_dependency(nccl_group_events, comm_init_events,
                                     SendRecvEvents_To_TaskCounter[goal_rank][gpuId][commId][event['event_type']][event['seq']][channel_id]['send'] = {}
                                     SendRecvEvents_To_TaskCounter[goal_rank][gpuId][commId][event['event_type']][event['seq']][channel_id]['recv'] = {}
                                     nranks = comm_info[event['commId']]['nranks']
-                                    prevIx = channel_info[channel_id]['previous_rank']  ## local rank index in the communicator
+                                    prevIx = str(channel_info[channel_id]['previous_rank'])  ## local rank index in the communicator
                                     SendRecvEvents_To_TaskCounter[goal_rank][gpuId][commId][event['event_type']][event['seq']][channel_id]['recv'][prevIx] = []
-                                    nextIx = channel_info[channel_id]['next_rank']  ## local rank index in the communicator
+                                    nextIx = str(channel_info[channel_id]['next_rank'])  ## local rank index in the communicator
                                     SendRecvEvents_To_TaskCounter[goal_rank][gpuId][commId][event['event_type']][event['seq']][channel_id]['send'][nextIx] = []
                                     
                                     chunkCount = elem['chunkCount']
@@ -1133,7 +1137,7 @@ def get_in_gpu_microevents_dependency(nccl_group_events, comm_init_events,
                                 stepSize = event['stepSize']
 
                                 # if algo == '1': ## Ring ReduceScatter
-                                ringIx = comm_info[commId]['gpuId_To_rank'][gpuId]  ## local rank index in the communicator
+                                ringIx = str(comm_info[commId]['gpuId_To_rank'][gpuId])  ## local rank index in the communicator
                                 channel_info = comm_info[commId]['rank_To_rankInfo'][ringIx]['channel_info']['Ring']
 
                                 elems = event['elems']
@@ -1142,9 +1146,9 @@ def get_in_gpu_microevents_dependency(nccl_group_events, comm_init_events,
                                     SendRecvEvents_To_TaskCounter[goal_rank][gpuId][commId][event['event_type']][event['seq']][channel_id]['send'] = {}
                                     SendRecvEvents_To_TaskCounter[goal_rank][gpuId][commId][event['event_type']][event['seq']][channel_id]['recv'] = {}
                                     nranks = comm_info[event['commId']]['nranks']
-                                    prevIx = channel_info[channel_id]['previous_rank']  ## local rank index in the communicator
+                                    prevIx = str(channel_info[channel_id]['previous_rank'])  ## local rank index in the communicator
                                     SendRecvEvents_To_TaskCounter[goal_rank][gpuId][commId][event['event_type']][event['seq']][channel_id]['recv'][prevIx] = []
-                                    nextIx = channel_info[channel_id]['next_rank']  ## local rank index in the communicator
+                                    nextIx = str(channel_info[channel_id]['next_rank'])  ## local rank index in the communicator
                                     SendRecvEvents_To_TaskCounter[goal_rank][gpuId][commId][event['event_type']][event['seq']][channel_id]['send'][nextIx] = []
                                     
                                     chunkCount = elem['chunkCount']
@@ -1296,7 +1300,7 @@ def get_in_gpu_microevents_dependency(nccl_group_events, comm_init_events,
                                 sliceSteps = event['sliceSteps']
                                 stepSize = event['stepSize']
 
-                                ringIx = comm_info[commId]['gpuId_To_rank'][gpuId]  ## local rank index in the communicator
+                                ringIx = str(comm_info[commId]['gpuId_To_rank'][gpuId])  ## local rank index in the communicator
                                 channel_info = comm_info[commId]['rank_To_rankInfo'][ringIx]['channel_info']['Ring']
 
                                 elems = event['elems']
@@ -1305,9 +1309,9 @@ def get_in_gpu_microevents_dependency(nccl_group_events, comm_init_events,
                                     SendRecvEvents_To_TaskCounter[goal_rank][gpuId][commId][event['event_type']][event['seq']][channel_id]['send'] = {}
                                     SendRecvEvents_To_TaskCounter[goal_rank][gpuId][commId][event['event_type']][event['seq']][channel_id]['recv'] = {}
                                     nranks = comm_info[event['commId']]['nranks']  ## 2
-                                    prevIx = channel_info[channel_id]['previous_rank']  ## local rank index in the communicator
+                                    prevIx = str(channel_info[channel_id]['previous_rank'])  ## local rank index in the communicator
                                     SendRecvEvents_To_TaskCounter[goal_rank][gpuId][commId][event['event_type']][event['seq']][channel_id]['recv'][prevIx] = []
-                                    nextIx = channel_info[channel_id]['next_rank']  ## local rank index in the communicator
+                                    nextIx = str(channel_info[channel_id]['next_rank'])  ## local rank index in the communicator
                                     SendRecvEvents_To_TaskCounter[goal_rank][gpuId][commId][event['event_type']][event['seq']][channel_id]['send'][nextIx] = []
                                     
                                     chunkCount = elem['chunkCount']

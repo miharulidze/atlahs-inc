@@ -1,0 +1,17 @@
+diff --git a/goal_gen/ai/nccl_goal_generator/generator_modules/data_dependency_modules/in_gpu_dependency.py b/goal_gen/ai/nccl_goal_generator/generator_modules/data_dependency_modules/in_gpu_dependency.py
+index 06d594b..8f0f0f0 100644
+--- a/goal_gen/ai/nccl_goal_generator/generator_modules/data_dependency_modules/in_gpu_dependency.py
++++ b/goal_gen/ai/nccl_goal_generator/generator_modules/data_dependency_modules/in_gpu_dependency.py
+@@ -411,7 +411,10 @@ def get_in_gpu_microevents_dependency(nccl_group_events, comm_init_events,
+                                                         if not (slice < SlicePerChunk and offset < nelem):
+                                                             break
+                                                         
+                                             ## Step k to step (2k - 3): RecvCopySend
+-                                            for j in range(1, nranks - 1):
++                                            # NOTE: align with inter-node Ring AllReduce generation.
++                                            # With current NCCL tuning/protocols we observe an extra RecvCopySend
++                                            # stage (j=0) is needed to keep send/recv ordering consistent.
++                                            for j in range(0, nranks - 1):
+                                                 chunk = modRanks(int(ringIx) + int(nranks) - j, int(nranks))
+                                                 chunkOffset = chunk * current_chunkCount
+                                                 # offset = gridOffset + elemOffset + chunkOffset

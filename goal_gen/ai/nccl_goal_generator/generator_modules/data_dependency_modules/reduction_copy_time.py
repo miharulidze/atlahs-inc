@@ -1,5 +1,4 @@
 import json
-import random
 import numpy as np
 from functools import lru_cache
 from scipy import interpolate
@@ -36,15 +35,15 @@ def get_reduction_time(data_size, protocol, zero_red_copy=False):
 
     if str(data_size) in data['NPKIT_EVENT_GPU_RECV_REDUCE_SEND']:
         reduction_times = data['NPKIT_EVENT_GPU_RECV_REDUCE_SEND'][str(data_size)]
-        return random.choice(reduction_times)
+        return int(np.median(reduction_times))
 
     # Use interpolation if the data_size is not directly in the JSON
     sizes = sorted(int(size) for size in data['NPKIT_EVENT_GPU_RECV_REDUCE_SEND'].keys())
 
     if data_size < sizes[0]:
-        return random.choice(data['NPKIT_EVENT_GPU_RECV_REDUCE_SEND'][str(sizes[0])])
+        return int(np.median(data['NPKIT_EVENT_GPU_RECV_REDUCE_SEND'][str(sizes[0])]))
     if data_size > sizes[-1]:
-        return random.choice(data['NPKIT_EVENT_GPU_RECV_REDUCE_SEND'][str(sizes[-1])])
+        return int(np.median(data['NPKIT_EVENT_GPU_RECV_REDUCE_SEND'][str(sizes[-1])]))
 
     f = interpolate.interp1d(
         sizes,
@@ -54,7 +53,7 @@ def get_reduction_time(data_size, protocol, zero_red_copy=False):
     )
     interpolated_value = f(data_size)
 
-    return int(random.gauss(interpolated_value, interpolated_value * 0.01))
+    return int(interpolated_value)
 
 @lru_cache(maxsize=2048)
 def get_copy_time(data_size, protocol, zero_red_copy=False):
@@ -68,15 +67,15 @@ def get_copy_time(data_size, protocol, zero_red_copy=False):
 
     if str(data_size) in data['NPKIT_EVENT_GPU_DIRECT_RECV_COPY_SEND']:
         copy_times = data['NPKIT_EVENT_GPU_DIRECT_RECV_COPY_SEND'][str(data_size)]
-        return random.choice(copy_times)
+        return int(np.median(copy_times))
 
     # Use interpolation if the data_size is not directly in the JSON
     sizes = sorted(int(size) for size in data['NPKIT_EVENT_GPU_DIRECT_RECV_COPY_SEND'].keys())
 
     if data_size < sizes[0]:
-        return random.choice(data['NPKIT_EVENT_GPU_DIRECT_RECV_COPY_SEND'][str(sizes[0])])
+        return int(np.median(data['NPKIT_EVENT_GPU_DIRECT_RECV_COPY_SEND'][str(sizes[0])]))
     if data_size > sizes[-1]:
-        return random.choice(data['NPKIT_EVENT_GPU_DIRECT_RECV_COPY_SEND'][str(sizes[-1])])
+        return int(np.median(data['NPKIT_EVENT_GPU_DIRECT_RECV_COPY_SEND'][str(sizes[-1])]))
 
     f = interpolate.interp1d(
         sizes,
@@ -86,4 +85,4 @@ def get_copy_time(data_size, protocol, zero_red_copy=False):
     )
     interpolated_value = f(data_size)
 
-    return int(random.gauss(interpolated_value, interpolated_value * 0.01))
+    return int(interpolated_value)

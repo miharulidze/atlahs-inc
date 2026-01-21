@@ -805,12 +805,12 @@ class Parser {
 		}
 	}
 
-	uint8_t GetNumCPU() {
-		return max_cpu+1;
+	uint32_t GetNumCPU() {
+		return (uint32_t)max_cpu + 1u;
 	}
 
-	uint8_t GetNumNIC() {
-		return max_nic+1;
+	uint32_t GetNumNIC() {
+		return (uint32_t)max_nic + 1u;
 	}
 
 
