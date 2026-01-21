@@ -431,7 +431,7 @@ index 00a0ef8..0455c79 100644
          addWorkBatchToPlan(comm, plan, c, workNode->workType, task->devFuncId, plan->workBytes);
          // Coverity reports "proxyOp->connection" as being possibly uninitialized.  It's hard to
          // determine if that's actually true but it's also not clear if that would be an issue.
-@@ -1000,6 +1077,35 @@ static ncclResult_t addP2pToPlan(
+@@ -1000,6 +1077,36 @@ static ncclResult_t addP2pToPlan(
          proxyOps[dir].nPeers = concurrentTasks[dir];
          NCCLCHECKGOTO(addProxyOpIfNeeded(comm, plan, &proxyOps[dir]), ret, cleanup);
          NCCLCHECKGOTO(addProfilerProxyOpIfNeeded(comm, plan, &proxyOps[dir]), ret, cleanup);
@@ -441,7 +441,8 @@ index 00a0ef8..0455c79 100644
 +          pid_t pid = getpid();
 +          int peerRank = dir ? recvRank : sendRank;
 +          int p2pType = dir ? 1 : 2; // 1=Send, 2=Recv
-+          uint64_t dirBytes = (uint64_t)bytes[dir];
++          ssize_t signedBytes = dir ? sendBytes : recvBytes;
++          uint64_t dirBytes = signedBytes < 0 ? 0 : (uint64_t)signedBytes;
 +          uint32_t countHi32 = (uint32_t)(dirBytes >> 32);
 +          uint32_t countLo32 = (uint32_t)(dirBytes & 0xFFFFFFFF);
 +          snprintf(nvtxMsg_WorkElemP2P, sizeof(nvtxMsg_WorkElemP2P),
