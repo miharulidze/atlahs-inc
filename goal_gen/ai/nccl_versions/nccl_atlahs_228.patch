@@ -330,7 +330,7 @@ index ca69c9a..240bc27 100644
 +  return ret;
  }
 diff --git a/src/enqueue.cc b/src/enqueue.cc
-index 00a0ef8..0455c79 100644
+index 00a0ef8..605c74b 100644
 --- a/src/enqueue.cc
 +++ b/src/enqueue.cc
 @@ -21,6 +21,28 @@
@@ -439,7 +439,7 @@ index 00a0ef8..0455c79 100644
 +        {
 +          char nvtxMsg_WorkElemP2P[256];
 +          pid_t pid = getpid();
-+          int peerRank = dir ? recvRank : sendRank;
++          int peerRank = dir ? sendRank : recvRank;
 +          int p2pType = dir ? 1 : 2; // 1=Send, 2=Recv
 +          ssize_t signedBytes = dir ? sendBytes : recvBytes;
 +          uint64_t dirBytes = signedBytes < 0 ? 0 : (uint64_t)signedBytes;
@@ -468,7 +468,7 @@ index 00a0ef8..0455c79 100644
        }
      }
    }
-@@ -2221,6 +2327,41 @@ static ncclResult_t calcCollChunking(
+@@ -2221,6 +2328,41 @@ static ncclResult_t calcCollChunking(
      return ncclInternalError;
    }
  
