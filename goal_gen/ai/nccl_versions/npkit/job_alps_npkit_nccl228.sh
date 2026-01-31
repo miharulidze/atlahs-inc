@@ -32,7 +32,6 @@ NUM_TRIALS=${NUM_TRIALS:-2}          # bump to 10 to mirror the original claride
 mkdir -p "${RUN_BASE}"
 
 echo "SCRIPT_ROOT        = ${SCRIPT_ROOT}"
-echo "Binary             = ${BIN}"
 echo "NCCL_LIB_DIR       = ${NCCL_LIB_DIR}"
 echo "RUN_BASE           = ${RUN_BASE}"
 echo "PROTO_LIST         = ${PROTO_LIST}"
@@ -44,58 +43,117 @@ echo "EVENT_HEADER       = ${NPKIT_EVENT_HEADER:-${DEFAULT_EVENT_HEADER}}"
 export LD_LIBRARY_PATH=${NCCL_LIB_DIR}:${LD_LIBRARY_PATH:-}
 export MPI_HOME=/usr/local/mpi
 export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
+export NCCL_CUMEM_ENABLE=${NCCL_CUMEM_ENABLE:-0}
+export NCCL_CUMEM_HOST_ENABLE=${NCCL_CUMEM_HOST_ENABLE:-0}
 
-for PROTO in ${PROTO_LIST}; do
-    BIN=${SCRIPT_ROOT}/${PROTO}/example_allreduce
-    WORK_RUN=${RUN_BASE}/${PROTO}
-    RESULTS_DIR=${WORK_RUN}/results
-    mkdir -p "${RESULTS_DIR}"
+SRUN_COMMON_ARGS=(--mpi=pmi2)
+if [ -n "${SRUN_EXTRA_ARGS:-}" ]; then
+    # Intended for site-specific flags like: SRUN_EXTRA_ARGS="--environment=megatron"
+    # shellcheck disable=SC2206
+    SRUN_COMMON_ARGS+=(${SRUN_EXTRA_ARGS})
+fi
+if [ -n "${SLURM_JOB_ID:-}" ]; then
+    SRUN_COMMON_ARGS+=(--ntasks="${SLURM_NTASKS:-1}")
+fi
 
-    echo "===== Running proto ${PROTO} into ${WORK_RUN} ====="
+	for PROTO in ${PROTO_LIST}; do
+	    BIN=${SCRIPT_ROOT}/${PROTO}/example_allreduce
+	    WORK_RUN=${RUN_BASE}/${PROTO}
+	    RESULTS_DIR=${WORK_RUN}/results
+	    mkdir -p "${RESULTS_DIR}"
 
-    for trial in $(seq 0 $((NUM_TRIALS - 1))); do
-        iteration_dir="${RESULTS_DIR}/${trial}"
-        mkdir -p "${iteration_dir}"
+	    echo "Binary             = ${BIN}"
+	    echo "===== Running proto ${PROTO} into ${WORK_RUN} ====="
 
-        size=${START_SIZE}
-        while [ ${size} -le ${MAX_SIZE} ]; do
-            size_dir="${iteration_dir}/${size}"
-            npkit_run_dir="${size_dir}/npkit_run"
-            npkit_dump_dir="${npkit_run_dir}/npkit_dump"
-            npkit_trace_dir="${npkit_run_dir}/npkit_trace"
-            npkit_result_dir="${npkit_run_dir}/npkit_result"
+	    # Pre-compute the size sweep list once so we can optionally amortize srun
+	    # startup overhead by running all sizes in a single srun per trial.
+	    SIZES=()
+	    size=${START_SIZE}
+	    while [ ${size} -le ${MAX_SIZE} ]; do
+	        SIZES+=(${size})
+	        size=$((size * 2))
+	    done
 
-            rm -rf "${npkit_run_dir}"
-            mkdir -p "${npkit_dump_dir}" "${npkit_trace_dir}" "${npkit_result_dir}"
+	    for trial in $(seq 0 $((NUM_TRIALS - 1))); do
+	        iteration_dir="${RESULTS_DIR}/${trial}"
+	        mkdir -p "${iteration_dir}"
 
-            echo "[${PROTO}] trial ${trial} size ${size} -> ${npkit_run_dir}"
+	        if [ -n "${ONE_SRUN_PER_TRIAL:-}" ]; then
+	            # Run a single MPI/NCCL process group per trial and sweep sizes inside
+	            # the benchmark binary to avoid per-size srun startup overhead.
+	            npkit_run_dir="${iteration_dir}/npkit_run"
+	            npkit_dump_dir="${npkit_run_dir}/npkit_dump"
+	            npkit_trace_dir="${npkit_run_dir}/npkit_trace"
+	            npkit_result_dir="${npkit_run_dir}/npkit_result"
 
-            srun --mpi=pmi2 --environment=megatron bash -lc "
-                set -euo pipefail
-                cd ${SCRIPT_ROOT}
-                export LD_LIBRARY_PATH=${NCCL_LIB_DIR}:\${LD_LIBRARY_PATH:-}
-                export NCCL_ALGO=Ring
-                export NCCL_PROTO=${PROTO}
-                export NPKIT_DUMP_DIR=${npkit_dump_dir}
-                ${BIN} ${size} | tee ${npkit_result_dir}/log.txt
-            "
+	            mkdir -p "${npkit_dump_dir}" "${npkit_trace_dir}" "${npkit_result_dir}"
 
-            EVENT_HEADER=${NPKIT_EVENT_HEADER:-${DEFAULT_EVENT_HEADER}}
-            if [ -f "${EVENT_HEADER}" ] && compgen -G "${npkit_dump_dir}/*" > /dev/null; then
-                python3 ${SCRIPT_ROOT}/${PROTO}/npkit_dependency_trace_generator.py \
-                    --npkit_dump_dir=${npkit_dump_dir} \
-                    --npkit_event_header_path=${EVENT_HEADER} \
-                    --output_dir=${npkit_trace_dir}
+	            echo "[${PROTO}] trial ${trial} -> one srun, sweeping sizes ${START_SIZE}..${MAX_SIZE} (x2)"
+	            srun "${SRUN_COMMON_ARGS[@]}" bash -lc "
+	                set -euo pipefail
+	                cd ${SCRIPT_ROOT}
+	                export LD_LIBRARY_PATH=${NCCL_LIB_DIR}:\${LD_LIBRARY_PATH:-}
+	                export NCCL_ALGO=Ring
+	                export NCCL_PROTO=${PROTO}
+	                export NCCL_CUMEM_ENABLE=${NCCL_CUMEM_ENABLE}
+	                export NCCL_CUMEM_HOST_ENABLE=${NCCL_CUMEM_HOST_ENABLE}
+	                export NPKIT_DUMP_DIR=${npkit_dump_dir}
+	                ${BIN} --sweep ${START_SIZE} ${MAX_SIZE} | tee ${npkit_result_dir}/log.txt
+	            "
 
-                rm -rf "${npkit_dump_dir}"
-                rm -rf "${npkit_result_dir}"
-            else
-                echo "Skip trace generation for trial ${trial} size ${size} (missing NPKit dumps or event header)" | tee "${npkit_result_dir}/npkit_trace_skipped.txt"
-            fi
+	            EVENT_HEADER=${NPKIT_EVENT_HEADER:-${DEFAULT_EVENT_HEADER}}
+	            if [ -n "${SKIP_TRACE_GEN:-}" ]; then
+	                echo "Skip trace generation for trial ${trial} (SKIP_TRACE_GEN is set)"
+	            elif [ -f "${EVENT_HEADER}" ] && compgen -G "${npkit_dump_dir}/*" > /dev/null; then
+	                python3 ${SCRIPT_ROOT}/${PROTO}/npkit_dependency_trace_generator.py \
+	                    --npkit_dump_dir=${npkit_dump_dir} \
+	                    --npkit_event_header_path=${EVENT_HEADER} \
+	                    --output_dir=${npkit_trace_dir}
+	            else
+	                echo "Skip trace generation for trial ${trial} (missing NPKit dumps or event header)" | tee "${npkit_result_dir}/npkit_trace_skipped.txt"
+	            fi
+	        else
+	            size=${START_SIZE}
+	            while [ ${size} -le ${MAX_SIZE} ]; do
+	                size_dir="${iteration_dir}/${size}"
+	                npkit_run_dir="${size_dir}/npkit_run"
+	                npkit_dump_dir="${npkit_run_dir}/npkit_dump"
+	                npkit_trace_dir="${npkit_run_dir}/npkit_trace"
+	                npkit_result_dir="${npkit_run_dir}/npkit_result"
 
-            size=$((size * 2))
-        done
-    done
+	                mkdir -p "${npkit_dump_dir}" "${npkit_trace_dir}" "${npkit_result_dir}"
+
+	                echo "[${PROTO}] trial ${trial} size ${size} -> ${npkit_run_dir}"
+
+	                srun "${SRUN_COMMON_ARGS[@]}" bash -lc "
+	                    set -euo pipefail
+	                    cd ${SCRIPT_ROOT}
+	                    export LD_LIBRARY_PATH=${NCCL_LIB_DIR}:\${LD_LIBRARY_PATH:-}
+	                    export NCCL_ALGO=Ring
+	                    export NCCL_PROTO=${PROTO}
+	                    export NCCL_CUMEM_ENABLE=${NCCL_CUMEM_ENABLE}
+	                    export NCCL_CUMEM_HOST_ENABLE=${NCCL_CUMEM_HOST_ENABLE}
+	                    export NPKIT_DUMP_DIR=${npkit_dump_dir}
+	                    ${BIN} ${size} | tee ${npkit_result_dir}/log.txt
+	                "
+
+	                EVENT_HEADER=${NPKIT_EVENT_HEADER:-${DEFAULT_EVENT_HEADER}}
+	                if [ -n "${SKIP_TRACE_GEN:-}" ]; then
+	                    echo "Skip trace generation for trial ${trial} size ${size} (SKIP_TRACE_GEN is set)"
+	                elif [ -f "${EVENT_HEADER}" ] && compgen -G "${npkit_dump_dir}/*" > /dev/null; then
+	                    python3 ${SCRIPT_ROOT}/${PROTO}/npkit_dependency_trace_generator.py \
+	                        --npkit_dump_dir=${npkit_dump_dir} \
+	                        --npkit_event_header_path=${EVENT_HEADER} \
+	                        --output_dir=${npkit_trace_dir}
+
+	                else
+	                    echo "Skip trace generation for trial ${trial} size ${size} (missing NPKit dumps or event header)" | tee "${npkit_result_dir}/npkit_trace_skipped.txt"
+	                fi
+
+	                size=$((size * 2))
+	            done
+	        fi
+	    done
 
     first_trace=$(find "${RESULTS_DIR}" -name npkit_event_trace.json -print -quit || true)
     if [ -n "${first_trace}" ]; then

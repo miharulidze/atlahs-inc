@@ -66,17 +66,22 @@ def get_statistics(input_file):
                 gpu_event_name = gpu_events[pid][tid][i]['event_name']
                 gpu_ts_start = gpu_events[pid][tid][i]['ts_start']
                 gpu_ts_end = gpu_events[pid][tid][i]['ts_end']
-
+                # Aggregate all PRIM calc_time values that fall into this GPU event window.
+                # Newer NCCL versions may emit multiple PRIM events per GPU window (chunked/sliced),
+                # while older baselines often emit a single PRIM event. Summing preserves comparability.
+                window_sums = {}
                 for j in range(len(prim_events[pid][tid])):
                     prim_ts = prim_events[pid][tid][j]['ts']
+                    if not (gpu_ts_start <= prim_ts <= gpu_ts_end):
+                        continue
                     size = prim_events[pid][tid][j]['size']
                     calc_time = prim_events[pid][tid][j]['calc_time']
+                    window_sums[size] = window_sums.get(size, 0) + calc_time
 
-                    if gpu_ts_start <= prim_ts <= gpu_ts_end:
-                        if size not in events_statistics[gpu_event_name]:
-                            events_statistics[gpu_event_name][size] = []
-
-                        events_statistics[gpu_event_name][size].append(calc_time)
+                for size, sum_time in window_sums.items():
+                    if size not in events_statistics[gpu_event_name]:
+                        events_statistics[gpu_event_name][size] = []
+                    events_statistics[gpu_event_name][size].append(sum_time)
 
     return events_statistics
 

@@ -225,9 +225,7 @@ def convert_npkit_dump_to_trace(npkit_dump_dir, output_dir, npkit_event_def):
     buf_indices = list(set([int(x.split('_buf_')[1].split('_')[0]) for x in gpu_event_files]))
     channels = list(set([int(x.split('_channel_')[1].split('_')[0]) for x in cpu_event_files]))
 
-    print(ranks)
-    print(buf_indices)
-    print(channels)
+    # Keep stdout quiet for batch runs (these can be very large lists).
 
     trace = {'traceEvents': []}
 
