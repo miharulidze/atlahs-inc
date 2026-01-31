@@ -18,7 +18,7 @@ index f8f455d..a2eeb42 100644
  NVLDFLAGS  := -L${CUDA_LIB} -lcudart -lrt
  
 diff --git a/src/device/all_reduce.h b/src/device/all_reduce.h
-index f6b6e9c..65daaa9 100644
+index f6b6e9c..4ae517d 100644
 --- a/src/device/all_reduce.h
 +++ b/src/device/all_reduce.h
 @@ -7,6 +7,9 @@
@@ -31,24 +31,19 @@ index f6b6e9c..65daaa9 100644
  
  namespace {
    template<typename T, typename RedOp, typename Proto>
-@@ -23,6 +26,16 @@ namespace {
+@@ -23,6 +26,11 @@ namespace {
      int nelem;
      int chunk;
  
 +#if defined(ENABLE_NPKIT)
 +    const int npKitCtxIdx = blockIdx.x;
 +    auto* const npKitCtx = ncclShmem.comm.npKitEventCollectContexts + npKitCtxIdx;
-+    const bool emitPrim = true;
-+    const uint8_t primEvent =
-+      Proto::Id == NCCL_PROTO_LL ? NPKIT_EVENT_PRIM_LL_DATA_PROCESS_EXIT :
-+      (Proto::Id == NCCL_PROTO_LL128 ? NPKIT_EVENT_PRIM_LL128_DATA_PROCESS_EXIT :
-+       NPKIT_EVENT_PRIM_SIMPLE_DATA_PROCESS_EXIT);
 +#endif
 +
      // Coverity reports that the callee treats &ring->next as an array.  However, due to the use of
      // FanSymmetric<1>, only the first element is ever accessed, so it's fine.
      // coverity[callee_ptr_arith:FALSE]
-@@ -44,15 +57,54 @@ namespace {
+@@ -44,15 +52,48 @@ namespace {
        chunkOffset = chunk * chunkCount;
        offset = gridOffset + elemOffset + chunkOffset;
        nelem = (int)min(chunkCount, remCount - chunkOffset);
@@ -68,9 +63,6 @@ index f6b6e9c..65daaa9 100644
 +        npkit_ts_end = clock64();
 +        uint32_t duration = (uint32_t)(npkit_ts_end - npkit_ts_start);
 +        NpKit::CollectGpuEvent(NPKIT_EVENT_GPU_SEND_EXIT, nelem*sizeof(T), duration, npkit_ts_end, npKitCtx);
-+        if (emitPrim) {
-+          NpKit::CollectGpuEvent(primEvent, nelem*sizeof(T), duration, npkit_ts_end, npKitCtx);
-+        }
 +      }
 +#endif
 +
@@ -95,15 +87,12 @@ index f6b6e9c..65daaa9 100644
 +          npkit_ts_end = clock64();
 +          uint32_t duration = (uint32_t)(npkit_ts_end - npkit_ts_start);
 +          NpKit::CollectGpuEvent(NPKIT_EVENT_GPU_RECV_REDUCE_SEND_EXIT, nelem*sizeof(T), duration, npkit_ts_end, npKitCtx);
-+          if (emitPrim) {
-+            NpKit::CollectGpuEvent(primEvent, nelem*sizeof(T), duration, npkit_ts_end, npKitCtx);
-+          }
 +        }
 +#endif
        }
  
        // step k-1: reduce this buffer and data, which will produce the final
-@@ -61,15 +113,53 @@ namespace {
+@@ -61,15 +102,47 @@ namespace {
        chunkOffset = chunk * chunkCount;
        offset = gridOffset + elemOffset + chunkOffset;
        nelem = (int)min(chunkCount, remCount - chunkOffset);
@@ -122,9 +111,6 @@ index f6b6e9c..65daaa9 100644
 +        npkit_ts_end = clock64();
 +        uint32_t duration = (uint32_t)(npkit_ts_end - npkit_ts_start);
 +        NpKit::CollectGpuEvent(NPKIT_EVENT_GPU_DIRECT_RECV_REDUCE_COPY_SEND_EXIT, nelem*sizeof(T), duration, npkit_ts_end, npKitCtx);
-+        if (emitPrim) {
-+          NpKit::CollectGpuEvent(primEvent, nelem*sizeof(T), duration, npkit_ts_end, npKitCtx);
-+        }
 +      }
 +#endif
 +
@@ -149,15 +135,12 @@ index f6b6e9c..65daaa9 100644
 +          npkit_ts_end = clock64();
 +          uint32_t duration = (uint32_t)(npkit_ts_end - npkit_ts_start);
 +          NpKit::CollectGpuEvent(NPKIT_EVENT_GPU_DIRECT_RECV_COPY_SEND_EXIT, nelem*sizeof(T), duration, npkit_ts_end, npKitCtx);
-+          if (emitPrim) {
-+            NpKit::CollectGpuEvent(primEvent, nelem*sizeof(T), duration, npkit_ts_end, npKitCtx);
-+          }
 +        }
 +#endif
        }
  
        // Make final copy from buffer to dest.
-@@ -78,7 +168,25 @@ namespace {
+@@ -78,7 +151,22 @@ namespace {
        offset = gridOffset + elemOffset + chunkOffset;
        nelem = (int)min(chunkCount, remCount - chunkOffset);
  
@@ -175,14 +158,255 @@ index f6b6e9c..65daaa9 100644
 +        npkit_ts_end = clock64();
 +        uint32_t duration = (uint32_t)(npkit_ts_end - npkit_ts_start);
 +        NpKit::CollectGpuEvent(NPKIT_EVENT_GPU_DIRECT_RECV_EXIT, nelem*sizeof(T), duration, npkit_ts_end, npKitCtx);
-+        if (emitPrim) {
-+          NpKit::CollectGpuEvent(primEvent, nelem*sizeof(T), duration, npkit_ts_end, npKitCtx);
-+        }
 +      }
 +#endif
      }
    }
  
+diff --git a/src/device/prims_ll.h b/src/device/prims_ll.h
+index 2a0f556..45945f2 100644
+--- a/src/device/prims_ll.h
++++ b/src/device/prims_ll.h
+@@ -4,6 +4,10 @@
+  * See LICENSE.txt for license information
+  ************************************************************************/
+ 
++#if defined(ENABLE_NPKIT)
++#include "npkit/npkit.h"
++#endif
++
+ template<typename T, typename RedOp, typename Fan, int Direct, int P2p, bool isNetOffload>
+ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>:
+   public PrimitivesWithoutDirect<Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>> {
+@@ -19,6 +23,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>:
+   const int wid;
+   const int group;
+   const int stepLines;
++  struct ncclDevWorkColl* collWork;
+   Fan fan;
+   T *userBufs[2];
+   struct ncclConnInfo* recvConn = NULL;
+@@ -43,6 +48,20 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>:
+   inline __device__ uint32_t recvFlag(int i) { return NCCL_LL_FLAG(recvStep[i]+1); }
+   inline __device__ uint32_t sendFlag(int i) { return NCCL_LL_FLAG(sendStep[i]+1); }
+ 
++#if defined(ENABLE_NPKIT)
++ public:
++  int npKitCtxIdx = 0;
++  uint64_t npKitDataProcessEntryTime = 0;
++  uint64_t npKitDataProcessExitTime = 0;
++  uint64_t npKitDataProcessTotalTime = 0;
++  uint64_t npKitDataProcessSize = 0;
++
++ private:
++  uint64_t npKitWaitEntryTime = 0;
++  uint64_t npKitWaitExitTime = 0;
++  uint64_t npKitWaitTotalTime = 0;
++#endif
++
+   inline __device__ void barrier() {
+     if (nthreads == WARP_SIZE) {
+       __syncwarp();
+@@ -91,11 +110,24 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>:
+     uint32_t flag = recvFlag(i);
+     uint32_t data1, flag1, data2, flag2;
+     int spins = 0;
++
++#if defined(ENABLE_NPKIT)
++    if (tid == 0) npKitWaitEntryTime = clock64();
++#endif
++
+     do {
+       asm volatile("ld.volatile.global.v4.u32 {%0,%1,%2,%3}, [%4];" : "=r"(data1), "=r"(flag1), "=r"(data2), "=r"(flag2) : "l"(&src->i4) : "memory");
+       if (checkAbort(abort, 1, spins)) break;
+     } while ((flag1 != flag) || (flag2 != flag));
+     uint64_t val64 = data1 + (((uint64_t)data2) << 32);
++
++#if defined(ENABLE_NPKIT)
++    if (tid == 0) {
++      npKitWaitExitTime = clock64();
++      npKitWaitTotalTime += npKitWaitExitTime - npKitWaitEntryTime;
++    }
++#endif
++
+     return val64;
+   }
+ 
+@@ -115,11 +147,24 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>:
+     union ncclLLFifoLine* src = recvPtr(i) + offset;
+     uint32_t flag = recvFlag(i);
+     int spins = 0;
++
++#if defined(ENABLE_NPKIT)
++    if (tid == 0) npKitWaitEntryTime = clock64();
++#endif
++
+     while (line[i].flag1 != flag || line[i].flag2 != flag) {
+       asm volatile("ld.volatile.global.v4.u32 {%0,%1,%2,%3}, [%4];" : "=r"(line[i].data1), "=r"(line[i].flag1), "=r"(line[i].data2), "=r"(line[i].flag2) : "l"(&src->i4) : "memory");
+       if (checkAbort(abort, 1, spins)) break;
+     }
+     uint64_t val64 = line[i].data1 + (((uint64_t)line[i].data2) << 32);
++
++#if defined(ENABLE_NPKIT)
++    if (tid == 0) {
++      npKitWaitExitTime = clock64();
++      npKitWaitTotalTime += npKitWaitExitTime - npKitWaitEntryTime;
++    }
++#endif
++
+     return val64;
+   }
+ 
+@@ -232,6 +277,23 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>:
+     nelem = nelem < 0 ? 0 : nelem;
+     if (SEND) waitSend(divUp(nelem, EltPerLine)*sizeof(ncclLLFifoLine));
+ 
++#if defined(ENABLE_NPKIT)
++	    npKitCtxIdx = blockIdx.x;
++	    auto* const npKitCtx = ncclShmem.comm.npKitEventCollectContexts + npKitCtxIdx;
++	    if (tid == 0) {
++	      npKitDataProcessTotalTime = 0;
++	      npKitWaitTotalTime = 0;
++
++	      // Keep NPKit size bucketing aligned with NCCL 2.20 baselines: use the
++	      // per-primitive processed size (nelem), not the full collective size.
++	      npKitDataProcessSize = (uint64_t)nelem * (uint64_t)sizeof(T);
++	      if (npKitDataProcessSize != 0) {
++	        NpKit::CollectGpuEvent(NPKIT_EVENT_PRIM_LL_DATA_PROCESS_ENTRY, (uint32_t)npKitDataProcessSize, 0, clock64(), npKitCtx);
++	        npKitDataProcessEntryTime = clock64();
++	      }
++	    }
++#endif
++
+     nelem -= tid*EltPerLine;
+     srcElts += tid*EltPerLine;
+     dstElts += tid*EltPerLine;
+@@ -284,6 +346,21 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>:
+       offset += nthreads;
+     }
+ 
++#if defined(ENABLE_NPKIT)
++	    if (tid == 0) {
++	      if (npKitDataProcessSize != 0) {
++	        npKitDataProcessExitTime = clock64();
++	        npKitDataProcessTotalTime = npKitDataProcessExitTime - npKitDataProcessEntryTime - npKitWaitTotalTime;
++	        NpKit::CollectGpuEvent(
++	            NPKIT_EVENT_PRIM_LL_DATA_PROCESS_EXIT,
++	            (uint32_t)npKitDataProcessSize,
++	            (uint32_t)npKitDataProcessTotalTime,
++	            clock64(),
++	            npKitCtx);
++	      }
++	    }
++#endif
++
+     if (RECV) {
+       for (int i=0; i < MaxRecv; i++) incRecv(i);
+       postRecv();
+@@ -332,6 +409,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p, isNetOffload>:
+     ):
+     redOp(redOpArg),
+     tid(tid), nthreads(nthreads), wid(tid%WARP_SIZE), group(group),
++    collWork(e),
+     stepLines(ncclShmem.comm.buffSizes[NCCL_PROTO_LL]/NCCL_STEPS/sizeof(ncclLLFifoLine)) {
+     auto *channel = &ncclShmem.channel;
+     // If we are going to support oneshot collNet + LL, then we would need to add connector index here
+diff --git a/src/device/prims_simple.h b/src/device/prims_simple.h
+index 2ad965b..5cf8c6e 100644
+--- a/src/device/prims_simple.h
++++ b/src/device/prims_simple.h
+@@ -7,6 +7,10 @@
+ #include "network/unpack/unpack.h"
+ #include <cassert>
+ 
++#if defined(ENABLE_NPKIT)
++#include "npkit/npkit.h"
++#endif
++
+ enum primsMode {
+   primsModeDefault = 0,
+   primsModePatRs = 1,
+@@ -48,11 +52,12 @@ class Primitives<
+   struct ncclConnFifo* connFifo = NULL;
+   T* connEltsFifo;
+   T* directBuff = NULL;
+-  uint64_t *connStepPtr;
+-  uint64_t connStepCache; // Cache last seen value of (*connStepPtr)
+-  int      connStepSize; // Connection step size
+-  void*    netDeviceHandle;
+-  uint64_t accSize;
++	  uint64_t *connStepPtr;
++	  uint64_t connStepCache; // Cache last seen value of (*connStepPtr)
++	  int      connStepSize; // Connection step size
++	  void*    netDeviceHandle;
++	  struct ncclDevWorkColl* collWorkPtr = nullptr;
++	  uint64_t accSize;
+ 
+   // Don't use barrier 0 as it's used by the final sync
+   __device__ void barrier() {
+@@ -244,6 +249,20 @@ class Primitives<
+           subBarrier();
+         }
+ 
++#if defined(ENABLE_NPKIT)
++        // Measure the *data processing* portion (exclude peer wait and sync above).
++	    const int npKitCtxIdx = blockIdx.x;
++	    auto* const npKitCtx = ncclShmem.comm.npKitEventCollectContexts + npKitCtxIdx;
++	    uint64_t npkitPrimStart = 0;
++        // Keep NPKit size bucketing aligned with NCCL 2.20 baselines: use the
++        // per-primitive chunk size (`nelem`), not the full collective size.
++        const uint32_t npkitSizeBytes = (uint32_t)((uint64_t)nelem * (uint64_t)sizeof(T));
++	    if (tid == 0) {
++	      npkitPrimStart = clock64();
++	      NpKit::CollectGpuEvent(NPKIT_EVENT_PRIM_SIMPLE_DATA_PROCESS_ENTRY, npkitSizeBytes, 0, npkitPrimStart, npKitCtx);
++	    }
++#endif
++
+         if (DirectRecv && ncclShmem.groups[group].srcs[0] == ncclShmem.groups[group].dsts[0]
+             /* NVLS can have srcs[0] == dsts[0], but we cannot enter this "if branch",
+              * so we need to check whether MultimemSrcs and MultimemDsts are 0. */
+@@ -288,8 +307,17 @@ class Primitives<
+           // we will come here when calling prims.directSend with net peer,
+           // in this case, ncclShmem.groups[group].dsts[0] == NULL, so we
+           // skip data flush.
+-          workSize = 0;
++	          workSize = 0;
++	        }
++	
++#if defined(ENABLE_NPKIT)
++        if (tid == 0) {
++          uint64_t npkitPrimEnd = clock64();
++          uint32_t npkitPrimDur = (uint32_t)(npkitPrimEnd - npkitPrimStart);
++          NpKit::CollectGpuEvent(NPKIT_EVENT_PRIM_SIMPLE_DATA_PROCESS_EXIT, npkitSizeBytes, npkitPrimDur, npkitPrimEnd, npKitCtx);
+         }
++#endif
++
+         barrier(); // This barrier has a counterpart in following loop
+         postPeer<Recv, Send>(0 < workSize);
+         offset += sliceSize;
+@@ -580,14 +608,14 @@ private:
+   }
+ 
+  public:
+-  __device__ Primitives(
+-      int tid, int nthreads, int const *recvPeers, int const *sendPeers,
+-      void const *inputBuf, void *outputBuf, uint64_t redOpArg, uint8_t group=0,
+-      uint8_t connIndexRecv = 0, uint8_t connIndexSend = 0, struct ncclDevWorkColl* collWork = nullptr,
+-      struct ncclDevWorkP2p* p2pWork = nullptr, int stepSize_ = 0, int mode = primsModeDefault
+-    ):
+-    tid(tid), nthreads(nthreads), tidInBlock(threadIdx.x), group(group),
+-    stepSize(stepSize_ == 0 ? ncclShmem.comm.buffSizes[NCCL_PROTO_SIMPLE]/NCCL_STEPS/sizeof(T) : stepSize_) {
++	  __device__ Primitives(
++	      int tid, int nthreads, int const *recvPeers, int const *sendPeers,
++	      void const *inputBuf, void *outputBuf, uint64_t redOpArg, uint8_t group=0,
++	      uint8_t connIndexRecv = 0, uint8_t connIndexSend = 0, struct ncclDevWorkColl* collWork = nullptr,
++	      struct ncclDevWorkP2p* p2pWork = nullptr, int stepSize_ = 0, int mode = primsModeDefault
++	    ):
++	    tid(tid), nthreads(nthreads), tidInBlock(threadIdx.x), group(group), collWorkPtr(collWork),
++	    stepSize(stepSize_ == 0 ? ncclShmem.comm.buffSizes[NCCL_PROTO_SIMPLE]/NCCL_STEPS/sizeof(T) : stepSize_) {
+ 
+     int peer = -1;
+     flags = 0;
 diff --git a/src/include/device.h b/src/include/device.h
 index 9ffc260..4357277 100644
 --- a/src/include/device.h
@@ -209,6 +433,229 @@ index 9ffc260..4357277 100644
    // Profiler counters
    struct ncclDevProfiler* workStarted/*[MAXCHANNELS]*/;
    struct ncclDevProfiler* workCompleted/*[MAXCHANNELS]*/;
+diff --git a/src/include/npkit/npkit.h b/src/include/npkit/npkit.h
+new file mode 100644
+index 0000000..9f33e37
+--- /dev/null
++++ b/src/include/npkit/npkit.h
+@@ -0,0 +1,75 @@
++#ifndef NPKIT_H_
++#define NPKIT_H_
++
++#include <string>
++#include <thread>
++
++#include <cuda_runtime.h>
++
++#include "npkit/npkit_event.h"
++#include "npkit/npkit_struct.h"
++
++class NpKit {
++ public:
++  // static const uint64_t kNumGpuEventBuffers = 512;
++  static const uint64_t kNumGpuEventBuffers = 700;
++
++  static const uint64_t kNumCpuEventBuffers = 32;
++
++  static ncclResult_t Init(int rank);
++
++  static ncclResult_t Dump(const std::string& dump_dir);
++
++  static ncclResult_t Shutdown();
++
++  static NpKitEventCollectContext* GetGpuEventCollectContexts();
++
++  static inline __device__ void CollectGpuEvent(uint8_t type, uint32_t size, uint32_t rsvd, uint64_t timestamp,
++                                                NpKitEventCollectContext* ctx) {
++    uint64_t event_buffer_head = ctx->event_buffer_head;
++    if (event_buffer_head < kMaxNumGpuEventsPerBuffer) {
++      NpKitEvent& event = ctx->event_buffer[event_buffer_head];
++      event.fields.type = type;
++      event.fields.size = size;
++      event.fields.rsvd = rsvd;
++      event.fields.timestamp = timestamp;
++      ctx->event_buffer_head++;
++    }
++  }
++
++  // static void CollectCpuEvent(uint8_t type, uint32_t size, uint32_t rsvd, uint64_t timestamp, int channel_id);
++  static void CollectCpuEvent(uint8_t type, uint32_t size, uint32_t rsvd, uint64_t timestamp, uint8_t sender_rank, uint8_t receiver_rank, int channel_id, uint32_t step);
++
++  static uint64_t* GetCpuTimestamp();
++
++  // static uint64_t init_system_clock;  //
++  // static uint64_t init_steady_clock;  //
++  // static uint64_t init_clock_offset;  //
++
++ private:
++  static void CpuTimestampUpdateThread();
++
++  // 64K * 512 * 16B = 512MB per GPU
++  static const uint64_t kMaxNumGpuEventsPerBuffer = 1ULL << 16;
++
++  // 64K * 2 (send/recv) * (512/32) = 2M, 2M * 32 * 16B = 1GB per CPU
++  static const uint64_t kMaxNumCpuEventsPerBuffer = 1ULL << 21;
++
++  static NpKitEvent** gpu_event_buffers_;
++  static NpKitEvent** copy_gpu_event_buffers_;  //
++  // static NpKitEvent** cpu_event_buffers_;
++  static CPUEvent** cpu_event_buffers_;
++
++  static NpKitEventCollectContext* gpu_collect_contexts_;
++  static NpKitEventCollectContext* copy_gpu_collect_contexts_;  //
++  // static NpKitEventCollectContext* cpu_collect_contexts_;
++  static CPUEventCollectContext* cpu_collect_contexts_;
++  static uint64_t* cpu_timestamp_;
++
++  static uint64_t rank_;
++
++  static std::thread* cpu_timestamp_update_thread_;
++  static volatile bool cpu_timestamp_update_thread_should_stop_;
++};
++
++#endif
+diff --git a/src/include/npkit/npkit_event.h b/src/include/npkit/npkit_event.h
+new file mode 100644
+index 0000000..db9849f
+--- /dev/null
++++ b/src/include/npkit/npkit_event.h
+@@ -0,0 +1,87 @@
++#ifndef NPKIT_EVENT_H_
++#define NPKIT_EVENT_H_
++
++#define NPKIT_EVENT_INVALID                                     0x0
++
++#define NPKIT_EVENT_ALL_REDUCE_RING_ENTRY                       0x1
++#define NPKIT_EVENT_ALL_REDUCE_RING_EXIT                        0x2
++#define NPKIT_EVENT_ALL_REDUCE_TREE_UPDOWN_ENTRY                0x3
++#define NPKIT_EVENT_ALL_REDUCE_TREE_UPDOWN_EXIT                 0x4
++#define NPKIT_EVENT_ALL_REDUCE_TREE_SPLIT_ENTRY                 0x5
++#define NPKIT_EVENT_ALL_REDUCE_TREE_SPLIT_EXIT                  0x6
++
++#define NPKIT_EVENT_COPY_SEND_ENTRY                             0x7
++#define NPKIT_EVENT_COPY_SEND_EXIT                              0x8
++#define NPKIT_EVENT_DIRECT_COPY_SEND_ENTRY                      0x9
++#define NPKIT_EVENT_DIRECT_COPY_SEND_EXIT                       0xA
++#define NPKIT_EVENT_GPU_DIRECT_RECV_ENTRY                           0xB
++#define NPKIT_EVENT_GPU_DIRECT_RECV_EXIT                            0xC
++#define NPKIT_EVENT_GPU_DIRECT_RECV_COPY_SEND_ENTRY                 0xD
++#define NPKIT_EVENT_GPU_DIRECT_RECV_COPY_SEND_EXIT                  0xE
++#define NPKIT_EVENT_GPU_DIRECT_RECV_REDUCE_COPY_SEND_ENTRY          0xF
++#define NPKIT_EVENT_GPU_DIRECT_RECV_REDUCE_COPY_SEND_EXIT           0x10
++#define NPKIT_EVENT_DIRECT_SEND_ENTRY                           0x11
++#define NPKIT_EVENT_DIRECT_SEND_EXIT                            0x12
++#define NPKIT_EVENT_DIRECT_SEND_FROM_OUTPUT_ENTRY               0x13
++#define NPKIT_EVENT_DIRECT_SEND_FROM_OUTPUT_EXIT                0x14
++#define NPKIT_EVENT_RECV_ENTRY                                  0x15
++#define NPKIT_EVENT_RECV_EXIT                                   0x16
++#define NPKIT_EVENT_RECV_COPY_SEND_ENTRY                        0x17
++#define NPKIT_EVENT_RECV_COPY_SEND_EXIT                         0x18
++#define NPKIT_EVENT_RECV_REDUCE_COPY_ENTRY                      0x19
++#define NPKIT_EVENT_RECV_REDUCE_COPY_EXIT                       0x1A
++#define NPKIT_EVENT_RECV_REDUCE_COPY_SEND_ENTRY                 0x1B
++#define NPKIT_EVENT_RECV_REDUCE_COPY_SEND_EXIT                  0x1C
++#define NPKIT_EVENT_GPU_RECV_REDUCE_SEND_ENTRY                      0x1D
++#define NPKIT_EVENT_GPU_RECV_REDUCE_SEND_EXIT                       0x1E
++#define NPKIT_EVENT_GPU_SEND_ENTRY                                  0x1F
++#define NPKIT_EVENT_GPU_SEND_EXIT                                   0x20
++#define NPKIT_EVENT_SEND_FROM_OUTPUT_ENTRY                      0x21
++#define NPKIT_EVENT_SEND_FROM_OUTPUT_EXIT                       0x22
++
++#define NPKIT_EVENT_PRIM_SIMPLE_WAIT_PEER_ENTRY                 0x23
++#define NPKIT_EVENT_PRIM_SIMPLE_WAIT_PEER_EXIT                  0x24
++#define NPKIT_EVENT_PRIM_SIMPLE_REDUCE_OR_COPY_MULTI_ENTRY      0x25
++#define NPKIT_EVENT_PRIM_SIMPLE_REDUCE_OR_COPY_MULTI_EXIT       0x26
++
++#define NPKIT_EVENT_PRIM_LL_WAIT_SEND_ENTRY                     0x27
++#define NPKIT_EVENT_PRIM_LL_WAIT_SEND_EXIT                      0x28
++#define NPKIT_EVENT_PRIM_LL_DATA_PROCESS_ENTRY                  0x29
++#define NPKIT_EVENT_PRIM_LL_DATA_PROCESS_EXIT                   0x2A
++
++#define NPKIT_EVENT_PRIM_LL128_WAIT_SEND_ENTRY                  0x2B
++#define NPKIT_EVENT_PRIM_LL128_WAIT_SEND_EXIT                   0x2C
++#define NPKIT_EVENT_PRIM_LL128_DATA_PROCESS_ENTRY               0x2D
++#define NPKIT_EVENT_PRIM_LL128_DATA_PROCESS_EXIT                0x2E
++
++#define NPKIT_EVENT_NET_SEND_ENTRY                              0x2F
++#define NPKIT_EVENT_NET_SEND_EXIT                               0x30
++
++#define NPKIT_EVENT_NET_RECV_ENTRY                              0x31
++#define NPKIT_EVENT_NET_RECV_EXIT                               0x32
++
++#define NPKIT_EVENT_TIME_SYNC_GPU                               0x33
++#define NPKIT_EVENT_TIME_SYNC_CPU                               0x34
++
++#define NPKIT_EVENT_SEND_RECV_LOCAL_COPY_ENTRY                  0x49
++#define NPKIT_EVENT_SEND_RECV_LOCAL_COPY_EXIT                   0x4A
++#define NPKIT_EVENT_SEND_RECV_SEND_ENTRY                        0x4B
++#define NPKIT_EVENT_SEND_RECV_SEND_EXIT                         0x4C
++#define NPKIT_EVENT_SEND_RECV_RECV_ENTRY                        0x4D
++#define NPKIT_EVENT_SEND_RECV_RECV_EXIT                         0x4E
++
++#define NPKIT_PRIM_COLLECT_DATA_PROCESS_TIME                    0x4F
++
++#define NPKIT_EVENT_NET_SEND_TEST_ENTRY                         0X50
++#define NPKIT_EVENT_NET_SEND_TEST_EXIT                          0X51
++
++#define NPKIT_EVENT_NET_RECV_TEST_ENTRY                         0X52
++#define NPKIT_EVENT_NET_RECV_TEST_EXIT                          0X53
++
++#define NPKIT_EVENT_NPKIT_INIT_ENTRY                             0X54
++#define NPKIT_EVENT_NPKIT_INIT_EXIT                              0X55
++
++#define NPKIT_EVENT_PRIM_SIMPLE_DATA_PROCESS_ENTRY                      0x56
++#define NPKIT_EVENT_PRIM_SIMPLE_DATA_PROCESS_EXIT                        0x57
++
++#endif
+diff --git a/src/include/npkit/npkit_struct.h b/src/include/npkit/npkit_struct.h
+new file mode 100644
+index 0000000..c3afd8f
+--- /dev/null
++++ b/src/include/npkit/npkit_struct.h
+@@ -0,0 +1,43 @@
++#ifndef NPKIT_STRUCT_H_
++#define NPKIT_STRUCT_H_
++
++#include <cstdint>
++
++#pragma pack(push, 1)
++
++union NpKitEvent {
++  uint64_t bits[2];
++  struct {
++    uint64_t type : 8;
++    uint64_t size : 32;
++    uint64_t rsvd : 24;
++    uint64_t timestamp;
++  } fields;
++};
++
++union CPUEvent {
++  uint64_t bits[2];
++  struct {
++    uint64_t type : 8;
++    uint64_t size : 32;
++    uint64_t rsvd : 24;
++    uint64_t timestamp;
++    uint64_t sender_rank : 8;
++    uint64_t receiver_rank : 8;
++    uint64_t step : 32;
++  } fields;
++};
++
++struct NpKitEventCollectContext {
++  NpKitEvent* event_buffer;
++  uint64_t event_buffer_head;
++};
++
++struct CPUEventCollectContext {
++  CPUEvent* event_buffer;
++  uint64_t event_buffer_head;
++};
++
++#pragma pack(pop)
++
++#endif
 diff --git a/src/init.cc b/src/init.cc
 index ebf942c..1935f97 100644
 --- a/src/init.cc
@@ -261,3 +708,235 @@ index ebf942c..1935f97 100644
    NCCLCHECK(commFree(comm));
    return ncclSuccess;
  }
+diff --git a/src/misc/npkit.cc b/src/misc/npkit.cc
+new file mode 100644
+index 0000000..2241695
+--- /dev/null
++++ b/src/misc/npkit.cc
+@@ -0,0 +1,226 @@
++#include <chrono>
++#include <fstream>
++#include <unistd.h>
++
++#include "alloc.h"
++#include "npkit/npkit.h"
++#include <atomic>
++#include <cstdio>
++
++uint64_t NpKit::rank_ = 0;
++
++NpKitEvent** NpKit::gpu_event_buffers_ = nullptr;
++NpKitEvent** NpKit::copy_gpu_event_buffers_ = nullptr;//
++// NpKitEvent** NpKit::cpu_event_buffers_ = nullptr;
++CPUEvent** NpKit::cpu_event_buffers_ = nullptr;
++
++NpKitEventCollectContext* NpKit::gpu_collect_contexts_ = nullptr;
++NpKitEventCollectContext* NpKit::copy_gpu_collect_contexts_ = nullptr;
++// NpKitEventCollectContext* NpKit::cpu_collect_contexts_ = nullptr;
++CPUEventCollectContext* NpKit::cpu_collect_contexts_ = nullptr;
++uint64_t* NpKit::cpu_timestamp_ = nullptr;
++
++std::thread* NpKit::cpu_timestamp_update_thread_ = nullptr;
++volatile bool NpKit::cpu_timestamp_update_thread_should_stop_ = false;
++
++// uint64_t NpKit::init_system_clock = std::chrono::system_clock::now().time_since_epoch().count();  //
++// uint64_t NpKit::init_steady_clock = std::chrono::steady_clock::now().time_since_epoch().count();  //
++// uint64_t NpKit::init_clock_offset = NpKit::init_system_clock - NpKit::init_steady_clock;  //
++// uint64_t NpKit::init_clock_offset = 0;
++
++void NpKit::CpuTimestampUpdateThread() {
++  // uint64_t init_system_clock = std::chrono::system_clock::now().time_since_epoch().count();
++  // uint64_t init_steady_clock = std::chrono::steady_clock::now().time_since_epoch().count();
++  // NpKit::init_system_clock = std::chrono::system_clock::now().time_since_epoch().count();  //
++  // NpKit::init_steady_clock = std::chrono::steady_clock::now().time_since_epoch().count();  //
++  // NpKit::init_clock_offset = NpKit::init_system_clock - NpKit::init_steady_clock;  //
++  // std::atomic_thread_fence(std::memory_order_seq_cst);
++  // uint64_t curr_steady_clock = 0;
++  volatile uint64_t* volatile_cpu_timestamp_ = cpu_timestamp_;
++  while (!cpu_timestamp_update_thread_should_stop_) {
++    // curr_steady_clock = std::chrono::steady_clock::now().time_since_epoch().count();
++    // *volatile_cpu_timestamp_ = NpKit::init_system_clock + (curr_steady_clock - NpKit::init_steady_clock);
++    *volatile_cpu_timestamp_ = std::chrono::steady_clock::now().time_since_epoch().count();
++    // std::atomic_thread_fence(std::memory_order_seq_cst);
++    // __sync_synchronize();
++  }
++}
++
++ncclResult_t NpKit::Init(int rank) {
++  uint64_t i = 0;
++  NpKitEventCollectContext ctx;
++  CPUEventCollectContext cpu_ctx; //
++  ctx.event_buffer_head = 0;
++  cpu_ctx.event_buffer_head = 0;
++  rank_ = rank;
++
++  // Init event data structures
++  NCCLCHECK(ncclCalloc(&gpu_event_buffers_, kNumGpuEventBuffers));
++  NCCLCHECK(ncclCudaCalloc(&gpu_collect_contexts_, kNumGpuEventBuffers));
++  for (i = 0; i < kNumGpuEventBuffers; i++) {
++    NCCLCHECK(ncclCudaCalloc(gpu_event_buffers_ + i, kMaxNumGpuEventsPerBuffer));
++    ctx.event_buffer = gpu_event_buffers_[i];
++    NCCLCHECK(ncclCudaMemcpy(gpu_collect_contexts_ + i, &ctx, 1));
++  }
++
++  NCCLCHECK(ncclCalloc(&cpu_event_buffers_, kNumCpuEventBuffers));
++  NCCLCHECK(ncclCalloc(&copy_gpu_event_buffers_, kNumCpuEventBuffers)); //
++  NCCLCHECK(ncclCalloc(&cpu_collect_contexts_, kNumCpuEventBuffers));
++  NCCLCHECK(ncclCalloc(&copy_gpu_collect_contexts_, kNumCpuEventBuffers)); //
++  for (i = 0; i < kNumCpuEventBuffers; i++) {
++    NCCLCHECK(ncclCalloc(cpu_event_buffers_ + i, kMaxNumCpuEventsPerBuffer));
++    NCCLCHECK(ncclCalloc(copy_gpu_event_buffers_ + i, kMaxNumCpuEventsPerBuffer)); //
++    cpu_ctx.event_buffer = cpu_event_buffers_[i];
++    cpu_collect_contexts_[i] = cpu_ctx;
++  }
++
++  // Init timestamp
++  NCCLCHECK(ncclCudaHostCalloc(&cpu_timestamp_, 1));
++  volatile uint64_t* volatile_cpu_timestamp = cpu_timestamp_;
++  *volatile_cpu_timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
++  cpu_timestamp_update_thread_should_stop_ = false;
++  cpu_timestamp_update_thread_ = new std::thread(CpuTimestampUpdateThread);
++
++  return ncclSuccess;
++}
++
++ncclResult_t NpKit::Dump(const std::string& dump_dir) {
++  uint64_t i = 0;
++  std::string dump_file_path;
++
++  // Dump CPU events
++  for (i = 0; i < kNumCpuEventBuffers; i++) {
++    dump_file_path = dump_dir;
++    dump_file_path += "/cpu_events_rank_";
++    dump_file_path += std::to_string(rank_);
++    dump_file_path += "_channel_";
++    dump_file_path += std::to_string(i);
++    auto cpu_trace_file = std::fstream(dump_file_path, std::ios::out | std::ios::binary);
++    // cpu_trace_file.write(reinterpret_cast<char*>(cpu_event_buffers_[i]),
++    //     cpu_collect_contexts_[i].event_buffer_head * sizeof(NpKitEvent));
++    cpu_trace_file.write(reinterpret_cast<char*>(cpu_event_buffers_[i]),
++        cpu_collect_contexts_[i].event_buffer_head * sizeof(CPUEvent));
++    cpu_trace_file.close();
++  }
++
++  // Dump CPU clock info
++  dump_file_path = dump_dir;
++  dump_file_path += "/cpu_clock_period_num_rank_";
++  dump_file_path += std::to_string(rank_);
++  std::string clock_period_num_str = std::to_string(std::chrono::steady_clock::duration::period::num);
++  auto clock_period_num_file = std::fstream(dump_file_path, std::ios::out);
++  clock_period_num_file.write(clock_period_num_str.c_str(), clock_period_num_str.length());
++  clock_period_num_file.close();
++
++  dump_file_path = dump_dir;
++  dump_file_path += "/cpu_clock_period_den_rank_";
++  dump_file_path += std::to_string(rank_);
++  std::string clock_period_den_str = std::to_string(std::chrono::steady_clock::duration::period::den);
++  auto clock_period_den_file = std::fstream(dump_file_path, std::ios::out);
++  clock_period_den_file.write(clock_period_den_str.c_str(), clock_period_den_str.length());
++  clock_period_den_file.close();
++
++  // Dump GPU events, reuse CPU struct
++  for (i = 0; i < kNumGpuEventBuffers; i++) {
++    // First copy the per-buffer context so we know how many events are valid.
++    NCCLCHECK(ncclCudaMemcpy(copy_gpu_collect_contexts_, gpu_collect_contexts_ + i, 1));
++    const uint64_t event_count = copy_gpu_collect_contexts_[0].event_buffer_head;
++    if (event_count == 0) continue;
++
++    dump_file_path = dump_dir;
++    dump_file_path += "/gpu_events_rank_";
++    dump_file_path += std::to_string(rank_);
++    dump_file_path += "_buf_";
++    dump_file_path += std::to_string(i);
++    // NCCLCHECK(ncclCudaMemcpy(cpu_event_buffers_[0], gpu_event_buffers_[i], kMaxNumGpuEventsPerBuffer));
++    // NCCLCHECK(ncclCudaMemcpy(cpu_collect_contexts_, gpu_collect_contexts_ + i, 1));
++    NCCLCHECK(ncclCudaMemcpy(copy_gpu_event_buffers_[0], gpu_event_buffers_[i], event_count));
++    auto gpu_trace_file = std::fstream(dump_file_path, std::ios::out | std::ios::binary);
++    // gpu_trace_file.write(reinterpret_cast<char*>(cpu_event_buffers_[0]),
++    //     cpu_collect_contexts_[0].event_buffer_head * sizeof(NpKitEvent));
++    gpu_trace_file.write(reinterpret_cast<char*>(copy_gpu_event_buffers_[0]),
++        event_count * sizeof(NpKitEvent));
++    gpu_trace_file.close();
++  }
++
++  // Dump GPU clockRate
++  dump_file_path = dump_dir;
++  dump_file_path += "/gpu_clock_rate_rank_";
++  dump_file_path += std::to_string(rank_);
++  cudaDeviceProp dev_prop;
++  int dev;
++  CUDACHECK(cudaGetDevice(&dev));
++  CUDACHECK(cudaGetDeviceProperties(&dev_prop, dev));
++  std::string clock_rate_str = std::to_string(dev_prop.clockRate);
++  auto gpu_clock_rate_file = std::fstream(dump_file_path, std::ios::out);
++  gpu_clock_rate_file.write(clock_rate_str.c_str(), clock_rate_str.length());
++  gpu_clock_rate_file.close();
++
++  return ncclSuccess;
++}
++
++ncclResult_t NpKit::Shutdown() {
++  uint64_t i = 0;
++
++  // Stop CPU timestamp updating thread
++  cpu_timestamp_update_thread_should_stop_ = true;
++  cpu_timestamp_update_thread_->join();
++
++  // Free CPU event data structures
++  for (i = 0; i < kNumCpuEventBuffers; i++) {
++    free(cpu_event_buffers_[i]);
++  }
++  free(cpu_event_buffers_);
++  free(cpu_collect_contexts_);
++
++  // Free GPU event data structures
++  for (i = 0; i < kNumGpuEventBuffers; i++) {
++    NCCLCHECK(ncclCudaFree(gpu_event_buffers_[i]));
++  }
++  free(gpu_event_buffers_);
++  NCCLCHECK(ncclCudaFree(gpu_collect_contexts_));
++
++  // Free timestamp
++  NCCLCHECK(ncclCudaHostFree(cpu_timestamp_));
++
++  return ncclSuccess;
++}
++
++NpKitEventCollectContext* NpKit::GetGpuEventCollectContexts() {
++  return gpu_collect_contexts_;
++}
++
++// void NpKit::CollectCpuEvent(uint8_t type, uint32_t size, uint32_t rsvd, uint64_t timestamp, int channel_id) {
++//   uint64_t event_buffer_head = cpu_collect_contexts_[channel_id].event_buffer_head;
++//   if (event_buffer_head < kMaxNumCpuEventsPerBuffer) {
++//     NpKitEvent& event = cpu_collect_contexts_[channel_id].event_buffer[event_buffer_head];
++//     event.fields.type = type;
++//     event.fields.size = size;
++//     event.fields.rsvd = rsvd;
++//     event.fields.timestamp = timestamp;
++//     cpu_collect_contexts_[channel_id].event_buffer_head++;
++//   }
++// }
++
++void NpKit::CollectCpuEvent(uint8_t type, uint32_t size, uint32_t rsvd, uint64_t timestamp, uint8_t sender_rank, uint8_t receiver_rank, int channel_id, uint32_t step) {
++  uint64_t event_buffer_head = cpu_collect_contexts_[channel_id].event_buffer_head;
++  
++  // printf("CollectCpuEvent called with: type=%u, size=%u, rsvd=%u, timestamp=%llu, sender_rank=%u, receiver_rank=%u, channel_id=%d, event_buffer_head=%llu\n",
++  //        type, size, rsvd, timestamp, sender_rank, receiver_rank, channel_id, event_buffer_head);
++
++  if (event_buffer_head < kMaxNumCpuEventsPerBuffer) {
++    CPUEvent& event = cpu_collect_contexts_[channel_id].event_buffer[event_buffer_head];
++    event.fields.type = type;
++    event.fields.size = size;
++    event.fields.rsvd = rsvd;
++    event.fields.timestamp = timestamp;
++    event.fields.sender_rank = sender_rank;
++    event.fields.receiver_rank = receiver_rank;
++    event.fields.step = step;
++    cpu_collect_contexts_[channel_id].event_buffer_head++;
++  }
++}
++
++uint64_t* NpKit::GetCpuTimestamp() {
++  return cpu_timestamp_;
++}
