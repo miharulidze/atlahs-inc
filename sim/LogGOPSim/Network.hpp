@@ -6,7 +6,8 @@
 #include <stdlib.h>
 #include <iostream>
 #include <inttypes.h>
-#include <graphviz/cgraph.h>
+#include <fstream>
+#include <regex>
 
 #define noorder 1
 #define debug 0
@@ -41,7 +42,7 @@ class TopoGraph {
 	public:
 
 		TopoGraph(char* filename) {
-			this->parse_dotfile_agraph(filename);
+			this->parse_dotfile_basic(filename);
 		}
 
 		inline uint32_t create_node(std::string nodename, uint8_t nodetype) {
@@ -99,75 +100,69 @@ class TopoGraph {
 		
 		}
 		
-		void parse_dotfile_agraph(char* filename) {
-			
-			FILE* fd = fopen(filename, "r");
-			if (fd == NULL) {
+		void parse_dotfile_basic(char* filename) {
+			// Minimal DOT parser to avoid a runtime dependency on Graphviz libcgraph.
+			// Expected edge syntax (comments optional):
+			//   A -> B [comment="H0,H1"];
+			// or:
+			//   A -> B [comment="*"];
+			//
+			// Nodes are created implicitly from edge endpoints.
+			std::ifstream in(filename);
+			if (!in.is_open()) {
 				fprintf(stderr, "Couldn't open %s for reading!\n", filename);
 				exit(EXIT_FAILURE);
 			}
 
-			Agraph_t* graph = agread(fd, NULL);
-			if (graph == NULL) {
-				fprintf(stderr, "Couldn't parse graph data!\n");
-				fclose(fd);
-				exit(EXIT_FAILURE);
-			}
-			fclose(fd);
-			
-			// iterate over graphs node's and add them
-			Agnode_t* node = agfstnode(graph);
-			
-			while (node != NULL) {
-			
-				std::string nodename;
-				uint8_t nodetype;
-			
-				nodename = (std::string) agnameof(node);
-				if (nodename.find('H', 0) == 0) nodetype = NODE_TYPE_HOST;
-				else nodetype = NODE_TYPE_SWITCH;
-				uint32_t nodeid = create_node(nodename, nodetype);
-				if (nodetype == NODE_TYPE_HOST) {
-					rank2nodeid.insert(std::make_pair(rank2nodeid.size(), nodeid));
-				}
-				node = agnxtnode(graph, node);
+			std::regex edge_re("^\\s*([A-Za-z0-9_]+)\\s*->\\s*([A-Za-z0-9_]+)(?:\\s*\\[(.*)\\])?\\s*;?\\s*$");
+			std::regex comment_re("comment\\s*=\\s*\\\"([^\\\"]*)\\\"");
 
-			}
+			std::string line;
+			while (std::getline(in, line)) {
+				// Strip C++-style comments.
+				size_t cpos = line.find("//");
+				if (cpos != std::string::npos) line = line.substr(0, cpos);
 
-			// now we added all the nodes, so we can add the links between them now
-			Agnode_t* node_from = agfstnode(graph);
-	
-			while (node_from != NULL) {
-			
-				std::string node_from_name;
-			
-				node_from_name = (std::string) agnameof(node_from);
-				Agedge_t* link = agfstout(graph, node_from);
-				
-				while (link != NULL) {
-					Agnode_t* node_to = aghead(link);
-					std::string node_to_name = (std::string) agnameof(node_to);
-					uint32_t newlinkid = create_link(node_from_name, node_to_name);
-					// add the routinginfo for this link
-					char *comment = agget(link, ((char *) "comment"));
-					// if the comment is * we leave the routinginfo empty - that means there is only one connection (port 0) and everything goes there
-					if (strcmp(comment, "*") != 0) {
-    					char* buffer = (char *) malloc(strlen(comment) * sizeof(char) + 1);
-						strcpy(buffer, comment);
-						char* result = strtok(buffer, ", \t\n");
-						while (result != NULL) {
-							uint32_t dest = (this->nodename2nodeid.find(std::string(result)))->second;
-							add_routing_info(dest, newlinkid);
-        					result = strtok(NULL, ", \t\n");
- 						}
-						free(buffer);
+				std::smatch m;
+				if (!std::regex_match(line, m, edge_re)) continue;
+				std::string from = m[1].str();
+				std::string to = m[2].str();
+				std::string attrs = m.size() >= 4 ? m[3].str() : "";
+
+				auto ensure_node = [&](const std::string &name) {
+					if (this->nodename2nodeid.find(name) != this->nodename2nodeid.end()) return;
+					uint8_t nodetype = (name.size() > 0 && name[0] == 'H') ? NODE_TYPE_HOST : NODE_TYPE_SWITCH;
+					uint32_t nodeid = create_node(name, nodetype);
+					if (nodetype == NODE_TYPE_HOST) {
+						rank2nodeid.insert(std::make_pair(rank2nodeid.size(), nodeid));
 					}
-					link = agnxtout(graph, link);
-				}
-				node_from = agnxtnode(graph, node_from);
+				};
 
+				ensure_node(from);
+				ensure_node(to);
+
+				uint32_t newlinkid = create_link(from, to);
+
+				std::smatch cm;
+				if (std::regex_search(attrs, cm, comment_re)) {
+					std::string comment = cm[1].str();
+					// "*" means default routing (single-port) => no explicit routinginfo.
+					if (comment != "*" && comment.size() > 0) {
+						// Split by comma and whitespace.
+						size_t pos = 0;
+						while (pos < comment.size()) {
+							while (pos < comment.size() && (comment[pos] == ' ' || comment[pos] == '\t' || comment[pos] == ',')) pos++;
+							if (pos >= comment.size()) break;
+							size_t end = pos;
+							while (end < comment.size() && comment[end] != ',' && comment[end] != ' ' && comment[end] != '\t') end++;
+							std::string dest_name = comment.substr(pos, end - pos);
+							auto it = this->nodename2nodeid.find(dest_name);
+							if (it != this->nodename2nodeid.end()) add_routing_info(it->second, newlinkid);
+							pos = end;
+						}
+					}
+				}
 			}
-			agclose(graph);
 		}
 
 	std::vector</*linkids*/ uint32_t> find_route(uint32_t src_rank, uint32_t dest_rank) {

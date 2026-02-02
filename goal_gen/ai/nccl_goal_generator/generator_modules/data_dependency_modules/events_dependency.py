@@ -28,27 +28,34 @@ def get_events_dependency(nccl_group_events, comm_init_events,
             profile_start = 0
             profile_end = float('inf')
 
-            for gpuId, gpu_events in goal_events.items():
+            for gpuId in sorted(goal_events.keys(), key=int):
+                gpu_events = goal_events[gpuId]
                 if gpuId in profile_interval:
                     profile_start = profile_interval[gpuId]["start"]
                     profile_end = profile_interval[gpuId]["end"]
                     print(f"[DEBUG] Profile Interval: {profile_interval[gpuId]}")
                 
                 gpu_all_stream_start_time = None
-                for streamId, stream_events in gpu_events.items():
+                for streamId in sorted(gpu_events.keys(), key=int):
+                    stream_events = gpu_events[streamId]
                     if gpu_all_stream_start_time is None:
                         gpu_all_stream_start_time = stream_events[0]['ts_group_gpu_start']
                     else:
                         gpu_all_stream_start_time = min(gpu_all_stream_start_time, stream_events[0]['ts_group_gpu_start'])
                         
-                for streamId, stream_events in gpu_events.items():
+                for streamId in sorted(gpu_events.keys(), key=int):
+                    stream_events = gpu_events[streamId]
                     last_group_event_end_time =  comm_init_events[goal_rank][gpuId]['ts_init_end']
                     last_group_event_end_id = node_start_calc_id
-                    for group_event_index, group_event in enumerate(stream_events): 
+                    stream_events = sorted(stream_events, key=lambda e: e.get('ts_group_gpu_start', 0))
+                    for group_event_index, group_event in enumerate(stream_events):
                         launched = 0
 
                         task_counter += 1
-                        file.write(f"l{task_counter}: calc {group_event['ts_group_gpu_start'] - last_group_event_end_time}\n")  ## Former calc between first group host event start and last group gpu event end
+                        gap = group_event['ts_group_gpu_start'] - last_group_event_end_time
+                        if gap < 0:
+                            gap = 0
+                        file.write(f"l{task_counter}: calc {gap}\n")  ## Former calc between first group host event start and last group gpu event end
                         file.write(f"l{task_counter} requires l{last_group_event_end_id}\n")
                         group_event_start_calc_id = task_counter
 

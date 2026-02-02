@@ -166,7 +166,7 @@ def get_events_parallel_group(nccl_events):
                                     'chunkSteps': coll_event['chunkSteps'],
                                     'sliceSteps': coll_event['sliceSteps'],
                                     'stepSize': coll_event['stepSize'],
-                                    'elems': coll_event['elems'],
+                                    'elems': coll_event.get('elems', []),
                                     'ts_end': event['ts_end'],
                                     'ts_kernel': event['ts_kernel'],
                                     'ts_gpu_start': event['ts_gpu_start'],

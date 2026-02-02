@@ -609,7 +609,7 @@ int start_lgs(std::string filename_goal, LogSimInterface &lgs) {
               if(print) printf("[%i] found send to %i tag %lu - t: %lu (CPU: %i)\n", elem.host, elem.target, (ulint)elem.tag, (ulint)elem.time, elem.proc);
   
               uint64_t resource_time = std::max(nexto[elem.host][elem.proc], nextgs[elem.host][elem.nic]);
-              if(nextgs[elem.host][elem.nic] <= elem.time) { // local o,g available!
+              if(resource_time <= elem.time) { // local o,g available!
                   if(print) 
                     printf("-- satisfy local irequires\n");
 

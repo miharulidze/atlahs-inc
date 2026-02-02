@@ -1,9 +1,6 @@
 [submodule "goal_gen/storage/DirectDriveSim"]
 	path = goal_gen/storage/DirectDriveSim
 	url = https://github.com/TrimVis/DirectDriveSim.git
-[submodule "goal_gen/ai/nccl_nvtx_v2.20.5"]
-	path = goal_gen/ai/nccl_nvtx_v2.20.5
-	url = https://github.com/ZhiyiHu1999/nccl_nvtx_v2.20.5-1.git
 [submodule "apps/hpc/hpcg"]
 	path = apps/hpc/hpcg
 	url = https://github.com/hpcg-benchmark/hpcg.git
@@ -49,3 +46,6 @@
 [submodule "goal_gen/ai/nccl_generator_v2"]
 	path = goal_gen/ai/nccl_generator_v2
 	url = git@github.com:Yanksi/nccl_generator_v2.git
+[submodule "goal_gen/ai/nccl_versions/nccl_nvtx_v2.20.5"]
+	path = goal_gen/ai/nccl_versions/nccl_nvtx_v2.20.5
+	url = https://github.com/ZhiyiHu1999/nccl_nvtx_v2.20.5-1.git

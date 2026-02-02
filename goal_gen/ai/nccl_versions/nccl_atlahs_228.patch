@@ -1,0 +1,809 @@
+diff --git a/makefiles/common.mk b/makefiles/common.mk
+index f8f455d..a2eeb42 100644
+--- a/makefiles/common.mk
++++ b/makefiles/common.mk
+@@ -76,12 +76,12 @@ endif
+ 
+ CXXFLAGS   := -DCUDA_MAJOR=$(CUDA_MAJOR) -DCUDA_MINOR=$(CUDA_MINOR) -fPIC -fvisibility=hidden \
+               -Wall -Wno-unused-function -Wno-sign-compare $(CXXSTD) -Wvla \
+-              -I $(CUDA_INC) -I $(CUDA_INC)/cccl \
++              -I $(CUDA_INC) -I $(CUDA_INC)/cccl $(TRACING_FLAGS) \
+               $(CXXFLAGS)
+ # Maxrregcount needs to be set accordingly to NCCL_MAX_NTHREADS (otherwise it will cause kernel launch errors)
+ # 512 : 120, 640 : 96, 768 : 80, 1024 : 60
+ # We would not have to set this if we used __launch_bounds__, but this only works on kernels, not on functions.
+-NVCUFLAGS  := -ccbin $(CXX) $(NVCC_GENCODE) $(CXXSTD) --expt-extended-lambda -Xptxas -maxrregcount=96 -Xfatbin -compress-all
++NVCUFLAGS  := -ccbin $(CXX) $(NVCC_GENCODE) $(CXXSTD) --expt-extended-lambda -Xptxas -maxrregcount=96 -Xfatbin -compress-all $(TRACING_FLAGS)
+ # Use addprefix so that we can specify more than one path
+ NVLDFLAGS  := -L${CUDA_LIB} -lcudart -lrt
+ 
+diff --git a/src/collectives.cc b/src/collectives.cc
+index ca69c9a..240bc27 100644
+--- a/src/collectives.cc
++++ b/src/collectives.cc
+@@ -9,6 +9,31 @@
+ #include "enqueue.h"
+ #include "nccl.h"
+ #include "nvtx_payload_schemas.h"
++#include <unistd.h>
++#if defined(ENABLE_API_NVTX)
++#include "nvtx3/nvToolsExt.h"
++#endif
++
++#if defined(ENABLE_API_NVTX)
++  const uint32_t colors[] = {
++    0xffe91e63,
++    0xff2196f3,
++    0xff4caf50,
++    0xffffc107,
++    0xff9c27b0,
++    0xffff5722,
++    0xff00bcd4,
++    0xff673ab7,
++    0xffff9800,
++    0xff03a9f4};
++  nvtxEventAttributes_t eventAttrib_allgather = {0};
++  nvtxEventAttributes_t eventAttrib_allreduce = {0};
++  nvtxEventAttributes_t eventAttrib_broadcast = {0};
++  nvtxEventAttributes_t eventAttrib_reduce = {0};
++  nvtxEventAttributes_t eventAttrib_reducescatter = {0};
++  nvtxEventAttributes_t eventAttrib_send = {0};
++  nvtxEventAttributes_t eventAttrib_recv = {0};
++#endif
+ 
+ const char* ncclFuncToString(ncclFunc_t fn) {
+   switch (fn) {
+@@ -81,6 +106,26 @@ NCCL_API(ncclResult_t, ncclAllGather, const void* sendbuff, void* recvbuff, size
+     ncclDataType_t datatype, ncclComm_t comm, cudaStream_t stream);
+ ncclResult_t ncclAllGather(const void* sendbuff, void* recvbuff, size_t sendcount,
+     ncclDataType_t datatype, ncclComm_t comm, cudaStream_t stream) {
++#if defined(ENABLE_API_NVTX)
++  char nvtxMsg_AllGather[256];
++  pid_t pid = getpid();
++  snprintf(nvtxMsg_AllGather, sizeof(nvtxMsg_AllGather),
++                  "ncclAllGather(): commHash 0x%llx, stream %p, data_size %zu, type_size %d, pid %d",
++                  (unsigned long long)(comm ? comm->commHash : 0),
++                  stream,
++                  sendcount * ncclTypeSize(datatype),
++                  ncclTypeSize(datatype),
++                  pid);
++
++  eventAttrib_allgather.version = NVTX_VERSION;
++  eventAttrib_allgather.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;
++  eventAttrib_allgather.messageType = NVTX_MESSAGE_TYPE_ASCII;
++  eventAttrib_allgather.colorType = NVTX_COLOR_ARGB;
++  eventAttrib_allgather.message.ascii = nvtxMsg_AllGather;
++  eventAttrib_allgather.color = colors[0];
++
++  nvtxRangePushEx(&eventAttrib_allgather);
++#endif
+   // Just pass the size of one message and not the total bytes sent/received.
+   NVTX3_FUNC_WITH_PARAMS(AllGather, NcclNvtxParamsAllGather,
+     NVTX3_PAYLOAD(comm ? comm->commHash : 0, sendcount * ncclTypeSize(datatype)));
+@@ -88,7 +133,11 @@ ncclResult_t ncclAllGather(const void* sendbuff, void* recvbuff, size_t sendcoun
+   struct ncclInfo info = { ncclFuncAllGather, "AllGather",
+     sendbuff, recvbuff, sendcount, datatype, ncclSum, 0, comm, stream, /* Args */
+     ALLGATHER_CHUNKSTEPS, ALLGATHER_SLICESTEPS };
+-  return ncclEnqueueCheck(&info);
++  ncclResult_t ret = ncclEnqueueCheck(&info);
++#if defined(ENABLE_API_NVTX)
++  nvtxRangePop();
++#endif
++  return ret;
+ }
+ 
+ NCCL_API(ncclResult_t, ncclAlltoAll, const void* sendbuff, void* recvbuff, size_t count,
+@@ -108,26 +157,76 @@ NCCL_API(ncclResult_t, ncclAllReduce, const void* sendbuff, void* recvbuff, size
+     ncclDataType_t datatype, ncclRedOp_t op, ncclComm* comm, cudaStream_t stream);
+ ncclResult_t ncclAllReduce(const void* sendbuff, void* recvbuff, size_t count,
+     ncclDataType_t datatype, ncclRedOp_t op, ncclComm* comm, cudaStream_t stream) {
++#if defined(ENABLE_API_NVTX)
++  char nvtxMsg_AllReduce[256];
++  pid_t pid = getpid();
++  snprintf(nvtxMsg_AllReduce, sizeof(nvtxMsg_AllReduce),
++                  "ncclAllReduce(): commHash 0x%llx, stream %p, data_size %zu, type_size %d, red_op %d, pid %d",
++                  (unsigned long long)(comm ? comm->commHash : 0),
++                  stream,
++                  count * ncclTypeSize(datatype),
++                  ncclTypeSize(datatype),
++                  op,
++                  pid);
++
++  eventAttrib_allreduce.version = NVTX_VERSION;
++  eventAttrib_allreduce.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;
++  eventAttrib_allreduce.messageType = NVTX_MESSAGE_TYPE_ASCII;
++  eventAttrib_allreduce.colorType = NVTX_COLOR_ARGB;
++  eventAttrib_allreduce.message.ascii = nvtxMsg_AllReduce;
++  eventAttrib_allreduce.color = colors[1];
++
++  nvtxRangePushEx(&eventAttrib_allreduce);
++#endif
+   NVTX3_FUNC_WITH_PARAMS(AllReduce, NcclNvtxParamsAllReduce,
+     NVTX3_PAYLOAD(comm ? comm->commHash : 0, count * ncclTypeSize(datatype), op));
+ 
+   struct ncclInfo info = { ncclFuncAllReduce, "AllReduce",
+     sendbuff, recvbuff, count, datatype, op, 0, comm, stream, /* Args */
+     ALLREDUCE_CHUNKSTEPS, ALLREDUCE_SLICESTEPS };
+-  return ncclEnqueueCheck(&info);
++  ncclResult_t ret = ncclEnqueueCheck(&info);
++#if defined(ENABLE_API_NVTX)
++  nvtxRangePop();
++#endif
++  return ret;
+ }
+ 
+ NCCL_API(ncclResult_t, ncclBroadcast, const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype, int root,
+     ncclComm_t comm, cudaStream_t stream);
+ ncclResult_t ncclBroadcast(const void* sendbuff, void* recvbuff, size_t count, ncclDataType_t datatype, int root,
+     ncclComm_t comm, cudaStream_t stream) {
++#if defined(ENABLE_API_NVTX)
++  char nvtxMsg_Broadcast[256];
++  pid_t pid = getpid();
++  snprintf(nvtxMsg_Broadcast, sizeof(nvtxMsg_Broadcast),
++                  "ncclBroadcast(): commHash 0x%llx, stream %p, data_size %zu, type_size %d, root %d, pid %d",
++                  (unsigned long long)(comm ? comm->commHash : 0),
++                  stream,
++                  count * ncclTypeSize(datatype),
++                  ncclTypeSize(datatype),
++                  root,
++                  pid);
++
++  eventAttrib_broadcast.version = NVTX_VERSION;
++  eventAttrib_broadcast.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;
++  eventAttrib_broadcast.messageType = NVTX_MESSAGE_TYPE_ASCII;
++  eventAttrib_broadcast.colorType = NVTX_COLOR_ARGB;
++  eventAttrib_broadcast.message.ascii = nvtxMsg_Broadcast;
++  eventAttrib_broadcast.color = colors[2];
++
++  nvtxRangePushEx(&eventAttrib_broadcast);
++#endif
+   NVTX3_FUNC_WITH_PARAMS(Broadcast, NcclNvtxParamsBroadcast,
+     NVTX3_PAYLOAD(comm ? comm->commHash : 0, count * ncclTypeSize(datatype), root));
+ 
+   struct ncclInfo info = { ncclFuncBroadcast, "Broadcast",
+     sendbuff, recvbuff, count, datatype, ncclSum, root, comm, stream, /* Args */
+     BROADCAST_CHUNKSTEPS, BROADCAST_SLICESTEPS };
+-  return ncclEnqueueCheck(&info);
++  ncclResult_t ret = ncclEnqueueCheck(&info);
++#if defined(ENABLE_API_NVTX)
++  nvtxRangePop();
++#endif
++  return ret;
+ }
+ /* Deprecated original "in place" function, similar to MPI */
+ NCCL_API(ncclResult_t, ncclBcast, void* buff, size_t count, ncclDataType_t datatype, int root,
+@@ -154,26 +253,77 @@ NCCL_API(ncclResult_t, ncclReduce, const void* sendbuff, void* recvbuff, size_t
+     ncclDataType_t datatype, ncclRedOp_t op, int root, ncclComm_t comm, cudaStream_t stream);
+ ncclResult_t ncclReduce(const void* sendbuff, void* recvbuff, size_t count,
+     ncclDataType_t datatype, ncclRedOp_t op, int root, ncclComm_t comm, cudaStream_t stream) {
++#if defined(ENABLE_API_NVTX)
++  char nvtxMsg_Reduce[256];
++  pid_t pid = getpid();
++  snprintf(nvtxMsg_Reduce, sizeof(nvtxMsg_Reduce),
++                  "ncclReduce(): commHash 0x%llx, stream %p, data_size %zu, type_size %d, red_op %d, root %d, pid %d",
++                  (unsigned long long)(comm ? comm->commHash : 0),
++                  stream,
++                  count * ncclTypeSize(datatype),
++                  ncclTypeSize(datatype),
++                  op,
++                  root,
++                  pid);
++
++  eventAttrib_reduce.version = NVTX_VERSION;
++  eventAttrib_reduce.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;
++  eventAttrib_reduce.messageType = NVTX_MESSAGE_TYPE_ASCII;
++  eventAttrib_reduce.colorType = NVTX_COLOR_ARGB;
++  eventAttrib_reduce.message.ascii = nvtxMsg_Reduce;
++  eventAttrib_reduce.color = colors[4];
++
++  nvtxRangePushEx(&eventAttrib_reduce);
++#endif
+   NVTX3_FUNC_WITH_PARAMS(Reduce, NcclNvtxParamsReduce,
+     NVTX3_PAYLOAD(comm ? comm->commHash : 0, count * ncclTypeSize(datatype), root, op));
+ 
+   struct ncclInfo info = { ncclFuncReduce, "Reduce",
+     sendbuff, recvbuff, count, datatype, op, root, comm, stream, /* Args */
+     REDUCE_CHUNKSTEPS, REDUCE_SLICESTEPS };
+-  return ncclEnqueueCheck(&info);
++  ncclResult_t ret = ncclEnqueueCheck(&info);
++#if defined(ENABLE_API_NVTX)
++  nvtxRangePop();
++#endif
++  return ret;
+ }
+ 
+ NCCL_API(ncclResult_t, ncclReduceScatter, const void* sendbuff, void* recvbuff, size_t recvcount,
+     ncclDataType_t datatype, ncclRedOp_t op, ncclComm* comm, cudaStream_t stream);
+ ncclResult_t ncclReduceScatter(const void* sendbuff, void* recvbuff, size_t recvcount,
+     ncclDataType_t datatype, ncclRedOp_t op, ncclComm* comm, cudaStream_t stream) {
++#if defined(ENABLE_API_NVTX)
++  char nvtxMsg_ReduceScatter[256];
++  pid_t pid = getpid();
++  snprintf(nvtxMsg_ReduceScatter, sizeof(nvtxMsg_ReduceScatter),
++                  "ncclReduceScatter(): commHash 0x%llx, stream %p, data_size %zu, type_size %d, red_op %d, pid %d",
++                  (unsigned long long)(comm ? comm->commHash : 0),
++                  stream,
++                  recvcount * ncclTypeSize(datatype),
++                  ncclTypeSize(datatype),
++                  op,
++                  pid);
++
++  eventAttrib_reducescatter.version = NVTX_VERSION;
++  eventAttrib_reducescatter.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;
++  eventAttrib_reducescatter.messageType = NVTX_MESSAGE_TYPE_ASCII;
++  eventAttrib_reducescatter.colorType = NVTX_COLOR_ARGB;
++  eventAttrib_reducescatter.message.ascii = nvtxMsg_ReduceScatter;
++  eventAttrib_reducescatter.color = colors[3];
++
++  nvtxRangePushEx(&eventAttrib_reducescatter);
++#endif
+   NVTX3_FUNC_WITH_PARAMS(ReduceScatter, NcclNvtxParamsReduceScatter,
+     NVTX3_PAYLOAD(comm ? comm->commHash : 0, recvcount * ncclTypeSize(datatype), op));
+ 
+   struct ncclInfo info = { ncclFuncReduceScatter, "ReduceScatter",
+     sendbuff, recvbuff, recvcount, datatype, op, 0, comm, stream, /* Args */
+     REDUCESCATTER_CHUNKSTEPS, REDUCESCATTER_SLICESTEPS };
+-  return ncclEnqueueCheck(&info);
++  ncclResult_t ret = ncclEnqueueCheck(&info);
++#if defined(ENABLE_API_NVTX)
++  nvtxRangePop();
++#endif
++  return ret;
+ }
+ 
+ NCCL_API(ncclResult_t, ncclScatter, const void* sendbuff, void* recvbuff, size_t count,
+@@ -193,24 +343,74 @@ NCCL_API(ncclResult_t, ncclSend, const void* sendbuff, size_t count, ncclDataTyp
+     ncclComm_t comm, cudaStream_t stream);
+ ncclResult_t ncclSend(const void* sendbuff, size_t count, ncclDataType_t datatype, int peer,
+     ncclComm_t comm, cudaStream_t stream) {
++#if defined(ENABLE_API_NVTX)
++  char nvtxMsg_Send[256];
++  pid_t pid = getpid();
++  snprintf(nvtxMsg_Send, sizeof(nvtxMsg_Send),
++                  "ncclSend(): commHash 0x%llx, stream %p, data_size %zu, type_size %d, receiver_rank %d, pid %d",
++                  (unsigned long long)(comm ? comm->commHash : 0),
++                  stream,
++                  count * ncclTypeSize(datatype),
++                  ncclTypeSize(datatype),
++                  peer,
++                  pid);
++
++  eventAttrib_send.version = NVTX_VERSION;
++  eventAttrib_send.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;
++  eventAttrib_send.messageType = NVTX_MESSAGE_TYPE_ASCII;
++  eventAttrib_send.colorType = NVTX_COLOR_ARGB;
++  eventAttrib_send.message.ascii = nvtxMsg_Send;
++  eventAttrib_send.color = colors[5];
++
++  nvtxRangePushEx(&eventAttrib_send);
++#endif
+   NVTX3_FUNC_WITH_PARAMS(Send, NcclNvtxParamsSendRecv,
+     NVTX3_PAYLOAD(comm ? comm->commHash : 0, count * ncclTypeSize(datatype), peer));
+ 
+   struct ncclInfo info = { ncclFuncSend, "Send",
+     NULL, (void*)sendbuff, count, datatype, ncclSum, peer, comm, stream, /* Args */
+     1, 1 };
+-  return ncclEnqueueCheck(&info);
++  ncclResult_t ret = ncclEnqueueCheck(&info);
++#if defined(ENABLE_API_NVTX)
++  nvtxRangePop();
++#endif
++  return ret;
+ }
+ 
+ NCCL_API(ncclResult_t, ncclRecv, void* recvbuff, size_t count, ncclDataType_t datatype, int peer,
+     ncclComm_t comm, cudaStream_t stream);
+ ncclResult_t ncclRecv(void* recvbuff, size_t count, ncclDataType_t datatype, int peer,
+     ncclComm_t comm, cudaStream_t stream) {
++#if defined(ENABLE_API_NVTX)
++  char nvtxMsg_Recv[256];
++  pid_t pid = getpid();
++  snprintf(nvtxMsg_Recv, sizeof(nvtxMsg_Recv),
++                  "ncclRecv(): commHash 0x%llx, stream %p, data_size %zu, type_size %d, sender_rank %d, pid %d",
++                  (unsigned long long)(comm ? comm->commHash : 0),
++                  stream,
++                  count * ncclTypeSize(datatype),
++                  ncclTypeSize(datatype),
++                  peer,
++                  pid);
++
++  eventAttrib_recv.version = NVTX_VERSION;
++  eventAttrib_recv.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;
++  eventAttrib_recv.messageType = NVTX_MESSAGE_TYPE_ASCII;
++  eventAttrib_recv.colorType = NVTX_COLOR_ARGB;
++  eventAttrib_recv.message.ascii = nvtxMsg_Recv;
++  eventAttrib_recv.color = colors[6];
++
++  nvtxRangePushEx(&eventAttrib_recv);
++#endif
+   NVTX3_FUNC_WITH_PARAMS(Recv, NcclNvtxParamsSendRecv,
+     NVTX3_PAYLOAD(comm ? comm->commHash : 0, count * ncclTypeSize(datatype), peer));
+ 
+   struct ncclInfo info = { ncclFuncRecv, "Recv",
+     NULL, recvbuff, count, datatype, ncclSum, peer, comm, stream, /* Args */
+     1, 1 };
+-  return ncclEnqueueCheck(&info);
++  ncclResult_t ret = ncclEnqueueCheck(&info);
++#if defined(ENABLE_API_NVTX)
++  nvtxRangePop();
++#endif
++  return ret;
+ }
+diff --git a/src/enqueue.cc b/src/enqueue.cc
+index 00a0ef8..605c74b 100644
+--- a/src/enqueue.cc
++++ b/src/enqueue.cc
+@@ -21,6 +21,28 @@
+ #include <cstring> // std::memcpy
+ #include <cinttypes> // PRIx64
+ #include <cassert>
++#include <unistd.h>
++
++#if defined(ENABLE_ENQUEUE_NVTX)
++#include "nvtx3/nvToolsExt.h"
++#endif
++
++#if defined(ENABLE_ENQUEUE_NVTX)
++  const uint32_t colors[] = {
++    0xff00bcd4,
++    0xff9c27b0,
++    0xff4caf50,
++    0xff03a9f4,
++    0xffff9800,
++    0xff3f51b5,
++    0xffff5722,
++    0xffe91e63,
++    0xffcddc39,
++    0xff8bc34a};
++  nvtxEventAttributes_t eventAttrib_CollInfo = {0};
++  nvtxEventAttributes_t eventAttrib_WorkElemColl = {0};
++  nvtxEventAttributes_t eventAttrib_WorkElemP2P = {0};
++#endif
+ 
+ NCCL_PARAM(L1SharedMemoryCarveout, "L1_SHARED_MEMORY_CARVEOUT", 0);
+ 
+@@ -573,6 +595,34 @@ static ncclResult_t scheduleCollTasksToPlan(
+         proxyOp.rank = comm->rank;
+         proxyOp.eActivationMask = task->eActivationMask;
+         proxyOp.incWorkCounter = true;
++#if defined(ENABLE_ENQUEUE_NVTX)
++        {
++          char nvtxMsg_WorkElemColl[256];
++          pid_t pid = getpid();
++          size_t chunkCount = devWork->collnet.chunkCount;
++          size_t workCount = task->count;
++          size_t lastChunkCount = chunkCount;
++          size_t workOffset = 0;
++          snprintf(nvtxMsg_WorkElemColl, sizeof(nvtxMsg_WorkElemColl),
++                   "nWarps %d count %lu chunkCount %lu workCount %lu lastChunkCount %lu workOffset %lu sendbuff %lu recvbuff %lu pid %d",
++                   devWork->nWarps,
++                   workCount,
++                   chunkCount,
++                   workCount,
++                   lastChunkCount,
++                   workOffset,
++                   (uintptr_t)devWork->sendbuff,
++                   (uintptr_t)devWork->recvbuff,
++                   pid);
++          eventAttrib_WorkElemColl.version = NVTX_VERSION;
++          eventAttrib_WorkElemColl.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;
++          eventAttrib_WorkElemColl.messageType = NVTX_MESSAGE_TYPE_ASCII;
++          eventAttrib_WorkElemColl.colorType = NVTX_COLOR_ARGB;
++          eventAttrib_WorkElemColl.message.ascii = nvtxMsg_WorkElemColl;
++          eventAttrib_WorkElemColl.color = colors[0];
++          nvtxMarkEx(&eventAttrib_WorkElemColl);
++        }
++#endif
+         addWorkBatchToPlan(comm, plan, c, workNode->workType, task->devFuncId, plan->workBytes);
+         // Set pattern to profiler to add a proxy profiler for kernel events
+         NCCLCHECK(addProxyOpIfNeeded(comm, plan, &proxyOp));
+@@ -702,6 +752,33 @@ static ncclResult_t scheduleCollTasksToPlan(
+         proxyOp->eActivationMask = task->eActivationMask;
+         proxyOp->incWorkCounter = true;
+         proxyOp->nChannels = nChannels;
++#if defined(ENABLE_ENQUEUE_NVTX)
++        {
++          size_t totalCount=0, partCount=0, partOffset=0, chunkCount=0;
++          ncclCollCbdPart(devWork, c, task->protocol, elementSize, (size_t*)&totalCount, (size_t*)&partOffset, (size_t*)&partCount, (size_t*)&chunkCount);
++          size_t lastChunkCount = chunkCount;
++          char nvtxMsg_WorkElemColl[256];
++          pid_t pid = getpid();
++          snprintf(nvtxMsg_WorkElemColl, sizeof(nvtxMsg_WorkElemColl),
++                   "nWarps %d count %lu chunkCount %lu workCount %lu lastChunkCount %lu workOffset %lu sendbuff %lu recvbuff %lu pid %d",
++                   devWork->nWarps,
++                   task->count,
++                   chunkCount,
++                   partCount,
++                   lastChunkCount,
++                   partOffset,
++                   (uintptr_t)devWork->sendbuff,
++                   (uintptr_t)devWork->recvbuff,
++                   pid);
++          eventAttrib_WorkElemColl.version = NVTX_VERSION;
++          eventAttrib_WorkElemColl.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;
++          eventAttrib_WorkElemColl.messageType = NVTX_MESSAGE_TYPE_ASCII;
++          eventAttrib_WorkElemColl.colorType = NVTX_COLOR_ARGB;
++          eventAttrib_WorkElemColl.message.ascii = nvtxMsg_WorkElemColl;
++          eventAttrib_WorkElemColl.color = colors[0];
++          nvtxMarkEx(&eventAttrib_WorkElemColl);
++        }
++#endif
+         addWorkBatchToPlan(comm, plan, c, workNode->workType, task->devFuncId, plan->workBytes);
+         // Coverity reports "proxyOp->connection" as being possibly uninitialized.  It's hard to
+         // determine if that's actually true but it's also not clear if that would be an issue.
+@@ -1000,6 +1077,36 @@ static ncclResult_t addP2pToPlan(
+         proxyOps[dir].nPeers = concurrentTasks[dir];
+         NCCLCHECKGOTO(addProxyOpIfNeeded(comm, plan, &proxyOps[dir]), ret, cleanup);
+         NCCLCHECKGOTO(addProfilerProxyOpIfNeeded(comm, plan, &proxyOps[dir]), ret, cleanup);
++#if defined(ENABLE_ENQUEUE_NVTX)
++        {
++          char nvtxMsg_WorkElemP2P[256];
++          pid_t pid = getpid();
++          int peerRank = dir ? sendRank : recvRank;
++          int p2pType = dir ? 1 : 2; // 1=Send, 2=Recv
++          ssize_t signedBytes = dir ? sendBytes : recvBytes;
++          uint64_t dirBytes = signedBytes < 0 ? 0 : (uint64_t)signedBytes;
++          uint32_t countHi32 = (uint32_t)(dirBytes >> 32);
++          uint32_t countLo32 = (uint32_t)(dirBytes & 0xFFFFFFFF);
++          snprintf(nvtxMsg_WorkElemP2P, sizeof(nvtxMsg_WorkElemP2P),
++                   "Bytes %zu nWarps %d p2pType %d peer %d proto %d countHi32 %u countLo32 %u chunkSize %d pid %d",
++                   (size_t)dirBytes,
++                   0, // nWarps not directly available here in 2.28
++                   p2pType,
++                   peerRank,
++                   protocol[dir],
++                   countHi32,
++                   countLo32,
++                   chunkSize[dir],
++                   pid);
++          eventAttrib_WorkElemP2P.version = NVTX_VERSION;
++          eventAttrib_WorkElemP2P.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;
++          eventAttrib_WorkElemP2P.messageType = NVTX_MESSAGE_TYPE_ASCII;
++          eventAttrib_WorkElemP2P.colorType = NVTX_COLOR_ARGB;
++          eventAttrib_WorkElemP2P.message.ascii = nvtxMsg_WorkElemP2P;
++          eventAttrib_WorkElemP2P.color = colors[1];
++          nvtxMarkEx(&eventAttrib_WorkElemP2P);
++        }
++#endif
+       }
+     }
+   }
+@@ -2221,6 +2328,41 @@ static ncclResult_t calcCollChunking(
+     return ncclInternalError;
+   }
+ 
++#if defined(ENABLE_ENQUEUE_NVTX)
++  {
++    char nvtxMsg_CollInfo[256];
++    pid_t pid = getpid();
++    size_t data_size = info->count * ncclTypeSize(info->datatype);
++    cudaStream_t nvtxStream = (comm->planner.streams != nullptr) ? comm->planner.streams->stream : nullptr;
++    snprintf(nvtxMsg_CollInfo, sizeof(nvtxMsg_CollInfo),
++                    "collType %d root %d redOp %d algo %d proto %d commHash 0x%llx stream %p data_size %zu type_size %d chunkSize %zu chunkCount %zu chunkSteps %d sliceSteps %d stepSize %d pid %d",
++                    info->func,
++                    info->root,
++                    info->opHost,
++                    info->algorithm,
++                    info->protocol,
++                    (unsigned long long)comm->commHash,
++                    (void*)nvtxStream,
++                    data_size,
++                    ncclTypeSize(info->datatype),
++                    (size_t)proxyOp->chunkSize,
++                    (size_t)(proxyOp->chunkSize / ncclTypeSize(info->datatype)),
++                    proxyOp->chunkSteps,
++                    proxyOp->sliceSteps,
++                    stepSize,
++                    pid);
++
++    eventAttrib_CollInfo.version = NVTX_VERSION;
++    eventAttrib_CollInfo.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;
++    eventAttrib_CollInfo.messageType = NVTX_MESSAGE_TYPE_ASCII;
++    eventAttrib_CollInfo.colorType = NVTX_COLOR_ARGB;
++    eventAttrib_CollInfo.message.ascii = nvtxMsg_CollInfo;
++    eventAttrib_CollInfo.color = colors[3];
++
++    nvtxMarkEx(&eventAttrib_CollInfo);
++  }
++#endif
++
+   *outChunkSize = proxyOp->chunkSize;
+   return ncclSuccess;
+ }
+diff --git a/src/group.cc b/src/group.cc
+index aa28244..db76002 100644
+--- a/src/group.cc
++++ b/src/group.cc
+@@ -14,6 +14,27 @@
+ #include "ce_coll.h"
+ #include "profiler.h"
+ #include "nvtx.h"
++#include <unistd.h>
++#if defined(ENABLE_API_NVTX)
++#include "nvtx3/nvToolsExt.h"
++#endif
++
++#if defined(ENABLE_API_NVTX)
++  const uint32_t colors[] = {
++    0xffe91e63,
++    0xff2196f3,
++    0xff4caf50,
++    0xffffc107,
++    0xff9c27b0,
++    0xffff5722,
++    0xff00bcd4,
++    0xff673ab7,
++    0xffff9800,
++    0xff03a9f4};
++  nvtxEventAttributes_t eventAttrib_groupstart = {0};
++  nvtxEventAttributes_t eventAttrib_groupend = {0};
++  nvtxEventAttributes_t eventAttrib_group = {0};
++#endif
+ 
+ #define GROUP_MAX_RECLAIM_STEPS 10
+ 
+@@ -93,19 +114,57 @@ ncclResult_t ncclAsyncJobComplete(struct ncclAsyncJob* job) {
+ NCCL_API(ncclResult_t, ncclGroupStart);
+ ncclResult_t ncclGroupStart() {
+   ncclResult_t ret = ncclSuccess;
++#if defined(ENABLE_API_NVTX)
++  char nvtxMsg_GroupStart[256];
++  pid_t pid = getpid();
++  snprintf(nvtxMsg_GroupStart, sizeof(nvtxMsg_GroupStart),
++                  "ncclGroupStart(): pid %d",
++                  pid);
++
++  eventAttrib_groupstart.version = NVTX_VERSION;
++  eventAttrib_groupstart.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;
++  eventAttrib_groupstart.messageType = NVTX_MESSAGE_TYPE_ASCII;
++  eventAttrib_groupstart.colorType = NVTX_COLOR_ARGB;
++  eventAttrib_groupstart.message.ascii = nvtxMsg_GroupStart;
++  eventAttrib_groupstart.color = colors[7];
++
++  nvtxRangePushEx(&eventAttrib_groupstart);
++#endif
+   NCCL_NVTX3_FUNC_RANGE;
+ 
+   NCCLCHECK(ncclGroupStartInternal());
+   TRACE_CALL("ncclGroupStart()");
++#if defined(ENABLE_API_NVTX)
++  nvtxRangePop();
++#endif
+   return ret;
+ }
+ 
+ NCCL_API(ncclResult_t, ncclGroupEnd);
+ ncclResult_t ncclGroupEnd() {
+   ncclResult_t ret = ncclSuccess;
++#if defined(ENABLE_API_NVTX)
++  char nvtxMsg_GroupEnd[256];
++  pid_t pid = getpid();
++  snprintf(nvtxMsg_GroupEnd, sizeof(nvtxMsg_GroupEnd),
++                  "ncclGroupEnd(): pid %d",
++                  pid);
++
++  eventAttrib_groupend.version = NVTX_VERSION;
++  eventAttrib_groupend.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;
++  eventAttrib_groupend.messageType = NVTX_MESSAGE_TYPE_ASCII;
++  eventAttrib_groupend.colorType = NVTX_COLOR_ARGB;
++  eventAttrib_groupend.message.ascii = nvtxMsg_GroupEnd;
++  eventAttrib_groupend.color = colors[8];
++
++  nvtxRangePushEx(&eventAttrib_groupend);
++#endif
+   NCCL_NVTX3_FUNC_RANGE;
+   NCCLCHECKGOTO(ncclGroupEndInternal(), ret, exit);
+   TRACE_CALL("ncclGroupEnd()");
++#if defined(ENABLE_API_NVTX)
++  nvtxRangePop();
++#endif
+ exit:
+   return ret;
+ }
+@@ -303,11 +362,30 @@ static ncclResult_t doLaunches(struct ncclComm* head) {
+             comm->planner.unlaunchedPlansHead = plan->next;
+             CUDACHECKGOTO(cudaSetDevice(comm->cudaDev), result, failure);
+             NCCLCHECKGOTO(ncclLaunchKernelBefore_NoUncapturedCuda(comm, plan), result, failure);
++#if defined(ENABLE_API_NVTX)
++            char nvtxMsg_Group[256];
++            pid_t pid = getpid();
++            snprintf(nvtxMsg_Group, sizeof(nvtxMsg_Group),
++                            "ncclLaunchKernel(): pid %d",
++                            pid);
++
++            eventAttrib_group.version = NVTX_VERSION;
++            eventAttrib_group.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;
++            eventAttrib_group.messageType = NVTX_MESSAGE_TYPE_ASCII;
++            eventAttrib_group.colorType = NVTX_COLOR_ARGB;
++            eventAttrib_group.message.ascii = nvtxMsg_Group;
++            eventAttrib_group.color = colors[7];
++
++            nvtxRangePushEx(&eventAttrib_group);
++#endif
+             if (plan->isCeColl) {
+               NCCLCHECKGOTO(ncclLaunchCeColl(comm, plan), result, failure);
+             } else {
+               NCCLCHECKGOTO(ncclLaunchKernel(comm, plan), result, failure);
+             }
++#if defined(ENABLE_API_NVTX)
++            nvtxRangePop();
++#endif
+           }
+           // Barrier reduction input indicates if we require further rounds.
+           if (useBarrier) ncclCommIntraBarrierIn(comm, comm->planner.unlaunchedPlansHead != nullptr ? 1 : 0);
+diff --git a/src/init.cc b/src/init.cc
+index ebf942c..0871ec3 100644
+--- a/src/init.cc
++++ b/src/init.cc
+@@ -35,6 +35,22 @@
+ #include <mutex>
+ #include "ce_coll.h"
+ #include "nvtx.h"
++#if defined(ENABLE_INIT_NVTX)
++#include "nvtx3/nvToolsExt.h"
++  const uint32_t nvtx_colors[] = {
++    0xffe91e63,
++    0xff2196f3,
++    0xff4caf50,
++    0xffffc107,
++    0xff9c27b0,
++    0xffff5722,
++    0xff00bcd4,
++    0xff673ab7,
++    0xffff9800,
++    0xff03a9f4};
++  nvtxEventAttributes_t eventAttrib_channel = {0};
++  nvtxEventAttributes_t eventAttrib_init = {0};
++#endif
+ 
+ #define STR2(v) #v
+ #define STR(v) STR2(v)
+@@ -757,6 +773,10 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
+   struct ncclTopoGraph* nvlsGraph = &comm->graphs[NCCL_ALGO_NVLS];
+   struct ncclTopoGraph* graphs[NCCL_NUM_ALGORITHMS] = { treeGraph, ringGraph, collNetDirectGraph, collNetChainGraph, nvlsGraph, nvlsGraph, treeGraph };
+ 
++#if defined(ENABLE_INIT_NVTX)
++  pid_t pid = getpid();
++#endif
++
+   struct graphInfo {
+     int pattern;
+     int nChannels;
+@@ -1118,6 +1138,11 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
+ 
+   TRACE(NCCL_INIT, "rank %d nranks %d - BUILT %d TREES/RINGS", rank, nranks, comm->nChannels);
+ 
++#if defined(ENABLE_INIT_NVTX)
++  char nvtxMsg_Ring[256];
++  char nvtxMsg_Tree[256];
++#endif
++
+   char line[1024];
+   line[0]='\0';
+   for (int c=0; c<comm->nChannels; c++) {
+@@ -1125,6 +1150,45 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
+     snprintf(line+strlen(line), 1023-strlen(line), " [%d] %d/%d/%d->%d->%d",
+         c, tree->down[0], tree->down[1], tree->down[2], rank, tree->up);
+     INFO(NCCL_GRAPH, "Ring %02d : %d -> %d -> %d", c, comm->channels[c].ring.prev, comm->rank, comm->channels[c].ring.next);
++#if defined(ENABLE_INIT_NVTX)
++    snprintf(nvtxMsg_Ring, sizeof(nvtxMsg_Ring),
++      "commHash 0x%llx Rings [%d] %d->%d->%d pid %d",
++      (unsigned long long)comm->commHash,
++      c,
++      comm->channels[c].ring.prev,
++      comm->rank,
++      comm->channels[c].ring.next,
++      pid);
++
++    eventAttrib_channel.version = NVTX_VERSION;
++    eventAttrib_channel.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;
++    eventAttrib_channel.messageType = NVTX_MESSAGE_TYPE_ASCII;
++    eventAttrib_channel.colorType = NVTX_COLOR_ARGB;
++    eventAttrib_channel.message.ascii = nvtxMsg_Ring;
++    eventAttrib_channel.color = nvtx_colors[1];
++
++    nvtxMarkEx(&eventAttrib_channel);
++
++    snprintf(nvtxMsg_Tree,
++      sizeof(nvtxMsg_Tree), "commHash 0x%llx Trees [%d] %d/%d/%d->%d->%d pid %d",
++      (unsigned long long)comm->commHash,
++      c,
++      tree->down[0],
++      tree->down[1],
++      tree->down[2],
++      rank,
++      tree->up,
++      pid);
++
++    eventAttrib_channel.version = NVTX_VERSION;
++    eventAttrib_channel.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;
++    eventAttrib_channel.messageType = NVTX_MESSAGE_TYPE_ASCII;
++    eventAttrib_channel.colorType = NVTX_COLOR_ARGB;
++    eventAttrib_channel.message.ascii = nvtxMsg_Tree;
++    eventAttrib_channel.color = nvtx_colors[2];
++
++    nvtxMarkEx(&eventAttrib_channel);
++#endif
+   }
+   line[1023] = '\0';
+   INFO(NCCL_INIT, "Trees%s", line);
+@@ -1311,6 +1375,27 @@ static ncclResult_t initTransportsRank(struct ncclComm* comm, struct ncclComm* p
+   NCCLCHECKGOTO(ncclTopoTuneModel(comm, comm->minCompCap, comm->maxCompCap, graphs), ret, fail);
+ 
+   INFO(NCCL_INIT, "%d coll channels, %d collnet channels, %d nvls channels, %d p2p channels, %d p2p channels per peer", comm->nChannels, comm->nChannels, comm->nvlsChannels, comm->p2pnChannels, comm->p2pnChannelsPerPeer);
++#if defined(ENABLE_INIT_NVTX)
++  {
++    char nvtxMsg_Channel[256];
++    snprintf(nvtxMsg_Channel, sizeof(nvtxMsg_Channel),
++    "%d coll channels, %d nvls channels, %d p2p channels, %d p2p channels per peer, pid %d",
++    comm->nChannels,
++    comm->nvlsChannels,
++    comm->p2pnChannels,
++    comm->p2pnChannelsPerPeer,
++    pid);
++
++    eventAttrib_channel.version = NVTX_VERSION;
++    eventAttrib_channel.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;
++    eventAttrib_channel.messageType = NVTX_MESSAGE_TYPE_ASCII;
++    eventAttrib_channel.colorType = NVTX_COLOR_ARGB;
++    eventAttrib_channel.message.ascii = nvtxMsg_Channel;
++    eventAttrib_channel.color = nvtx_colors[3];
++
++    nvtxMarkEx(&eventAttrib_channel);
++  }
++#endif
+ 
+   if (comm->intraRank == 0) { // Load ncclParamLaunchMode
+     const char* str = ncclGetEnv("NCCL_LAUNCH_MODE");
+@@ -1477,6 +1562,10 @@ static ncclResult_t ncclCommInitRankFunc(struct ncclAsyncJob* job_) {
+   double sum_timers = 0;
+   uint64_t timers[TIMERS_INIT_COUNT] = {0};
+   unsigned long long commIdHash;
++#if defined(ENABLE_INIT_NVTX)
++  bool nvtxInitPushed = false;
++  pid_t pid = getpid();
++#endif
+ 
+   timers[TIMER_INIT_TOTAL] = clockNano();
+   CUDACHECKGOTO(cudaSetDevice(cudaDev), res, fail);
+@@ -1533,6 +1622,28 @@ static ncclResult_t ncclCommInitRankFunc(struct ncclAsyncJob* job_) {
+     timers[TIMER_INIT_BOOTSTRAP] = clockNano() - timers[TIMER_INIT_BOOTSTRAP];
+   }
+   comm->cudaArch = cudaArch;
++#if defined(ENABLE_INIT_NVTX)
++  {
++    char nvtxMsg_Init[256];
++    snprintf(nvtxMsg_Init, sizeof(nvtxMsg_Init),
++      "commHash 0x%llx commId 0x%llx rank %d nranks %d pid %d",
++      (unsigned long long)comm->commHash,
++      commIdHash,
++      comm->rank,
++      comm->nRanks,
++      pid);
++
++    eventAttrib_init.version = NVTX_VERSION;
++    eventAttrib_init.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;
++    eventAttrib_init.messageType = NVTX_MESSAGE_TYPE_ASCII;
++    eventAttrib_init.colorType = NVTX_COLOR_ARGB;
++    eventAttrib_init.message.ascii = nvtxMsg_Init;
++    eventAttrib_init.color = nvtx_colors[0];
++
++    nvtxRangePushEx(&eventAttrib_init);
++    nvtxInitPushed = true;
++  }
++#endif
+ 
+   NCCLCHECKGOTO(initTransportsRank(comm, job->parent, timers), res, fail);
+ 
+@@ -1564,6 +1675,11 @@ static ncclResult_t ncclCommInitRankFunc(struct ncclAsyncJob* job_) {
+        timers[TIMER_INIT_BOOTSTRAP] / 1e9, timers[TIMER_INIT_ALLGATHER] / 1e9, timers[TIMER_INIT_TOPO] / 1e9,
+        timers[TIMER_INIT_GRAPHS] / 1e9, timers[TIMER_INIT_CONNECT] / 1e9, timers[TIMER_INIT_TOTAL] / 1e9 - sum_timers);
+ exit:
++#if defined(ENABLE_INIT_NVTX)
++  if (nvtxInitPushed) {
++    nvtxRangePop();
++  }
++#endif
+   if (job->newcomm) {
+     /* assign it to user pointer. */
+     __atomic_store_n(job->newcomm, comm, __ATOMIC_RELEASE);
