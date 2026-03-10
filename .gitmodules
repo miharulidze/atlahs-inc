@@ -52,6 +52,7 @@
 [submodule "goal_gen/ai/nccl_generator_v2_zhiyi"]
 	path = goal_gen/ai/nccl_generator_v2_zhiyi
 	url = https://github.com/Yanksi/nccl_generator_v2
+	feature = zhiyi/tests
 [submodule "sim/pcm-sdk_zhiyi"]
 	path = sim/pcm-sdk_zhiyi
 	url = https://github.com/ZhiyiHu1999/pcm-sdk
