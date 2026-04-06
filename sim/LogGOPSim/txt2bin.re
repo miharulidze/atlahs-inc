@@ -48,7 +48,8 @@ typedef struct Item {
 	uint32_t target;
 	uint32_t tag;
 	uint8_t cpu;
-	uint8_t nic;	
+	uint8_t nic;
+	std::vector<uint32_t> destinations;
 } Item;
 
 enum OpTypes {
@@ -56,6 +57,7 @@ enum OpTypes {
 	SendOp,
 	RecvOp,
 	LoclOp,
+	McastOp,
 	StartDependency,
 	Dependency
 };
@@ -126,6 +128,10 @@ void process_item(Scanner *s, Item *item) {
 			op = s->schedule->Calc(s->rank, item->size, item->cpu, item->nic);
 			if (item->label1 != NULL) insert_id(s, item->label1, op);
 			break;
+		case McastOp:
+		    op = s->schedule->Mcast(s->rank, item->size, item->tag, item->cpu, item->nic, item->destinations);
+		    if (item->label1 != NULL) insert_id(s, item->label1, op);
+		    break;
 		case StartDependency:
 			op = retrieve_id(s, item->label1);
 			op2 = retrieve_id(s, item->label2);
@@ -222,7 +228,6 @@ uchar *fill(Scanner *s, uchar *cursor, int numtoread) {
 int scan(Scanner *s) {
 
 	//uchar *cursor = s->cur;
-
 	static uchar *cursor = NULL;
 	Item item;
 	int state;
@@ -248,6 +253,7 @@ s_0:
 	item.cpu = 0;
 	item.nic = 0;
 	item.tag = 0;
+	item.destinations.clear();
 
 /*!re2c
 	re2c:indent:top = 2;
@@ -255,6 +261,8 @@ s_0:
 	NL			= "\r"? "\n" ;
 	WS			= [ \t]+ ;
 	RANK        = "rank" ;
+	MCAST       = "mcast";
+	COMMA       = ",";
 	NUMRANKS	= "num_ranks" ;
 	BROPEN      = "{" ;
 	BRCLOSE     = "}" ;
@@ -346,6 +354,7 @@ s_4:
 	CALC		{ item.type = LoclOp; goto s_3; }
 	SEND		{ item.type = SendOp; goto s_2; }
 	RECV		{ item.type = RecvOp; goto s_2; }
+	MCAST       { item.type = McastOp; goto s_2; }
 	ANY			{ goto s_err; }
 */
 	assert(0==1); //We should never reach this line
@@ -432,7 +441,7 @@ s_11:
 
 /*!re2c
 	WS			{ goto s_11; }
-	TO			{ if (item.type == SendOp) {goto s_12;} else {goto s_err;}; }
+	TO			{ if (item.type == SendOp) {goto s_12;} else if (item.type == McastOp) {goto s_25;} else {goto s_err;}; }
 	FROM		{ if (item.type == RecvOp) {goto s_12;} else {goto s_err;}; }
 	ANY			{ goto s_err; }
 */
@@ -613,7 +622,30 @@ s_24:
 */
 
 	assert(0==1); //We should never reach this line
-	
+s_25:
+	state = 25;
+	// printf("Entered s_25\n");
+
+	s->tok = cursor;
+
+/*!re2c
+	WS			{ goto s_25; }
+	INT			{ item.destinations.push_back(add_number(s->tok, cursor)); goto s_26; }
+	ANY			{ goto s_err; }
+*/
+assert(0==1);
+
+s_26:
+    state = 26;
+
+/*!re2c
+	WS			{ goto s_26; }
+	COMMA		{ goto s_25; }
+	TAG         { goto s_14; }
+	ANY			{ goto s_err; }
+*/
+assert(0==1);
+
 s_err:
 
 	fprintf(stderr, "Error in line %i:\n", s->line);

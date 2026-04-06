@@ -78,6 +78,22 @@ class Goal {
 			return n;
 		}
 
+		goalop_t Mcast(uint32_t src, uint64_t size, uint32_t tag, uint8_t cpu, uint8_t nic, std::vector<uint32_t>& destinations) {
+
+			Node* n = graph.addNode();
+			n->Type = OPTYPE_MCAST;
+			n->Peer = src; // root of the multicast group
+			n->Tag = tag;
+			n->Proc = cpu;
+			n->Nic = nic;
+			n->Size = size;
+			n->destinations = destinations;
+			MaxCPU(cpu);
+			MaxNIC(nic);
+
+			return n;
+		}
+
 		void StartDependency(goalop_t src, goalop_t dest) {
 			// a can not be executed before b is started	
 			graph.addStartDependency(src, dest);

@@ -35,6 +35,7 @@ class graph_node_properties {
 		uint8_t proc;							// processing element for this operation
 		uint8_t nic;							// network interface for this operation
 		char type;							  // see below
+		std::vector<uint32_t> destinations;	  // NOT THE BEST WAY TO DO THIS
     bool updated = false;
 };
 
@@ -68,7 +69,8 @@ static const int OP_RECV = 2;
 static const int OP_LOCOP = 3;
 static const int OP_LOCOP_IN_PROGRESS = 4;
 static const int OP_MSG = 5;
-		
+static const int OP_MCAST = 6;
+
 static const uint32_t ANY_SOURCE = ~0;
 static const uint32_t ANY_TAG = ~0;
 

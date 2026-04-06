@@ -20,6 +20,7 @@
 #define OPTYPE_SEND 1
 #define OPTYPE_RECV 2
 #define OPTYPE_CALC 3
+#define OPTYPE_MCAST 4
 
 typedef uint64_t base_t;
 
@@ -28,7 +29,8 @@ typedef uint64_t base_t;
 //      harm time.
 
 struct Node {
-	
+
+	std::vector<uint32_t> destinations;
 	uint64_t           Size;
 	std::vector<Node*> DependOnMe;
 	std::vector<Node*> StartDependOnMe;
@@ -44,6 +46,7 @@ struct Node {
 
 struct DeserializedNode {
 
+	std::vector<uint32_t> destinations;
 	uint32_t           DependenciesCnt;
 	char               Type;
 	uint32_t           Peer;
