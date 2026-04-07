@@ -309,20 +309,27 @@ class Graph {
 		char *pos;
 
 		find_root_nodes();
+		uint32_t total_destinations = 0;
+		for (std::vector<Node*>::iterator it = allNodes.begin(); it != allNodes.end(); it++) {
+			if ((**it).Type != OPTYPE_MCAST) {
+				assert((**it).destinations.size() == 0);  //enforce size == 0 for non mcast ops
+			}
+			total_destinations += (**it).destinations.size();
+		}
 
 		if (rank == 0) {
 			// calculate the size of the file
 			filesize = 0;
-			filesize += sizeof(uint64_t); // magic cookie
-			filesize += sizeof(uint32_t); // num ranks
-			filesize += sizeof(uint8_t); // max_cpu
-			filesize += sizeof(uint8_t); // max_nic
-			filesize += sizeof(uint64_t)*2*num_ranks; // jumptable
+			filesize += sizeof(uint64_t); // magic cookie -- global
+			filesize += sizeof(uint32_t); // num ranks -- global
+			filesize += sizeof(uint8_t); // max_cpu -- global
+			filesize += sizeof(uint8_t); // max_nic -- global
+			filesize += sizeof(uint64_t)*2*num_ranks; // jumptable -- global
 			filesize += sizeof(uint32_t); // num nodes
 			filesize += sizeof(uint32_t); // num indp actions
 			filesize += (sizeof(uint32_t)*RootNodes.size()); // rootnodes offsets
-			filesize += (sizeof(char)+sizeof(uint8_t)*2+sizeof(uint32_t)*7+sizeof(uint64_t))*allNodes.size(); // nodeinfo
-			filesize += (sizeof(uint32_t)*num_edges); //appendix
+			filesize += (sizeof(char)+sizeof(uint8_t)*2+sizeof(uint32_t)*9+sizeof(uint64_t))*allNodes.size(); // nodeinfo (+2 * uint32_t for num dests + dest start in appendix)
+			filesize += sizeof(uint32_t)*(num_edges + total_destinations); //appendix (deps + destinations)
 
 			// enlarge the file
 			lseek(fd, filesize-1, SEEK_SET);
@@ -337,7 +344,7 @@ class Graph {
 			}
 			*( (uint64_t*) mapping_start ) = (uint64_t) MAGIC_COOKIE;
 			mapping_start += sizeof(uint64_t); // jump over magic cookie
-			end_of_lastrank = sizeof(uint32_t) + sizeof(uint8_t)*2 + sizeof(uint64_t)*2*num_ranks;
+			end_of_lastrank = sizeof(uint32_t) + sizeof(uint8_t)*2 + sizeof(uint64_t)*2*num_ranks; //num_ranks + max_cpu + max_nic + jump table (local header)
 			start_rankdata = mapping_start + sizeof(uint32_t) + sizeof(uint8_t)*2 + sizeof(uint64_t)*2*num_ranks;  // our rankdata starts right after the jumptable
 			
 		}
@@ -345,8 +352,8 @@ class Graph {
 			filesize += sizeof(uint32_t); // num nodes
 			filesize += sizeof(uint32_t); // num indp actions
 			filesize += sizeof(uint32_t)*RootNodes.size(); // rootnodes offsets
-			filesize += (sizeof(char)+sizeof(uint8_t)*2+sizeof(uint32_t)*7+sizeof(uint64_t))*allNodes.size(); // nodeinfo
-			filesize += sizeof(uint32_t)*num_edges; //appendix
+			filesize += (sizeof(char)+sizeof(uint8_t)*2+sizeof(uint32_t)*9+sizeof(uint64_t))*allNodes.size(); // nodeinfo (+2 * uint32_t for num dests + dest start in appendix)
+			filesize += sizeof(uint32_t)*(num_edges + total_destinations); //appendix (deps + destinations)
 
 
 			// enlarge the file
@@ -363,7 +370,7 @@ class Graph {
 
 			mapping_start += sizeof(uint64_t); // jump over magic cookie
 
-			end_of_lastrank = *((uint64_t*) (mapping_start + sizeof(uint32_t) + sizeof(uint8_t)*2 + sizeof(uint64_t)*(2*(rank-1)+1))); 
+			end_of_lastrank = *((uint64_t*) (mapping_start + sizeof(uint32_t) + sizeof(uint8_t)*2 + sizeof(uint64_t)*(2*(rank-1)+1))); //read from jumptable -- where did rank's N-1 data end?
 			start_rankdata = mapping_start + end_of_lastrank;
 		}
 
@@ -395,9 +402,17 @@ class Graph {
 			*((uint32_t*) pos) = (**it).StartDependOnMe.size();	pos += sizeof(uint32_t);	// number of actions that depend on this actions start
 			*((uint32_t*) pos) = num_in_appendix;				pos += sizeof(uint32_t);	// start index of start-dependent actions (in appendix)
 			num_in_appendix += (**it).StartDependOnMe.size();
+			*((uint32_t*) pos) = (**it).destinations.size();	pos += sizeof(uint32_t);	// num of destinations
+			if ((**it).destinations.size() > 0) {
+				*((uint32_t*) pos) = num_in_appendix;			pos += sizeof(uint32_t);	//start index of destinations in appendix
+			} else {
+				uint32_t b = -1;
+				*((uint32_t*) pos) = b;							pos += sizeof(uint32_t);	//undefined for non mcast ops
+			}
+			num_in_appendix += (**it).destinations.size();
 		}
 		
-		// appendix data
+		// appendix data (enforce same iteration order as we wrote the indices into Node Data section (iterate all nodes, write dep, start-dep and dests)
 	
 		for (std::vector<Node*>::iterator it = allNodes.begin(); it != allNodes.end(); it++) {
 			for (std::vector<Node*>::iterator dit = (**it).DependOnMe.begin(); dit != (**it).DependOnMe.end(); dit++) {
@@ -405,6 +420,9 @@ class Graph {
 			}
 			for (std::vector<Node*>::iterator dit = (**it).StartDependOnMe.begin(); dit != (**it).StartDependOnMe.end(); dit++) {
 				*((uint32_t*) pos) = (**dit).offset;       		pos += sizeof(uint32_t);	// offset of start-dependent action
+			}
+			for (uint32_t i = 0; i < (**it).destinations.size(); i++) {
+				(*(uint32_t*) pos) = (**it).destinations[i]; 	pos += sizeof(uint32_t); //write destinations
 			}
 		}
 

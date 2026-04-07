@@ -322,7 +322,7 @@ class Graph {
 			filesize += sizeof(uint32_t); // num nodes
 			filesize += sizeof(uint32_t); // num indp actions
 			filesize += (sizeof(uint32_t)*RootNodes.size()); // rootnodes offsets
-			filesize += (sizeof(char)+sizeof(uint8_t)*2+sizeof(uint32_t)*7+sizeof(uint64_t))*allNodes.size(); // nodeinfo
+			filesize += (sizeof(char)+sizeof(uint8_t)*2+sizeof(uint32_t)*9+sizeof(uint64_t))*allNodes.size(); // nodeinfo
 			filesize += (sizeof(uint32_t)*num_edges); //appendix
 
 			// enlarge the file
@@ -346,7 +346,7 @@ class Graph {
 			filesize += sizeof(uint32_t); // num nodes
 			filesize += sizeof(uint32_t); // num indp actions
 			filesize += sizeof(uint32_t)*RootNodes.size(); // rootnodes offsets
-			filesize += (sizeof(char)+sizeof(uint8_t)*2+sizeof(uint32_t)*7+sizeof(uint64_t))*allNodes.size(); // nodeinfo
+			filesize += (sizeof(char)+sizeof(uint8_t)*2+sizeof(uint32_t)*9+sizeof(uint64_t))*allNodes.size(); // nodeinfo
 			filesize += sizeof(uint32_t)*num_edges; //appendix
 
 
@@ -474,7 +474,7 @@ class SerializedGraph {
 			exit(EXIT_FAILURE);
 		}
 		// printf("yyy 1\n");
-		int SIZEOF_NODE_INFO = sizeof(char) + sizeof(uint64_t) + sizeof(uint32_t)*7 + sizeof(uint8_t)*2;
+		int SIZEOF_NODE_INFO = sizeof(char) + sizeof(uint64_t) + sizeof(uint32_t)*9 + sizeof(uint8_t)*2; //mcast metadata inclusion
 		char* start_of_node = mapping_start + sizeof(uint32_t)*2 + sizeof(uint32_t)*num_root_nodes + SIZEOF_NODE_INFO*offset;
 		DeserializedNode N;
 		// printf("yyy 2\n");
@@ -491,6 +491,9 @@ class SerializedGraph {
 		uint32_t deps_startoffset_in_apdx =      (uint32_t) *( (uint32_t*) (start_of_node + sizeof(char) + sizeof(uint64_t) + sizeof(uint32_t)*4 + sizeof(uint8_t)*2));
 		uint32_t num_startdeps =                 (uint32_t) *( (uint32_t*) (start_of_node + sizeof(char) + sizeof(uint64_t) + sizeof(uint32_t)*5 + sizeof(uint8_t)*2));
 		uint32_t startdeps_startoffset_in_apdx = (uint32_t) *( (uint32_t*) (start_of_node + sizeof(char) + sizeof(uint64_t) + sizeof(uint32_t)*6 + sizeof(uint8_t)*2));
+		uint32_t num_dests =					 (uint32_t) *( (uint32_t*) (start_of_node + sizeof(char) + sizeof(uint64_t) + sizeof(uint32_t)*7 + sizeof(uint8_t)*2));
+		uint32_t dest_startoffset_in_apdx =		 (uint32_t) *( (uint32_t*) (start_of_node + sizeof(char) + sizeof(uint64_t) + sizeof(uint32_t)*8 + sizeof(uint8_t)*2));
+
 		// printf("yyy 3\n");
 		// printf("yyy 3 start of apdx = mapping start + %i\n", sizeof(uint32_t)*2 + sizeof(uint32_t)*num_root_nodes + SIZEOF_NODE_INFO*num_nodes);
 		// printf("yyy 3 numrootnodes = %i, SIZEOFNODEINFO = %i, num_nodes = %i\n", num_root_nodes, SIZEOF_NODE_INFO, num_nodes);
@@ -515,6 +518,10 @@ class SerializedGraph {
 			N.StartDependOnMe.push_back((uint32_t) *( (uint32_t*) (start_of_apdx + (startdeps_startoffset_in_apdx + cnt)*sizeof(uint32_t))));
 		}
 		// printf("yyy 5\n");
+
+		for (uint32_t cnt=0; cnt<num_dests; cnt++) {
+			N.destinations.push_back((uint32_t) *( (uint32_t*) (start_of_apdx + (dest_startoffset_in_apdx + cnt)*sizeof(uint32_t))));
+		}
 			
 		return N;
 	}
@@ -615,7 +622,7 @@ class SerializedGraph {
 		for (uint32_t cnt=0; cnt<N.StartDependOnMe.size(); cnt++) {
 			uint32_t offset = N.StartDependOnMe[cnt];
 	
-			int SIZEOF_NODE_INFO = sizeof(char) + sizeof(uint64_t) + sizeof(uint32_t)*7 + sizeof(uint8_t)*2;
+			int SIZEOF_NODE_INFO = sizeof(char) + sizeof(uint64_t) + sizeof(uint32_t)*9 + sizeof(uint8_t)*2;
 			uint32_t* dep_cnt = (uint32_t*) (mapping_start + sizeof(uint32_t)*2 + sizeof(uint32_t)*num_root_nodes + SIZEOF_NODE_INFO*offset);
 			(*dep_cnt)--;
 			if ((*dep_cnt) == 0) {
@@ -631,7 +638,7 @@ class SerializedGraph {
 		for (uint32_t cnt=0; cnt<N.DependOnMe.size(); cnt++) {
 			uint32_t offset = N.DependOnMe[cnt];
 	
-			int SIZEOF_NODE_INFO = sizeof(char) + sizeof(uint64_t) + sizeof(uint32_t)*7 + sizeof(uint8_t)*2;
+			int SIZEOF_NODE_INFO = sizeof(char) + sizeof(uint64_t) + sizeof(uint32_t)*9 + sizeof(uint8_t)*2;
 			uint32_t* dep_cnt = (uint32_t*) (mapping_start + sizeof(uint32_t)*2 + sizeof(uint32_t)*num_root_nodes + SIZEOF_NODE_INFO*offset);
 			(*dep_cnt)--;
 			if ((*dep_cnt) == 0) {
@@ -679,7 +686,7 @@ class SerializedGraph {
 			uint32_t offset = N.StartDependOnMe[cnt];
 			assert(offset < num_nodes);
 	
-			int SIZEOF_NODE_INFO = sizeof(char) + sizeof(uint64_t) + sizeof(uint32_t)*7 + sizeof(uint8_t)*2;
+			int SIZEOF_NODE_INFO = sizeof(char) + sizeof(uint64_t) + sizeof(uint32_t)*9 + sizeof(uint8_t)*2;
 			uint32_t* dep_cnt = (uint32_t*) (mapping_start + sizeof(uint32_t)*2 + sizeof(uint32_t)*num_root_nodes + SIZEOF_NODE_INFO*offset);
 			(*dep_cnt)--;
 			if ((*dep_cnt) == 0) {
@@ -702,7 +709,7 @@ class SerializedGraph {
         for (uint32_t cnt = 0; cnt < N.DependOnMe.size(); cnt++) {
             uint32_t offset = N.DependOnMe[cnt];
 
-            int SIZEOF_NODE_INFO = sizeof(char) + sizeof(uint64_t) + sizeof(uint32_t) * 7 + sizeof(uint8_t) * 2;
+            int SIZEOF_NODE_INFO = sizeof(char) + sizeof(uint64_t) + sizeof(uint32_t) *9 + sizeof(uint8_t) * 2;
             uint32_t *dep_cnt = (uint32_t *)(mapping_start + sizeof(uint32_t) * 2 + sizeof(uint32_t) * num_root_nodes +
                                              SIZEOF_NODE_INFO * offset);
             (*dep_cnt)--;
@@ -728,7 +735,7 @@ class SerializedGraph {
 		for (uint32_t cnt=0; cnt<N.DependOnMe.size(); cnt++) {
 			uint32_t offset = N.DependOnMe[cnt];
 			//printf("Node %u has %u dependencies\n", offset, N.DependOnMe.size());
-			int SIZEOF_NODE_INFO = sizeof(char) + sizeof(uint64_t) + sizeof(uint32_t)*7 + sizeof(uint8_t)*2;
+			int SIZEOF_NODE_INFO = sizeof(char) + sizeof(uint64_t) + sizeof(uint32_t)*9 + sizeof(uint8_t)*2;
 			uint32_t* dep_cnt = (uint32_t*) (mapping_start + sizeof(uint32_t)*2 + sizeof(uint32_t)*num_root_nodes + SIZEOF_NODE_INFO*offset);
 			(*dep_cnt)--;
 			// Checks if offset is in node_start_time
