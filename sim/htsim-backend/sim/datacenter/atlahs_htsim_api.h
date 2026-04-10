@@ -50,6 +50,7 @@ public:
     virtual void Send(const SendEvent &event, graph_node_properties node) override;
     virtual void Recv(const RecvEvent &event) override;
     virtual void Calc(const ComputeAtlahsEvent &event) override;
+    virtual void Mcast(const McastEvent &event, graph_node_properties node) override;
     virtual void Setup() override;
     virtual void EventFinished(const EventOver &event) override;
 
@@ -138,6 +139,17 @@ private:
     LogSimInterface* _logsim_interface = nullptr;
     ComputeEvent *compute_events_handler = nullptr;
     NullEvent *null_events_handler = nullptr;
+
+    // key: "host_offset", value: {remaining count, original node}
+    struct McastTracker {
+        int pending;
+        graph_node_properties original_node;
+    };
+    std::unordered_map<std::string, McastTracker> mcast_pending;
+
+    std::string mcast_key(int host, int offset) {
+        return std::to_string(host) + "_" + std::to_string(offset);
+    }
 
     // LGS Specific
     int number_nics = 1;

@@ -21,3 +21,7 @@ __pycache__/
 *$py.class
 logout.dat
 **/__pycache__/
+
+# IDE / compile_commands (contains absolute paths, machine-specific)
+compile_commands.json
+.idea/

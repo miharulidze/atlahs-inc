@@ -19,6 +19,8 @@
 #include <string>
 #include <utility>
 #include <unordered_set>
+
+#include "../../../../apps/ai/astra-sim/extern/helper/spdlog/include/spdlog/spdlog.h"
 /*#define BOOST_NO_CXX11_SCOPED_ENUMS
 #include <boost/filesystem.hpp>
 #undef BOOST_NO_CXX11_SCOPED_ENUMS*/
@@ -155,7 +157,9 @@ void LogSimInterface::update_active_map(std::string to_hash, int size) {
 bool LogSimInterface::all_sends_delivered() { return active_sends.size() == 0; }
 
 void LogSimInterface::flow_over(const EventOver &event) {
-  sends_active--;
+  if (!event.node->is_mcast_subflow) {
+    sends_active--;
+  }
   debug_stop--;
 
   // active_sends[to_hash].bytes_left_to_recv = 0;
@@ -173,8 +177,20 @@ void LogSimInterface::flow_over(const EventOver &event) {
   _latest_recv->offset = event.node->offset;
   _latest_recv->proc = event.node->proc;
   _latest_recv->nic = event.node->nic;
+  _latest_recv->is_mcast_subflow = event.node->is_mcast_subflow; // to avoid marking sender as done
 
   aq.push(*_latest_recv);
+}
+
+void LogSimInterface::mcast_sender_done(uint32_t host, uint32_t offset) {
+  sends_active--;
+  graph_node_properties done_marker;
+  done_marker.host = host;
+  done_marker.offset = offset;
+  done_marker.type = OP_MCAST;
+  done_marker.time = htsim_api->getGlobalTimeNs();
+  done_marker.updated = true;
+  aq.push(done_marker);
 }
 
 void LogSimInterface::compute_over(int i) {
@@ -480,6 +496,15 @@ int start_lgs(std::string filename_goal, LogSimInterface &lgs) {
           case OP_RECV:
             if(print) printf("init %i (%i,%i) recvs from: %i, tag: %i, size: %lu\n", host, freeop->proc, freeop->nic, freeop->target, freeop->tag, (long unsigned int) freeop->size);
             break;
+          case OP_MCAST:
+            if (print) {
+              printf("init %i, (%i,%i), mcast tag: %i , size: %lu, dests:", host, freeop->proc, freeop->nic,freeop->tag, (long unsigned int) freeop->size);
+              for (uint32_t d: freeop->destinations) {
+                printf(" %u", d);
+              }
+              printf("\n");
+            };
+            break;
           default:
             printf("not implemented!\n");
         }
@@ -524,8 +549,8 @@ int start_lgs(std::string filename_goal, LogSimInterface &lgs) {
       std::unordered_set<int> check_hosts;
         // get the next element from the queue
         graph_node_properties elem = lgs_interface->aq.top();
-
-        while (!lgs_interface->aq.empty() && !lgs_interface->have_more && lgs_interface->aq.top().time <= (lgs_interface->htsim_api->getGlobalTimeNs())) {   
+        // pop and process elements from aq
+        while (!lgs_interface->aq.empty() && !lgs_interface->have_more && lgs_interface->aq.top().time <= (lgs_interface->htsim_api->getGlobalTimeNs())) {
           /* printf("Active Queue Size %d - Type %d - Host %d - CPU %d - Tag %d - Top Time %lu -- Size RQ %d -- Size UQ %d\n",
             (int)lgs_interface->aq.size(), lgs_interface->aq.top().type, lgs_interface->aq.top().host, lgs_interface->aq.top().proc, lgs_interface->aq.top().tag, lgs_interface->aq.top().time, 
             size_queue(rq, p), size_queue(uq, p));  */
@@ -560,6 +585,61 @@ int start_lgs(std::string filename_goal, LogSimInterface &lgs) {
 
             // the BIG switch on element type that we just found 
             switch(elem.type) {
+            case OP_MCAST: {
+              // Sender-done marker (analog to OP_MSG)
+              if (elem.updated) {
+                parser.schedules[elem.host].MarkNodeAsDone(elem.offset, elem.time);
+                check_hosts.insert(elem.host);
+                break;
+              }
+
+              //Resource check (same as OP_SEND)
+
+              //max(when the CPU next is free, when the NIC is next free), we need both so take max -> resource time = earliest I could start
+                uint64_t resource_time = std::max(nexto[elem.host][elem.proc], nextgs[elem.host][elem.nic]);
+              //when this op is scheduled, are the resources free?
+                if (resource_time <= elem.time) {
+
+                  parser.schedules[elem.host].MarkNodeAsStarted(elem.offset);
+                  check_hosts.insert(elem.host);
+
+                  if (elem.size == 0) elem.size = 1;
+
+                  // CPU cost (once for the whole mcast)
+                  nexto[elem.host][elem.proc] = elem.time + lgs_interface->lgs_o;
+
+                  // NIC cost - for now, charge for one send (htsim handles the actual fan-out timing)
+                  int packet_size = 4096;
+                  if (elem.size > packet_size) {
+                    printf("MCast only supports msg sizes <= 4096 bytes");
+                    return -1;
+                  }
+                  int wire_size = packet_size + 64;
+                  uint64_t bw_cost = static_cast<uint64_t>(wire_size * G);
+                  nextgs[elem.host][elem.nic] = elem.time + g + bw_cost; // g is const msg overhead on nic
+                  can_simulate_until = nextgs[elem.host][elem.nic];
+                  // timing issue: this timing for nic availability corresponds
+                  // to real mcast traffic P2P traffic causes more NIC overhead
+
+                  McastEvent* event = new McastEvent(
+                    elem.host, elem.size, elem.tag,
+                    lgs_interface->htsim_api->getGlobalTimeNs(),
+                    elem.destinations);
+
+                  lgs_interface->htsim_api->Mcast(*event, elem);
+                  lgs_interface->sends_active++;
+
+#ifdef STRICT_ORDER
+                  num_events++;
+                  elem.ts = aqtime++;
+#endif
+                } else {
+                  // Resources not available - reinsert and retry later
+                  elem.time = resource_time;
+                  lgs_interface->aq.push(std::move(elem));
+                  num_reinserts_g++;
+                }
+              } break;
             case OP_LOCOP: {
                 if(0) printf("[%i] found loclop of length %lu - offset: %d -  t: %lu (CPU: %i)\n", elem.host, (ulint)elem.size, elem.offset, (ulint)elem.time, elem.proc);
                 if(nexto[elem.host][elem.proc] <= elem.time) { // local o available!
@@ -886,8 +966,7 @@ int start_lgs(std::string filename_goal, LogSimInterface &lgs) {
 
       if (print)
         std::cout << "[INFO] Checking for free operations on hosts:" << std::endl;
-
-      
+      //push any new free ops back into aq
       for (int host : check_hosts) {
 
         SerializedGraph *sched=&parser.schedules[host];

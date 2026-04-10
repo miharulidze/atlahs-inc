@@ -36,6 +36,7 @@ class graph_node_properties {
 		uint8_t nic;							// network interface for this operation
 		char type;							  // see below
 		std::vector<uint32_t> destinations;	  // NOT THE BEST WAY TO DO THIS
+		bool is_mcast_subflow = false;		  // For OP_MSG know not to call MarkNodeAsDone
     bool updated = false;
 };
 

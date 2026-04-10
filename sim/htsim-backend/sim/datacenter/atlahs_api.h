@@ -4,6 +4,7 @@
 class AtlahsEvent;
 class SendEvent;
 class RecvEvent;
+class McastEvent;
 class ComputeAtlahsEvent;
 class EventOver;
 class graph_node_properties;
@@ -14,6 +15,7 @@ public:
 
     virtual void Send(const SendEvent &event, graph_node_properties node) = 0;
     virtual void Recv(const RecvEvent &event) = 0;
+    virtual void Mcast(const McastEvent &event, graph_node_properties node) = 0;
     virtual void Calc(const ComputeAtlahsEvent &event) = 0;
     virtual void Setup() = 0;
     virtual void EventFinished(const EventOver &event) = 0;

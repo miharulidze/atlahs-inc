@@ -670,9 +670,11 @@ class SerializedGraph {
 			gp.proc = executableNodes[cnt].Proc;
 			gp.nic = executableNodes[cnt].Nic;
 			gp.starttime = executableNodes[cnt].start_time;
+			gp.destinations = executableNodes[cnt].destinations;
 			if (executableNodes[cnt].Type == OPTYPE_SEND) gp.type = OP_SEND;
 			else if (executableNodes[cnt].Type == OPTYPE_RECV) gp.type = OP_RECV;
 			else if (executableNodes[cnt].Type == OPTYPE_CALC) gp.type = OP_LOCOP;
+			else if (executableNodes[cnt].Type == OPTYPE_MCAST) gp.type = OP_MCAST;
 			gp.offset = executableNodes[cnt].offset;
 			ret.push_back(gp);
 		}

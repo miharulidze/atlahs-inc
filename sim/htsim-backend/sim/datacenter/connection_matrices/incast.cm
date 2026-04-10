@@ -1,5 +1,9 @@
 Nodes 64
+NUM_GRPS 2
+1,54,32,12,45
+23,62,22,12,23,34,45
 Connections 8
+mc 1->1                             (root = 62 mcast to group 1)
 0->15 start 0 size 2000000
 1->15 start 0 size 2000000
 2->15 start 0 size 2000000

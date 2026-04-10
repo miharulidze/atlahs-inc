@@ -8,6 +8,7 @@ enum class AtlahsEventType {
     SEND_EVENT_OVER,
     RECV_EVENT_OVER,
     COMPUTE_EVENT_OVER,
+    MCAST_ALL_DONE,
 };
 
 class AtlahsEvent {
@@ -39,6 +40,20 @@ public:
 
 class RecvEvent : public AtlahsEvent {
     // Implementation details...
+};
+
+class McastEvent : public AtlahsEvent {
+public:
+    int from;
+    int size_bytes;
+    int tag;
+    uint64_t start_time_event;
+    std::vector<uint32_t> destinations;
+
+    McastEvent(int from, int size, int tag, uint64_t start_time,
+               const std::vector<uint32_t> &destinations)
+        : from(from), size_bytes(size), tag(tag),
+        start_time_event(start_time), destinations(destinations) {}
 };
 
 class ComputeAtlahsEvent : public AtlahsEvent {

@@ -84,6 +84,7 @@ class LogSimInterface {
     void update_active_map(std::string, int);
     bool all_sends_delivered();
     void ns3_terminate(int64_t &current_time);
+    void mcast_sender_done(uint32_t host, uint32_t offset);
     void flow_over(const Packet &);
     void flow_over(const EventOver &);
     void compute_over(int);

@@ -171,6 +171,25 @@ void AtlahsHtsimApi::Send(const SendEvent &event, graph_node_properties elem) {
     // TODO: Support different tranports, not just UEC
 }
 
+void AtlahsHtsimApi::Mcast(const McastEvent &event, graph_node_properties node) {
+
+    int from = event.from;
+    int tag = event.tag;
+    int size = event.size_bytes;
+
+    // Register pending tracker
+    std::string key = mcast_key(from, node.offset);
+    mcast_pending[key] = {(int) event.destinations.size(), node};
+
+    //Create one flow per destination
+    for (uint32_t dest : event.destinations) {
+        int to = dest;
+
+        // NIC remapping (same as Send)
+    }
+
+}
+
 void AtlahsHtsimApi::Recv(const RecvEvent &event) {
     // No Op for HTSIM
 }
