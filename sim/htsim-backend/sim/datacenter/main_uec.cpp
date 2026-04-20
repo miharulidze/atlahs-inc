@@ -776,6 +776,8 @@ int main(int argc, char **argv) {
 
         map<flowid_t, TriggerTarget *> flowmap;
         vector<connection *> *all_conns = conns->getAllConnections();
+        top->groups = &(conns->groups);
+        top->set_up_mcast(); // for real mcast switch routing, configure switch tables
         UecSrc *uecSrc;
         UecSink *uecSnk;
 
@@ -826,7 +828,16 @@ int main(int argc, char **argv) {
                 Trigger *trig = conns->getTrigger(crt->send_done_trigger, eventlist);
                 uecSrc->set_end_trigger(*trig);
             }
+            if (crt->is_mcast) {
+                // add new branching for mcast traffic
+                uecSrc->set_mcast(); // dont think this is necessairy
+                uecSrc->setName("uec_" + ntoa_uec(src) + "_MC" + ntoa_uec(dest));
+                logfile.writeName(*uecSrc);
 
+                continue;
+            }
+
+            //--------------------------------------Non-Mcast-----------------------------------------------------------
             uecSnk = new UecSink();
 
             uecSrc->setName("uec_" + ntoa_uec(src) + "_" + ntoa_uec(dest));
@@ -866,6 +877,7 @@ int main(int argc, char **argv) {
                 uecSnk->to = dest;
                 uecSrc->set_paths(number_entropies);
                 uecSnk->set_paths(number_entropies);
+                // populates the eventlist
                 uecSrc->connect(srctotor, dsttotor, *uecSnk, crt->start);
                 
                 // register src and snk to receive packets src their respective
@@ -886,7 +898,7 @@ int main(int argc, char **argv) {
             }
             }
         }
-
+        // simulate traffic
         while (eventlist.doNextEvent()) {
         }
     } else if (goal_filename.size() > 0) {

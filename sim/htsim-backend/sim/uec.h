@@ -66,7 +66,7 @@ class UecSrc : public PacketSink, public EventSource, public TriggerTarget {
     virtual void activate() { startflow(); }
 
     void set_end_trigger(Trigger &trigger);
-
+    void set_mcast() {_is_mcast = true;};
     inline void set_flowid(flowid_t flow_id) { _flow.set_flowid(flow_id); }
     inline flowid_t flow_id() const { return _flow.flow_id(); }
 
@@ -353,7 +353,7 @@ class UecSrc : public PacketSink, public EventSource, public TriggerTarget {
     uint32_t target_window;
     // LogSimInterface *_lgs;
     bool _flow_finished = false;
-
+    bool _is_mcast = false;
     bool _rtx_timeout_pending;
     bool _rtx_pending;
 

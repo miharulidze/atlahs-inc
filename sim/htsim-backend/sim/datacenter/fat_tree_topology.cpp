@@ -593,6 +593,12 @@ void FatTreeTopology::set_params(uint32_t no_of_nodes) {
     alloc_vectors();
 }
 
+void FatTreeTopology::set_up_mcast() {
+    if (groups != nullptr) {
+        printf("set_up_mcast unimplemented\n");
+    }
+}
+
 void FatTreeTopology::alloc_vectors() {
 
     switches_lp.resize(NTOR,NULL);

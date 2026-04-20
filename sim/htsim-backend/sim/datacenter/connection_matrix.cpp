@@ -710,7 +710,15 @@ bool ConnectionMatrix::load(istream& file){
                 
                 if (tokens.size() == 0 || tokens[0][0] == '#') {
                         continue;
-                } else         if (tokens[0] == "Nodes") {
+                } else if (tokens[0] == "MGrp") {
+                    assert(tokens.size() > 1); // no empty groups allowed
+                    vector<int32_t> group;
+                        for (size_t i = 1; i < tokens.size(); i++) {
+                            group.push_back(stoi(tokens[i]));
+                        }
+                    groups.push_back(group);
+                }
+                  else if (tokens[0] == "Nodes") {
                         N = stoi(tokens[1]);
                 } else if (tokens[0] == "Connections") {
                         conns_size = stoi(tokens[1]);
@@ -748,8 +756,14 @@ bool ConnectionMatrix::load(istream& file){
             c->dst = stoi(tokens[0].substr(dstix));
             c->priority = 2000000;
             c->start = NO_START;
+            c->is_mcast = false;
             for (size_t i = 1; i < tokens.size(); i++) {
-                if (tokens[i] == "start") {
+                if (tokens[i] == "start_mc") {
+                    c->is_mcast = true;
+                    i++;
+                    c->start = stof(tokens[i]);
+                }
+                else if (tokens[i] == "start") {
                     i++;
                     double start = stof(tokens[i]);
                     c->start = start; // start is in picoseconds already

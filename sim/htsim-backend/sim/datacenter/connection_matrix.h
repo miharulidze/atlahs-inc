@@ -15,6 +15,7 @@
 
 struct connection{
     int src, dst, size;
+    bool is_mcast;
     flowid_t flowid; 
     triggerid_t send_done_trigger;
     triggerid_t recv_done_trigger;
@@ -76,7 +77,9 @@ public:
     void bindTriggers(connection* c, EventList& eventlist);
 
     uint32_t N;
+    uint32_t M;
     vector<connection*>* conns;
+    vector<vector<int32_t>> groups;
     map<uint32_t, vector<uint32_t>*> connections;
     vector<failure*> failures; 
 private:

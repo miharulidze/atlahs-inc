@@ -57,6 +57,9 @@ public:
     queue_type _qt;
     queue_type _sender_qt;
 
+    //Mcast/Aggr Groups
+    vector<vector<int32_t>>* groups = nullptr;
+
     // For regular topologies, just use the constructor.  For custom topologies, load from a config file.
     static FatTreeTopology* load(const char * filename, QueueLoggerFactory* logger_factory, EventList& eventlist,
                                  mem_b queuesize, queue_type q_type, queue_type sender_q_type);
@@ -79,6 +82,9 @@ public:
     BaseQueue* alloc_queue(QueueLogger* q, mem_b queuesize, link_direction dir, int switch_tier, bool tor);
     BaseQueue* alloc_queue(QueueLogger* q, uint64_t speed, mem_b queuesize,
                            link_direction dir,  int switch_tier, bool tor);
+
+    void set_up_mcast();
+
     static void set_tiers(uint32_t tiers) {_tiers = tiers;}
     static uint32_t get_tiers() {return _tiers;}
     static void set_latencies(simtime_picosec src_lp, simtime_picosec lp_up, simtime_picosec up_cs,

@@ -782,7 +782,7 @@ class Parser {
 		schedules_fd = fopen(filename.c_str(), "r+");
 	    
 		if (schedules_fd == NULL) {
-			fprintf(stderr, "Couldn't open input file %s!\n", filename);
+			fprintf(stderr, "Couldn't open input file %s!\n", filename.c_str());
 			exit(EXIT_FAILURE);
 		}
 
