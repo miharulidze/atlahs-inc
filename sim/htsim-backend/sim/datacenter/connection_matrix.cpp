@@ -710,7 +710,7 @@ bool ConnectionMatrix::load(istream& file){
                 
                 if (tokens.size() == 0 || tokens[0][0] == '#') {
                         continue;
-                } else if (tokens[0] == "MGrp") {
+                } else if (tokens[0] == "Grp") {
                     assert(tokens.size() > 1); // no empty groups allowed
                     vector<int32_t> group;
                         for (size_t i = 1; i < tokens.size(); i++) {
@@ -756,10 +756,10 @@ bool ConnectionMatrix::load(istream& file){
             c->dst = stoi(tokens[0].substr(dstix));
             c->priority = 2000000;
             c->start = NO_START;
-            c->is_mcast = false;
+            c->is_bcast = false;
             for (size_t i = 1; i < tokens.size(); i++) {
-                if (tokens[i] == "start_mc") {
-                    c->is_mcast = true;
+                if (tokens[i] == "start_bcast") {
+                    c->is_bcast = true;
                     i++;
                     c->start = stof(tokens[i]);
                 }
@@ -937,9 +937,60 @@ bool ConnectionMatrix::load(istream& file){
             exit(1);
         }
     }
+
+    // If the matrix uses collective operations (start_bcast), every
+    // connection must carry an explicit `id`. Rationale: collective
+    // expansion synthesises transport-level flow_ids starting above
+    // max_flowid(), and that upper bound only sees user-provided ids.
+    // A P2P connection without `id` would fall back to PacketFlow's
+    // implicit default counter, which can collide with synthesised leg
+    // ids on a shared (host, flow_id) ToR FIB entry.
+    bool uses_collective = false;
+    for (auto *c : *conns) {
+        if (c->is_bcast) { uses_collective = true; break; }
+    }
+    if (uses_collective) {
+        for (auto *c : *conns) {
+            if (c->flowid == 0) {
+                cerr << "Connection " << c->src << "->" << c->dst
+                     << " is missing an explicit `id`. Matrices that "
+                        "use collective operations (start_bcast) require "
+                        "every connection to have an `id` so that synthesised "
+                        "leg flow_ids cannot collide with implicit defaults.\n";
+                exit(1);
+            }
+        }
+    }
     return true;
 }
 
+
+flowid_t
+ConnectionMatrix::max_flowid() const {
+    flowid_t m = 0;
+    if (conns) {
+        for (auto *c : *conns) {
+            if (c->flowid > m) m = c->flowid;
+        }
+    }
+    return m;
+}
+
+triggerid_t
+ConnectionMatrix::max_triggerid() const {
+    triggerid_t m = 0;
+    if (conns) {
+        for (auto *c : *conns) {
+            if (c->trigger > m)           m = c->trigger;
+            if (c->send_done_trigger > m) m = c->send_done_trigger;
+            if (c->recv_done_trigger > m) m = c->recv_done_trigger;
+        }
+    }
+    for (const auto &kv : triggers) {
+        if (kv.first > m) m = kv.first;
+    }
+    return m;
+}
 
 Trigger*
 ConnectionMatrix::getTrigger(triggerid_t id, EventList& eventlist) {

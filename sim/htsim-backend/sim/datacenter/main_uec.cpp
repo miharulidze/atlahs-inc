@@ -21,6 +21,7 @@
 #include "shortflows.h"
 #include "topology.h"
 #include "uec.h"
+#include "uec_bcast.h"
 #include <filesystem>
 // #include "vl2_topology.h"
 
@@ -781,6 +782,13 @@ int main(int argc, char **argv) {
         UecSrc *uecSrc;
         UecSink *uecSnk;
 
+        // Starting points for synthesised IDs used by the broadcast leg
+        // expansion. Seeded from the user-visible max so bcast legs cannot
+        // collide with user-assigned flow_ids on a shared (host, flow_id)
+        // ToR FIB entry, and synthesised barriers are unambiguous in logs.
+        flowid_t next_bcast_leg_flow_id = conns->max_flowid();
+        triggerid_t next_bcast_barrier_id = conns->max_triggerid();
+
         for (size_t c = 0; c < all_conns->size(); c++) {
             connection *crt = all_conns->at(c);
             int src = crt->src;
@@ -805,11 +813,142 @@ int main(int argc, char **argv) {
             printf("Using BDP of %lu - Queue is %lld - Starting Window is %lu\n", bdp_local, queuesize,
                    actual_starting_cwnd);
 
+            // --------------------------------------------------------------
+            // Broadcast (MPI_Bcast) baseline branch.
+            //
+            // A `bcast ROOT->GRP` entry (is_bcast=true) is decomposed here
+            // into |GRP|-1 ACK-less unicast legs. `src` indexes into the
+            // group to select the root; `dest` indexes the group in
+            // conns->groups. All legs share one BarrierTrigger whose fire
+            // marks the collective complete; each leg's sink is one of the
+            // |GRP|-1 activations. See AA-thesis-baseline.md for rationale.
+            //
+            // Note: the collective operation is "broadcast" (MPI_Bcast).
+            // Phase two will implement this on top of a switch-level
+            // multicast mechanism — a separate concern; the naming here
+            // reflects the collective, not the phase-two mechanism.
+            // --------------------------------------------------------------
+            if (crt->is_bcast) {
+                // Development-phase guardrails against malformed .cm input.
+                // TODO: remove once the collective track stabilises.
+                if (static_cast<size_t>(dest) >= conns->groups.size()) {
+                    cerr << "bcast connection refers to undefined group index "
+                         << dest << " (have " << conns->groups.size()
+                         << " groups)\n";
+                    exit(1);
+                }
+                const vector<int32_t> &group = conns->groups[dest];
+                if (static_cast<size_t>(src) >= group.size()) {
+                    cerr << "bcast connection root-index " << src
+                         << " out of range for group " << dest
+                         << " (size " << group.size() << ")\n";
+                    exit(1);
+                }
+                int root = group[src];
+                size_t leg_count = group.size() - 1;
+                if (leg_count == 0) {
+                    cerr << "bcast group " << dest << " has size 1; no legs\n";
+                    exit(1);
+                }
+                // TODO: Is this secure? potentially can cause issues for big cm's
+                BarrierTrigger *barrier = new BarrierTrigger(
+                        eventlist, ++next_bcast_barrier_id, leg_count);
+                // BarrierTrigger::activate asserts targets>0 on fire; always
+                // attach a no-op. Chain to the user-specified downstream
+                // trigger if present (we use best-effort so no downstream)
+                barrier->add_target(*new NoOpTriggerTarget());
+                if (crt->recv_done_trigger) {
+                    Trigger *downstream = conns->getTrigger(
+                            crt->recv_done_trigger, eventlist);
+                    barrier->add_target(*new TriggerRelay(downstream));
+                }
+                // TODO: This also seems to be unsafe
+                for (int32_t m : group) {
+                    if (m == root) continue;
+
+                    UecBcastSrc *bs = new UecBcastSrc(
+                            NULL, NULL, eventlist,
+                            base_rtt_max_hops, bdp_local, 100, 6);
+                    bs->setNumberEntropies(256);
+                    bs->set_dst(m);
+                    bs->set_flowid(++next_bcast_leg_flow_id);
+                    if (crt->size > 0) bs->setFlowSize(crt->size);
+
+                    if (crt->trigger) {
+                        // All legs start when the named trigger fires.
+                        Trigger *trig = conns->getTrigger(
+                                crt->trigger, eventlist);
+                        trig->add_target(*bs);
+                    }
+
+                    UecBcastSink *bsink = new UecBcastSink();
+                    bsink->set_src(root);
+                    bsink->set_expected_bytes(crt->size > 0 ? crt->size : 0);
+                    bsink->set_end_trigger(*barrier);
+
+                    // Use crt->flowid as the broadcast-operation tag in
+                    // leg names (MPI-communicator-like). Transport-level
+                    // flow_id stays synthetic for ToR-FIB uniqueness; the
+                    // op tag only affects trace/log readability.
+                    string op_tag = crt->flowid
+                            ? ("op" + ntoa_uec(crt->flowid) + "_")
+                            : "";
+                    bs->setName("uec_bcast_" + op_tag + ntoa_uec(root) + "_"
+                                + ntoa_uec(m));
+                    logfile.writeName(*bs);
+                    bsink->setName("uec_bcast_sink_" + op_tag + ntoa_uec(root)
+                                   + "_" + ntoa_uec(m));
+                    logfile.writeName(*bsink);
+
+                    switch (route_strategy) {
+                    case ECMP_FIB:
+                    case ECMP_FIB_ECN:
+                    case REACTIVE_ECN: {
+                        Route *srctotor = new Route();
+                        Route *dsttotor = new Route();
+
+                        if (top != NULL) {
+                            srctotor->push_back(top->queues_ns_nlp[root][top->HOST_POD_SWITCH(root)][0]);
+                            srctotor->push_back(top->pipes_ns_nlp[root][top->HOST_POD_SWITCH(root)][0]);
+                            srctotor->push_back(top->queues_ns_nlp[root][top->HOST_POD_SWITCH(root)][0]->getRemoteEndpoint());
+
+                            dsttotor->push_back(top->queues_ns_nlp[m][top->HOST_POD_SWITCH(m)][0]);
+                            dsttotor->push_back(top->pipes_ns_nlp[m][top->HOST_POD_SWITCH(m)][0]);
+                            dsttotor->push_back(top->queues_ns_nlp[m][top->HOST_POD_SWITCH(m)][0]->getRemoteEndpoint());
+                        }
+
+                        bs->from = root;
+                        bsink->to = m;
+                        bs->set_paths(number_entropies);
+                        bsink->set_paths(number_entropies);
+                        bs->connect(srctotor, dsttotor, *bsink, crt->start);
+
+                        if (top != NULL) {
+                            top->switches_lp[top->HOST_POD_SWITCH(root)]
+                                    ->addHostPort(root, bs->flow_id(), bs);
+                            top->switches_lp[top->HOST_POD_SWITCH(m)]
+                                    ->addHostPort(m, bs->flow_id(), bsink);
+                        }
+                        break;
+                    }
+                    case NOT_SET:
+                        abort();
+                        break;
+                    default:
+                        abort();
+                        break;
+                    }
+                }
+                continue;
+            }
+
+            // --------------------------------------------------------------
+            // Regular P2P unicast branch.
+            // --------------------------------------------------------------
             uecSrc = new UecSrc(NULL, NULL, eventlist, base_rtt_max_hops, bdp_local, 100, 6);
 
             uecSrc->setNumberEntropies(256);
             uecSrc->set_dst(dest);
-            printf("Reaching here\n");
             if (crt->flowid) {
                 uecSrc->set_flowid(crt->flowid);
                 assert(flowmap.find(crt->flowid) == flowmap.end()); // don't have dups
@@ -828,16 +967,7 @@ int main(int argc, char **argv) {
                 Trigger *trig = conns->getTrigger(crt->send_done_trigger, eventlist);
                 uecSrc->set_end_trigger(*trig);
             }
-            if (crt->is_mcast) {
-                // add new branching for mcast traffic
-                uecSrc->set_mcast(); // dont think this is necessairy
-                uecSrc->setName("uec_" + ntoa_uec(src) + "_MC" + ntoa_uec(dest));
-                logfile.writeName(*uecSrc);
 
-                continue;
-            }
-
-            //--------------------------------------Non-Mcast-----------------------------------------------------------
             uecSnk = new UecSink();
 
             uecSrc->setName("uec_" + ntoa_uec(src) + "_" + ntoa_uec(dest));

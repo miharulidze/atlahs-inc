@@ -15,8 +15,8 @@
 
 struct connection{
     int src, dst, size;
-    bool is_mcast;
-    flowid_t flowid; 
+    bool is_bcast;
+    flowid_t flowid;
     triggerid_t send_done_trigger;
     triggerid_t recv_done_trigger;
     triggerid_t trigger;
@@ -75,6 +75,17 @@ public:
     vector<connection*>* getAllConnections();
     Trigger* getTrigger(triggerid_t id, EventList& eventlist);
     void bindTriggers(connection* c, EventList& eventlist);
+
+    // Largest flow_id used by any user-parsed connection, or 0 if none.
+    // Use this to pick starting points for synthesised flow_ids (e.g.
+    // broadcast legs) that cannot collide with user-assigned ones.
+    flowid_t max_flowid() const;
+
+    // Largest trigger_id referenced either by a named `trigger ... id N`
+    // declaration or by a connection-level `trigger`/`send_done_trigger`/
+    // `recv_done_trigger` attribute, or 0 if none. Use as the starting
+    // point for synthesised barrier triggers.
+    triggerid_t max_triggerid() const;
 
     uint32_t N;
     uint32_t M;

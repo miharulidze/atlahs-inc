@@ -56,6 +56,7 @@ add_library(sim STATIC
     trigger.cpp
     hpccpacket.cpp
     uec.cpp
+    uec_bcast.cpp
     uecpacket.cpp
     hpcc.cpp
     strackpacket.cpp
