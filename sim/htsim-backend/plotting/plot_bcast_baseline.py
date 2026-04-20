@@ -9,9 +9,9 @@ CSV columns expected (produced by run_bcast_sweep.py):
     nodes, group_size, seed, op_id, root, group_idx, size, legs,
     start_ns, complete_ns, duration_ns, matrix_path
 
-Invoke:
+Invoke from sim/htsim-backend/plotting:
     python3 plot_bcast_baseline.py \\
-        --csv ../sim/htsim-backend/sim/datacenter/connection_matrices/bcast_sweep/results.csv \\
+        --csv ../sim/datacenter/connection_matrices/bcast_sweep/results.csv \\
         --out bcast_baseline
 """
 
