@@ -84,4 +84,39 @@ class TriggerRelay : public TriggerTarget {
     Trigger *_downstream;
 };
 
+// Records collective-completion timestamps for a single broadcast
+// operation. Attached as a TriggerTarget to the operation's
+// BarrierTrigger so it fires exactly once when the last leg reports
+// last-byte-received. Emits one machine-parseable line to stdout that
+// a downstream plotting script can grep for.
+//
+// Output format (single line, space-separated key=value):
+//   BCAST_COMPLETE op_id=<id> root=<node> group=<idx> size=<bytes>
+//   legs=<|G|-1> start_ns=<t0> complete_ns=<t1> duration_ns=<dt>
+//
+// Times are in nanoseconds; sim time is internally picoseconds so we
+// divide by 1000. start_ns is the .cm-scheduled start time for the
+// operation (crt->start); complete_ns is the sim time at which the
+// last sink's byte was received.
+class BcastCompletionRecorder : public TriggerTarget {
+  public:
+    BcastCompletionRecorder(EventList &eventlist, flowid_t op_id, int root,
+                            int group_idx, int payload_bytes,
+                            size_t leg_count, simtime_picosec scheduled_start)
+            : _eventlist(eventlist), _op_id(op_id), _root(root),
+              _group_idx(group_idx), _size(payload_bytes),
+              _leg_count(leg_count), _start(scheduled_start) {}
+
+    void activate() override;
+
+  private:
+    EventList &_eventlist;
+    flowid_t _op_id;
+    int _root;
+    int _group_idx;
+    int _size;
+    size_t _leg_count;
+    simtime_picosec _start;
+};
+
 #endif

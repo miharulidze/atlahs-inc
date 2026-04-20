@@ -850,7 +850,6 @@ int main(int argc, char **argv) {
                     cerr << "bcast group " << dest << " has size 1; no legs\n";
                     exit(1);
                 }
-                // TODO: Is this secure? potentially can cause issues for big cm's
                 BarrierTrigger *barrier = new BarrierTrigger(
                         eventlist, ++next_bcast_barrier_id, leg_count);
                 // BarrierTrigger::activate asserts targets>0 on fire; always
@@ -862,7 +861,6 @@ int main(int argc, char **argv) {
                             crt->recv_done_trigger, eventlist);
                     barrier->add_target(*new TriggerRelay(downstream));
                 }
-                // TODO: This also seems to be unsafe
                 for (int32_t m : group) {
                     if (m == root) continue;
 

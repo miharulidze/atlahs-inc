@@ -1,6 +1,7 @@
 // -*- c-basic-offset: 4; tab-width: 8; indent-tabs-mode: t -*-
 #include "uec_bcast.h"
 #include "uecpacket.h"
+#include <iostream>
 
 UecBcastSrc::UecBcastSrc(UecLogger *logger, TrafficLogger *pktLogger,
                          EventList &eventList, uint64_t rtt, uint64_t bdp,
@@ -71,4 +72,19 @@ void UecBcastSink::receivePacket(Packet &pkt) {
         _completed = true;
         if (_end_trigger) _end_trigger->activate();
     }
+}
+
+void BcastCompletionRecorder::activate() {
+    simtime_picosec now = _eventlist.now();
+    simtime_picosec dt = (now > _start) ? (now - _start) : 0;
+    std::cout << "BCAST_COMPLETE"
+              << " op_id=" << _op_id
+              << " root=" << _root
+              << " group=" << _group_idx
+              << " size=" << _size
+              << " legs=" << _leg_count
+              << " start_ns=" << (_start / 1000)
+              << " complete_ns=" << (now / 1000)
+              << " duration_ns=" << (dt / 1000)
+              << std::endl;
 }
