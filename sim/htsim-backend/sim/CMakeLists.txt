@@ -136,5 +136,6 @@ add_custom_target(bcast_scripts SOURCES
     AA-plan-Baseline.md
     AA-htsim-architecture.md
     AA_Notes.md
-    datacenter/compact-overview-23.04.26.md
+    work-doc/compact-overview-23.04.26.md
+    work-doc/2026-04-23-progress.md
 )

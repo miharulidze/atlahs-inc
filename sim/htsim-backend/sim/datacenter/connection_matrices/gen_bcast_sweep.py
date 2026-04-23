@@ -42,8 +42,16 @@ def valid_fat_tree_sizes(max_nodes):
 
 
 def choose_group(total_nodes, group_size, rng):
-    """Pick group_size distinct node ids from [0, total_nodes)."""
-    return sorted(rng.sample(range(total_nodes), group_size))
+    """Pick group_size distinct node ids from [0, total_nodes).
+
+    The list is deliberately *not* sorted: in our .cm convention the
+    root is group[0], so leaving the sample in random order makes the
+    root a uniformly random draw from the chosen subset. Without this
+    the numerically smallest host id would always be the root,
+    producing a large-|G| degeneracy (e.g. |G|=N would always make
+    node 0 the root on every rep) and a small-|G| bias toward low ids.
+    """
+    return rng.sample(range(total_nodes), group_size)
 
 
 def write_cm(path, nodes, group, payload_bytes):
@@ -124,7 +132,10 @@ def main():
                 f"n={nodes} g={g}: wrote {args.reps} matrices "
                 f"(bcast_n{nodes}_g{g}_r0..{args.reps-1}.cm)"
             )
-
+    # so for each rep we choose_group
+    #   picks g many random indicies among total_nodes many nodes essentially creating a new random
+    #   group with size g, and we always pick the first index as root. then after all reps we average
+    #   the timing?
     manifest_path = os.path.join(args.out, "manifest.txt")
     with open(manifest_path, "w") as f:
         f.write("# nodes group_size rep path\n")

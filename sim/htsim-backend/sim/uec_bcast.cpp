@@ -23,13 +23,17 @@ void UecBcastSrc::bcast_send_once() {
     _sent_once = true;
 
     _flow_start_time = eventlist().now();
-
+    // NOTE: This loop iterates exactly once if we satisfy our assumption that payload < MSS
     while (_highest_sent < _flow_size) {
         UecPacket *p = UecPacket::newpkt(_flow, *_route, _highest_sent + 1,
                                          /*dataseqno=*/0, _mss,
                                          /*retransmitted=*/false, _dstaddr);
         p->set_route(*_route);
         int crt = choose_route();
+        // ECMP_FIB: cycle through path_ids then at switch the path_id is
+        // hashed to generate a port output (among possible ECMP ports)
+        // TODO: imagine Bcast groupsize = # ECMP paths
+        // TODO: Then when we send several Bcasts we always route the same (not too important)
         p->set_pathid(_path_ids[crt]);
         p->from = this->from;
         p->to = this->to;
