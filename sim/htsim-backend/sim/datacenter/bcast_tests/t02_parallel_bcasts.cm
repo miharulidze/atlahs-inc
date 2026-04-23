@@ -1,0 +1,9 @@
+# T02 parallel broadcasts
+# Two independent broadcasts on disjoint groups. Both start at t=0.
+# Expect two BCAST_COMPLETE lines with legs=6 and legs=4.
+Nodes 16
+Grp 1 2 3 6 9 12 14
+Grp 5 7 10 13 15
+Connections 2
+0->0 id 1 start_bcast 0 size 4096
+0->1 id 2 start_bcast 0 size 4096

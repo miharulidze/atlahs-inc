@@ -1,0 +1,7 @@
+# T01 simple bcast
+# Single broadcast, 4-member group, 3 legs.
+# Expect exactly one BCAST_COMPLETE with legs=3.
+Nodes 16
+Grp 0 5 10 15
+Connections 1
+0->0 id 1 start_bcast 0 size 4096

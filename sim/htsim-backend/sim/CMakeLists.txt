@@ -109,3 +109,29 @@ add_executable(htsim_eqds
     ${DATACENTER_COMMON}
 )
 target_link_libraries(htsim_eqds PRIVATE sim)
+
+# ----------------------------------------------------------------------
+# Non-compiled project files (Python sweep tooling, thesis docs).
+#
+# Listing them under a custom target's SOURCES attribute makes CLion's
+# project view pick them up and index them for navigation/editing,
+# without CMake trying to build or link them. The target is never
+# triggered; it exists only as an editor-visibility hook.
+# ----------------------------------------------------------------------
+add_custom_target(bcast_scripts SOURCES
+    datacenter/connection_matrices/gen_bcast_sweep.py
+    datacenter/connection_matrices/run_bcast_sweep.py
+    ../plotting/plot_bcast_baseline.py
+    datacenter/bcast_tests/run_tests.py
+    datacenter/bcast_tests/t01_simple_bcast.cm
+    datacenter/bcast_tests/t02_parallel_bcasts.cm
+    datacenter/bcast_tests/t03_bcast_with_recv_trigger.cm
+    datacenter/bcast_tests/t04_bcast_plus_p2p.cm
+    datacenter/bcast_tests/t05_full_group_bcast.cm
+    datacenter/bcast_tests/t06_missing_id_rejected.cm
+    AA-thesis-baseline.md
+    AA-plan-Baseline.md
+    AA-htsim-architecture.md
+    AA_Notes.md
+    datacenter/compact-overview-23.04.26.md
+)

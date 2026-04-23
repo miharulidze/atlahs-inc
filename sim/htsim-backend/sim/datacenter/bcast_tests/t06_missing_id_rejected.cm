@@ -1,0 +1,10 @@
+# T06 parser rejection: bcast matrix with a P2P line missing its id.
+# Our parser requires every connection in a start_bcast matrix to
+# carry an explicit id, otherwise synthesised leg flow_ids could
+# collide with PacketFlow defaults. Expect the simulator to exit
+# non-zero with a diagnostic containing "missing an explicit `id`".
+Nodes 16
+Grp 0 4 8 12
+Connections 2
+0->0 id 1 start_bcast 0 size 4096
+2->10 start 0 size 4096
