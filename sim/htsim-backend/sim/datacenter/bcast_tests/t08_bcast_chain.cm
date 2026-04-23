@@ -1,0 +1,16 @@
+# T08 cascaded broadcasts
+# Broadcast 1 fires its barrier -> TriggerRelay -> named trigger 1
+# -> Broadcast 2 is attached to trigger 1 via trigger_bcast and
+# launches all its legs together.
+# Expect:
+#   - two BCAST_COMPLETE lines (legs=3 and legs=3)
+#   - both synthetic barriers fire
+#   - the named oneshot trigger 1 fires and activates bcast 2's legs
+Nodes 16
+Grp 0 4 8 12
+Grp 1 5 9 13
+Connections 2
+Triggers 1
+0->0 id 1 start_bcast 0 size 4096 recv_done_trigger 1
+0->1 id 2 trigger_bcast 1 size 4096
+trigger id 1 oneshot

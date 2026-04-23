@@ -121,6 +121,51 @@ TESTS: List[TestCase] = [
         ],
         expect_bcast_count=0,
     ),
+    TestCase(
+        name="T07 trigger_started_bcast",
+        cm="t07_trigger_started_bcast.cm",
+        nodes=16,
+        description="trigger_bcast: P2P send_done_trigger activates "
+                    "all broadcast legs together",
+        expect_bcast_count=1,
+        expect_legs_multiset=[6],
+        expect_patterns=[
+            # The named oneshot fires all |G|-1 = 6 leg sources.
+            r"Trigger 1 fired, 6 targets",
+            # P2P precursor flow shows up at setup.
+            r"uec_5_10",
+        ],
+    ),
+    TestCase(
+        name="T08 bcast_chain",
+        cm="t08_bcast_chain.cm",
+        nodes=16,
+        description="bcast1 recv_done_trigger -> trigger_bcast on "
+                    "bcast2; two broadcasts cascade cleanly",
+        expect_bcast_count=2,
+        expect_legs_multiset=[3, 3],
+        expect_patterns=[
+            # Bcast 2's |G|-1 = 3 legs all start when the named trigger
+            # fires.
+            r"Trigger 1 fired, 3 targets",
+        ],
+    ),
+    TestCase(
+        name="T09 p2p_recv_done_trigger",
+        cm="t09_p2p_recv_done_trigger.cm",
+        nodes=16,
+        description="P2P recv_done_trigger fires the named trigger on "
+                    "sink-side completion, unblocking a waiting P2P flow",
+        expect_bcast_count=0,
+        expect_patterns=[
+            # Named trigger must fire (the regression test): before the
+            # fix, UecSink stored _end_trigger but never activated it,
+            # so this line would be absent.
+            r"Trigger 1 fired, 1 targets",
+            r"uec_5_10",
+            r"uec_2_3",
+        ],
+    ),
 ]
 
 

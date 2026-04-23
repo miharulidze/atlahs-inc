@@ -796,6 +796,32 @@ bool ConnectionMatrix::load(istream& file){
                                 assert(c->flowid);
                                 t->flows.push_back(c->flowid);
                     }
+                } else if (tokens[i] == "trigger_bcast") {
+                    // Trigger-started broadcast. Sets both is_bcast
+                    // (so main_uec routes to the bcast branch) and
+                    // trigger (so the named trigger fires the legs).
+                    // c->start is set to TRIGGER_START; the parser's
+                    // "both start time and trigger" guard then still
+                    // passes because c->start == TRIGGER_START.
+                    i++;
+                    c->trigger = stoi(tokens[i]);
+                    c->start = TRIGGER_START;
+                    c->is_bcast = true;
+                    map<uint32_t, trigger*>::iterator it = triggers.find(c->trigger);
+                    if (it == triggers.end()) {
+                                trigger *t = new trigger;
+                                t->id = c->trigger;
+                                t->count = 0;
+                                t->type = UNSPECIFIED;
+                                t->trigger = 0;
+                                assert(c->flowid);
+                                t->flows.push_back(c->flowid);
+                                triggers[t->id] = t;
+                    } else {
+                                trigger *t = it->second;
+                                assert(c->flowid);
+                                t->flows.push_back(c->flowid);
+                    }
                 } else if (tokens[i] == "send_done_trigger") {
                     i++;
                     c->send_done_trigger = stoi(tokens[i]);

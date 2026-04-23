@@ -129,6 +129,9 @@ add_custom_target(bcast_scripts SOURCES
     datacenter/bcast_tests/t04_bcast_plus_p2p.cm
     datacenter/bcast_tests/t05_full_group_bcast.cm
     datacenter/bcast_tests/t06_missing_id_rejected.cm
+    datacenter/bcast_tests/t07_trigger_started_bcast.cm
+    datacenter/bcast_tests/t08_bcast_chain.cm
+    datacenter/bcast_tests/t09_p2p_recv_done_trigger.cm
     AA-thesis-baseline.md
     AA-plan-Baseline.md
     AA-htsim-architecture.md

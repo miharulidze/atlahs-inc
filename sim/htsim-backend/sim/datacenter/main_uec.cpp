@@ -852,10 +852,14 @@ int main(int argc, char **argv) {
                 }
                 BarrierTrigger *barrier = new BarrierTrigger(
                         eventlist, ++next_bcast_barrier_id, leg_count);
-                // BarrierTrigger::activate asserts targets>0 on fire; always
-                // attach a no-op. Chain to the user-specified downstream
-                // trigger if present (we use best-effort so no downstream)
-                barrier->add_target(*new NoOpTriggerTarget());
+                // Always attach a completion recorder — it emits the
+                // BCAST_COMPLETE line to stdout for downstream plotting
+                // and also satisfies BarrierTrigger's targets>0 fire
+                // assertion. Chain to the user-specified downstream
+                // trigger if present.
+                barrier->add_target(*new BcastCompletionRecorder(
+                        eventlist, crt->flowid, root, dest,
+                        crt->size, leg_count, crt->start));
                 if (crt->recv_done_trigger) {
                     Trigger *downstream = conns->getTrigger(
                             crt->recv_done_trigger, eventlist);
@@ -869,6 +873,7 @@ int main(int argc, char **argv) {
                             base_rtt_max_hops, bdp_local, 100, 6);
                     bs->setNumberEntropies(256);
                     bs->set_dst(m);
+                    // TODO: Can we find a better solution for the FlowID assignment?
                     bs->set_flowid(++next_bcast_leg_flow_id);
                     if (crt->size > 0) bs->setFlowSize(crt->size);
 
@@ -882,6 +887,7 @@ int main(int argc, char **argv) {
                     UecBcastSink *bsink = new UecBcastSink();
                     bsink->set_src(root);
                     bsink->set_expected_bytes(crt->size > 0 ? crt->size : 0);
+                    // TODO: So each sink has pointer to barrier to decrement when their packet arrives
                     bsink->set_end_trigger(*barrier);
 
                     // Use crt->flowid as the broadcast-operation tag in
@@ -909,7 +915,7 @@ int main(int argc, char **argv) {
                             srctotor->push_back(top->queues_ns_nlp[root][top->HOST_POD_SWITCH(root)][0]);
                             srctotor->push_back(top->pipes_ns_nlp[root][top->HOST_POD_SWITCH(root)][0]);
                             srctotor->push_back(top->queues_ns_nlp[root][top->HOST_POD_SWITCH(root)][0]->getRemoteEndpoint());
-
+                            // TODO: Why would we need that?
                             dsttotor->push_back(top->queues_ns_nlp[m][top->HOST_POD_SWITCH(m)][0]);
                             dsttotor->push_back(top->pipes_ns_nlp[m][top->HOST_POD_SWITCH(m)][0]);
                             dsttotor->push_back(top->queues_ns_nlp[m][top->HOST_POD_SWITCH(m)][0]->getRemoteEndpoint());
@@ -980,6 +986,9 @@ int main(int argc, char **argv) {
             if (crt->recv_done_trigger) {
                 Trigger *trig = conns->getTrigger(crt->recv_done_trigger, eventlist);
                 uecSnk->set_end_trigger(*trig);
+                // Opt in to sink-side completion detection so the named
+                // trigger actually fires when the last byte arrives.
+                if (crt->size > 0) uecSnk->set_expected_bytes(crt->size);
             }
 
             // uecRtxScanner->registerUec(*uecSrc);

@@ -509,6 +509,15 @@ class UecSink : public PacketSink, public DataReceiver {
 
     void set_end_trigger(Trigger &trigger);
 
+    // Optional: set the expected payload size so the sink fires its
+    // _end_trigger once it has received every byte. Without this,
+    // recv_done_trigger on a regular P2P flow is silently never
+    // fired (UecSink does not otherwise track a "flow size"). Zero
+    // (the default) disables sink-side completion detection, which
+    // preserves pre-existing behaviour for any flow that doesn't
+    // opt in.
+    void set_expected_bytes(uint64_t n) { _expected_bytes = n; }
+
     uint64_t cumulative_ack() override;
     uint32_t drops() override;
     void connect(UecSrc &src, const Route *route);
@@ -528,6 +537,8 @@ class UecSink : public PacketSink, public DataReceiver {
   private:
     UecAck::seq_t _cumulative_ack;
     uint64_t _packets;
+    uint64_t _expected_bytes = 0;   // 0 => sink-side completion disabled
+    bool _flow_completed = false;
     uint32_t _srcaddr;
     uint32_t _drops;
     int ack_count_idx = 0;

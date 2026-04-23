@@ -1,0 +1,18 @@
+# T09 sink-side recv_done_trigger on a regular P2P flow
+# Regression test for the previously-latent upstream bug: a
+# UecSink's _end_trigger was stored but never fired. Now,
+# set_expected_bytes (set by main_uec.cpp when recv_done_trigger is
+# present) plus a byte-count check in UecSink::receivePacket makes
+# the named trigger actually fire when the last byte arrives,
+# letting a downstream P2P flow start.
+# Expect:
+#   - no BCAST_COMPLETE lines (pure P2P)
+#   - "Trigger 1 fired, 1 targets" (the named oneshot activates
+#      the waiting flow id 2)
+#   - both P2P endpoints constructed (log names uec_5_10 and uec_2_3)
+Nodes 16
+Connections 2
+Triggers 1
+5->10 id 1 start 0 size 4096 recv_done_trigger 1
+2->3 id 2 trigger 1 size 4096
+trigger id 1 oneshot

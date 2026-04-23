@@ -1035,6 +1035,17 @@ void UecSink::receivePacket(Packet &pkt) {
 
     send_ack(ts, marked, seqno, ackno, _paths.at(crt_path), NULL,
              path_id);
+
+    // Fire the optional sink-side recv_done_trigger once the
+    // cumulative byte-counter covers the expected payload. The
+    // default _expected_bytes == 0 keeps this path inert, preserving
+    // pre-existing UEC behaviour for any flow that doesn't opt in
+    // via set_expected_bytes().
+    if (_expected_bytes > 0 && !_flow_completed
+            && _cumulative_ack >= _expected_bytes) {
+        _flow_completed = true;
+        if (_end_trigger) _end_trigger->activate();
+    }
 }
 
 void UecSink::send_ack(simtime_picosec ts, bool marked, UecAck::seq_t seqno, UecAck::seq_t ackno, const Route *rt,
