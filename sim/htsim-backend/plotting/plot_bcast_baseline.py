@@ -3,6 +3,8 @@
 
 Renders completion time (ns) vs. group size, per topology size, with
 min / median / max error bars (Hoefler-style non-parametric summary).
+Optionally overlays the first-principles theoretical model
+``T(|G|) = T_fabric + (|G|-1) * t_ser`` for direct comparison.
 Produces PDF and PNG.
 
 CSV columns expected (produced by run_bcast_sweep.py):
@@ -12,13 +14,14 @@ CSV columns expected (produced by run_bcast_sweep.py):
 Invoke from sim/htsim-backend/plotting:
     python3 plot_bcast_baseline.py \\
         --csv ../sim/datacenter/connection_matrices/bcast_sweep/results.csv \\
-        --out bcast_baseline          # linear-y, log-x
+        --out bcast_baseline --theory          # linear-y, log-x
     python3 plot_bcast_baseline.py \\
-        --csv ... --out bcast_baseline_loglog --loglog
+        --csv ... --out bcast_baseline_loglog --loglog --theory
 """
 
 import argparse
 import csv
+import math
 import os
 import sys
 from collections import defaultdict
@@ -63,6 +66,42 @@ def main():
         "--no-offset-topologies",
         action="store_false",
         dest="offset_topologies",
+    )
+    p.add_argument(
+        "--theory",
+        action="store_true",
+        help="Overlay the first-principles theoretical curve "
+             "T(|G|) = T_fabric + (|G|-1)*t_ser.",
+    )
+    p.add_argument(
+        "--theory-tser-ns",
+        type=float,
+        default=332.8,
+        help="Per-leg serialisation cost t_ser in ns. Default 332.8 = "
+             "4096 B MTU + 64 B UEC header at 100 Gbps "
+             "(4160 B * 80 ps/B).",
+    )
+    p.add_argument(
+        "--theory-tfabric-ns",
+        type=float,
+        default=4396.8,
+        help="Constant fabric term T_fabric in ns. Default 4396.8 = "
+             "6 queue drains (332.8 ns each) + 6 pipe propagations "
+             "(400 ns each) on the cross-pod path of a K=16 fat-tree.",
+    )
+    p.add_argument(
+        "--theory-label",
+        default=None,
+        help="Legend label for the theoretical curve. Default is "
+             "auto-generated from --theory-tser-ns and "
+             "--theory-tfabric-ns.",
+    )
+    p.add_argument(
+        "--theory-samples",
+        type=int,
+        default=80,
+        help="Number of log-spaced sample points for the theoretical "
+             "curve (smoother on log axes when larger).",
     )
     args = p.parse_args()
 
@@ -110,6 +149,47 @@ def main():
             label=f"{nodes}-node fat-tree",
             linewidth=1.3,
             alpha=0.85,
+            zorder=3,
+        )
+
+    # Overlay theoretical curve if requested. Drawn underneath the
+    # data with a dashed line so the measured points stay visually
+    # primary, and sampled densely (log-spaced) so the curve stays
+    # smooth on log-x and log-log axes.
+    if args.theory:
+        g_min = min(g for (_, g), _ in buckets.items())
+        g_max = max(g for (_, g), _ in buckets.items())
+        if g_min < 1:
+            g_min = 1
+        log_lo = math.log2(g_min)
+        log_hi = math.log2(g_max)
+        n_samples = max(args.theory_samples, 2)
+        xs_t = [
+            2.0 ** (log_lo + i * (log_hi - log_lo) / (n_samples - 1))
+            for i in range(n_samples)
+        ]
+        ys_t = [
+            args.theory_tfabric_ns + (x - 1.0) * args.theory_tser_ns
+            for x in xs_t
+        ]
+        if args.theory_label is not None:
+            theory_label = args.theory_label
+        else:
+            theory_label = (
+                fr"Theory: "
+                fr"$T_{{\mathrm{{fabric}}}}={args.theory_tfabric_ns:.1f}\,$ns "
+                fr"$+\,(|G|{{-}}1)\cdot "
+                fr"{args.theory_tser_ns:.1f}\,$ns"
+            )
+        ax.plot(
+            xs_t,
+            ys_t,
+            color="black",
+            linestyle="--",
+            linewidth=1.7,
+            label=theory_label,
+            zorder=1,
+            alpha=0.75,
         )
 
     ax.set_xscale("log", base=2)
