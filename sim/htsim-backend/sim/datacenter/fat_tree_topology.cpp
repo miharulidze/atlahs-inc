@@ -614,7 +614,8 @@ int find_port_idx(FatTreeSwitch* sw, BaseQueue* q) {
 }  // namespace
 
 std::vector<FatTreeTopology::McastTreeNode>
-FatTreeTopology::build_mcast_tree(uint32_t group_idx) {
+FatTreeTopology::build_mcast_tree(uint32_t group_idx,
+                                  uint32_t assignment_idx) {
     std::vector<McastTreeNode> result;
     if (groups == nullptr || group_idx >= groups->size()) return result;
 
@@ -633,11 +634,13 @@ FatTreeTopology::build_mcast_tree(uint32_t group_idx) {
         hosts_per_tor[tor].push_back(h);
     }
 
-    // Deterministic per-pod AGG choice. Same podpos in every
-    // pod ensures the chosen AGGs share access to a common
-    // set of Cores (the AGG-Core compatibility constraint, see
-    // v4 §3.6).
-    uint32_t podpos = group_idx % agg_switches_per_pod();
+    // Round-robin per-pod AGG choice (PT1 post-meeting change).
+    // assignment_idx is incremented per non-singleton group by
+    // set_up_mcast, giving strict load-balanced AGG selection
+    // across groups regardless of how the user numbers the
+    // group_idx values. Same podpos in every member pod keeps
+    // AGG-Core compatibility intact.
+    uint32_t podpos = assignment_idx % agg_switches_per_pod();
     bool multi_pod  = member_pods.size() > 1;
     bool tor_needs_uplink = (member_tors.size() > 1) || multi_pod;
 
@@ -676,7 +679,7 @@ FatTreeTopology::build_mcast_tree(uint32_t group_idx) {
                 radix_up(AGG_TIER) / bundlesize(CORE_TIER);
         if (uplink_bundles == 0) uplink_bundles = 1;
         uint32_t core_offset =
-                (group_idx / agg_switches_per_pod()) % uplink_bundles;
+                (assignment_idx / agg_switches_per_pod()) % uplink_bundles;
         chosen_core =
                 core_offset * agg_switches_per_pod() + podpos;
     }
@@ -820,11 +823,19 @@ void FatTreeTopology::set_up_mcast() {
     }
 
     // Step 2: per-group tree construction + FIB install.
+    // Round-robin assignment counter (PT1 post-meeting): each
+    // group with at least two members gets the next sequential
+    // assignment index. This decouples AGG/Core selection from
+    // the user-visible group_idx values (which may be sparse)
+    // and gives strict load-balanced convergence-point
+    // allocation across groups.
+    uint32_t rr_counter = 0;
     for (uint32_t g = 0; g < groups->size(); ++g) {
         const auto& members = (*groups)[g];
         if (members.size() < 2) continue;
 
-        auto tree = build_mcast_tree(g);
+        auto tree = build_mcast_tree(g, rr_counter);
+        ++rr_counter;
         for (auto& node : tree) {
             INCFibEntry* entry = new INCFibEntry();
             for (uint8_t idx : node.tree_port_indices) {

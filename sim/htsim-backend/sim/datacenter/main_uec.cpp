@@ -7,6 +7,7 @@
 #include <math.h>
 
 #include <sstream>
+#include <fstream>
 #include <string.h>
 // #include "subflow_control.h"
 #include "clock.h"
@@ -64,6 +65,11 @@ EventList eventlist;
 // switch-level INC FIB. Selected at the is_bcast block in main.
 enum BcastMode { BCAST_BASELINE, BCAST_MCAST };
 static BcastMode bcast_mode = BCAST_BASELINE;
+
+// PT6 (post-meeting): when non-null, write a tiny CSV with the
+// total link-cross count at simulation end. Set via the
+// -link_crosses_csv CLI flag.
+static const char *link_crosses_csv = nullptr;
 
 Logfile *lg;
 
@@ -310,6 +316,11 @@ int main(int argc, char **argv) {
             i++;
         } else if (!strcmp(argv[i], "-seed")) {
             seed = atoi(argv[i + 1]);
+            i++;
+        } else if (!strcmp(argv[i], "-link_crosses_csv")) {
+            // PT6: emit total link-crosses to this file path
+            // when the simulation ends.
+            link_crosses_csv = argv[i + 1];
             i++;
         } else if (!strcmp(argv[i], "-bcast_mode")) {
             // Phase-2: select baseline (|G|-1 unicast legs) vs.
@@ -1132,6 +1143,17 @@ int main(int argc, char **argv) {
         }
         // simulate traffic
         while (eventlist.doNextEvent()) {
+        }
+
+        // PT6 (post-meeting): emit link-crosses CSV if requested.
+        // One row, one column: total directional pipe traversals
+        // across the entire simulation (every packet in flight is
+        // one cross). Sweep harness reads this back into the
+        // per-run row.
+        if (link_crosses_csv) {
+            std::ofstream lcf(link_crosses_csv);
+            lcf << "total_link_crosses\n"
+                << Pipe::total_packets() << "\n";
         }
     } else if (goal_filename.size() > 0) {
         printf("Starting LGS Interface");

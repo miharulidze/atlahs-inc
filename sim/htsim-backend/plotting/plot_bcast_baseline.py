@@ -174,7 +174,7 @@ def main():
                 markersize=5,
                 linewidth=1.5,
                 linestyle=ls,
-                label=f"{nodes}-node fat-tree (median){label_suffix}",
+                label=f"{nodes}-host fat-tree (median){label_suffix}",
                 zorder=3,
             )
             color = line.get_color()
@@ -208,7 +208,7 @@ def main():
                 capsize=3,
                 markersize=5,
                 linestyle=ls,
-                label=f"{nodes}-node fat-tree{label_suffix}",
+                label=f"{nodes}-host fat-tree{label_suffix}",
                 linewidth=1.3,
                 alpha=0.85,
                 zorder=3,

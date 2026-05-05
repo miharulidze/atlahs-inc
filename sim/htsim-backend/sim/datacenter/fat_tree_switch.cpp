@@ -31,9 +31,20 @@ FatTreeSwitch::~FatTreeSwitch() {
 }
 
 // addPort override --- maintain the port-index reverse map so
-// identify_ingress_port_idx() is O(1).
+// identify_ingress_port_idx() is O(1). Also guard the
+// INCFibEntry std::bitset<128> width invariant: if the port
+// count ever exceeded 128 we would silently truncate the
+// multicast bitmap. Abort loudly instead.
 int FatTreeSwitch::addPort(BaseQueue* q) {
     int idx = Switch::addPort(q);
+    if (idx >= 128) {
+        std::cerr
+            << "FatTreeSwitch port count (" << (idx + 1)
+            << ") exceeds INCFibEntry bitmap width (128). "
+               "Widen std::bitset<128> in inc_fib.h or reduce "
+               "switch radix.\n";
+        std::abort();
+    }
     _port_idx_by_queue[q] = static_cast<uint8_t>(idx);
     return idx;
 }

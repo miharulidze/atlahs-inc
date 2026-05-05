@@ -1,7 +1,12 @@
-// -*- c-basic-offset: 4; indent-tabs-mode: nil -*-        
+// -*- c-basic-offset: 4; indent-tabs-mode: nil -*-
 #include "pipe.h"
 #include <iostream>
 #include <sstream>
+
+// PT6: aggregate link-cross counter across all pipes in the
+// simulation. Reset at simulator start by main_uec; queried at
+// end via Pipe::total_packets().
+uint64_t Pipe::_total_packets = 0;
 
 Pipe::Pipe(simtime_picosec delay, EventList& eventlist)
 : EventSource(eventlist,"pipe"), _delay(delay)
@@ -26,6 +31,11 @@ Pipe::receivePacket(Packet& pkt)
            we've an event pending */
             eventlist().sourceIsPendingRel(*this,_delay);
     }
+    // PT6 link-cross accounting: every packet that enters the
+    // pipe is one directional link traversal. Increment both
+    // per-pipe and class-level totals.
+    _packet_count++;
+    _total_packets++;
     _count++;
     if (_count == _size) {
         _inflight_v.resize(_size*2);

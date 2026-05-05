@@ -56,8 +56,17 @@ def read_manifest(path):
     return entries
 
 
-def run_one(htsim, cm_path, nodes, seed, linkspeed, timeout_s, mode):
-    """Run htsim_uec once and return list of BCAST_COMPLETE matches."""
+def run_one(htsim, cm_path, nodes, seed, linkspeed, timeout_s, mode,
+            capture_link_crosses=False):
+    """Run htsim_uec once and return (matches, link_crosses_total).
+
+    matches  = list of BCAST_COMPLETE field-dicts.
+    link_crosses_total = total directional pipe traversals reported
+        by the simulator's PT6 instrumentation, or None if not
+        captured.
+    """
+    import tempfile
+    lc_path = None
     cmd = [
         htsim,
         "-strat", "ecmp_host",
@@ -67,6 +76,10 @@ def run_one(htsim, cm_path, nodes, seed, linkspeed, timeout_s, mode):
         "-seed", str(seed),
         "-bcast_mode", mode,
     ]
+    if capture_link_crosses:
+        lc_fd, lc_path = tempfile.mkstemp(prefix="lc_", suffix=".csv")
+        os.close(lc_fd)
+        cmd += ["-link_crosses_csv", lc_path]
     try:
         proc = subprocess.run(
             cmd,
@@ -74,25 +87,44 @@ def run_one(htsim, cm_path, nodes, seed, linkspeed, timeout_s, mode):
             text=True,
             timeout=timeout_s,
         )
-    except subprocess.TimeoutExpired as e:
+    except subprocess.TimeoutExpired:
         sys.stderr.write(
             f"[timeout] {cm_path} seed={seed} after {timeout_s}s\n"
         )
-        return []
+        if lc_path:
+            try: os.unlink(lc_path)
+            except OSError: pass
+        return ([], None)
 
     if proc.returncode != 0:
         sys.stderr.write(
             f"[fail rc={proc.returncode}] {cm_path} seed={seed}\n"
             f"  stderr tail: {proc.stderr[-300:]}\n"
         )
-        return []
+        if lc_path:
+            try: os.unlink(lc_path)
+            except OSError: pass
+        return ([], None)
 
     matches = [m.groupdict() for m in BCAST_RE.finditer(proc.stdout)]
     if not matches:
         sys.stderr.write(
             f"[no BCAST_COMPLETE] {cm_path} seed={seed}\n"
         )
-    return matches
+
+    lc_total = None
+    if lc_path:
+        try:
+            with open(lc_path) as f:
+                lines = [ln.strip() for ln in f if ln.strip()]
+            if len(lines) >= 2:
+                lc_total = int(lines[1])
+        except (OSError, ValueError):
+            pass
+        try: os.unlink(lc_path)
+        except OSError: pass
+
+    return (matches, lc_total)
 
 
 def main():
@@ -125,6 +157,13 @@ def main():
         help="Which bcast_mode(s) to sweep. "
              "'both' produces one CSV row per (matrix, mode).",
     )
+    p.add_argument(
+        "--link-crosses",
+        action="store_true",
+        help="Capture per-run total link-crosses (PT6 metric) "
+             "via -link_crosses_csv and add a 'link_crosses' "
+             "column to the output CSV.",
+    )
     p.add_argument("--out", required=True, help="Output CSV path")
     args = p.parse_args()
 
@@ -140,12 +179,13 @@ def main():
     rows = []
     for (nodes, group_size, rep, cm_path) in entries:
         for mode in modes:
-            hits = run_one(
+            hits, lc_total = run_one(
                 args.htsim, cm_path, nodes, args.seed,
                 args.linkspeed, args.timeout, mode,
+                capture_link_crosses=args.link_crosses,
             )
             for h in hits:
-                rows.append({
+                row = {
                     "nodes": nodes,
                     "group_size": group_size,
                     "rep": rep,
@@ -159,10 +199,14 @@ def main():
                     "complete_ns": int(h["complete_ns"]),
                     "duration_ns": int(h["duration_ns"]),
                     "matrix_path": cm_path,
-                })
+                }
+                if args.link_crosses:
+                    row["link_crosses"] = lc_total if lc_total is not None else ""
+                rows.append(row)
             print(
                 f"n={nodes} g={group_size} rep={rep} mode={mode}  "
                 f"-> {len(hits)} op(s)"
+                + (f"  [lc={lc_total}]" if args.link_crosses else "")
             )
 
     if not rows:

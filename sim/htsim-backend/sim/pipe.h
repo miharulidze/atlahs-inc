@@ -27,13 +27,25 @@ class Pipe : public EventSource, public PacketSink, public Drawable {
     simtime_picosec delay() { return _delay; }
     const string& nodename() { return _nodename; }
     void forceName(string name) {_nodename = name;}
-    
+
     void setNext(PacketSink* next_sink) {
             _next_sink = next_sink;
     }
     PacketSink* next() const {
             return _next_sink;
     }
+
+    // PT6 (post-meeting): per-pipe link-cross counter. Increments
+    // once per packet the pipe ingests. Each link in the topology
+    // has two pipes (one per direction); summing _packet_count
+    // across all pipes gives total directional link traversals,
+    // useful as a network-footprint metric complementary to
+    // completion time. Static class counter aggregates the sum
+    // for the headline metric without requiring iteration over
+    // topology pipes at simulation end.
+    uint64_t packet_count() const { return _packet_count; }
+    static uint64_t total_packets() { return _total_packets; }
+    static void reset_total_packets() { _total_packets = 0; }
 protected:
     string _nodename;
     //typedef pair<simtime_picosec,Packet*> pktrecord_t;
@@ -43,6 +55,10 @@ protected:
 private:
     simtime_picosec _delay;
     PacketSink* _next_sink{nullptr}; // used in generic topology for linkage
+
+    // PT6 link-cross counters.
+    uint64_t _packet_count = 0;
+    static uint64_t _total_packets;
 };
 
 

@@ -100,7 +100,8 @@ public:
         std::vector<uint8_t>  tree_port_indices;
         std::vector<int>      local_member_hosts;  // leaf-TOR only
     };
-    std::vector<McastTreeNode> build_mcast_tree(uint32_t group_idx);
+    std::vector<McastTreeNode> build_mcast_tree(uint32_t group_idx,
+                                                uint32_t assignment_idx);
 
     // Per-(host, group) UecMcastSink registry, populated by
     // set_up_mcast and consumed by the driver. Key = (host, group).
