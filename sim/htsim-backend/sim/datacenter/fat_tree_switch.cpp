@@ -76,34 +76,52 @@ void FatTreeSwitch::build_egress_route_cache() {
 }
 
 uint8_t FatTreeSwitch::identify_ingress_port_idx(Packet& pkt) const {
-    // The packet's _route was last set by the upstream switch
-    // (or by the source for a host-originated packet). _nexthop
-    // has been advanced past the route element that just
-    // delivered us; nexthop-2 is the upstream queue, nexthop-1
-    // is the upstream pipe (or this switch in the source-side
-    // route shape).
-    assert(pkt.nexthop() >= 2 &&
-           "ingress identification requires _route walked >=2 hops");
-    PacketSink* upstream = pkt.route()->at(pkt.nexthop() - 2);
-    BaseQueue* uq = dynamic_cast<BaseQueue*>(upstream);
-    PacketSink* upstream_owner = nullptr;
-    if (uq) {
-        // The upstream queue belongs to the previous switch (or to
-        // a host's NIC). Its remote endpoint is *us*.
-        upstream_owner = uq->getRemoteEndpoint();
+    // The packet's _route was attached by the previous hop and
+    // has the canonical shape {upstream_queue, pipe, this_switch}
+    // for host-to-switch and switch-to-switch deliveries alike.
+    // After traversal _nexthop == 3, so route[0] is the upstream
+    // queue regardless of whether the upstream is a host or a
+    // switch.
+    assert(pkt.route() && pkt.route()->size() >= 1 &&
+           "ingress identification requires a non-empty route");
+    BaseQueue* upstream_queue =
+            dynamic_cast<BaseQueue*>(pkt.route()->at(0));
+    if (!upstream_queue) {
+        assert(0 && "route[0] is not a BaseQueue");
+        return 0;
     }
-    // Match against this switch's egress queues: the queue facing
-    // the upstream entity has its own remote endpoint matching
-    // either `upstream` (a queue) or `upstream_owner` (the
-    // upstream's remote = us, paired with our remote = them).
-    for (size_t i = 0; i < _ports.size(); ++i) {
-        PacketSink* mine_remote = _ports[i]->getRemoteEndpoint();
-        if (mine_remote == upstream || mine_remote == upstream_owner) {
-            return static_cast<uint8_t>(i);
+    // Two cases:
+    //   (a) upstream_queue->getSwitch() != null --- the upstream
+    //       is another switch. Our ingress port is the queue on
+    //       *this* side of the link, whose remote endpoint is
+    //       that upstream switch.
+    //   (b) upstream_queue->getSwitch() == null --- the upstream
+    //       is a host (no Switch wrapper). Use pkt.from as the
+    //       host id; ingress port = host downlink for from on us.
+    Switch* upstream_sw = upstream_queue->getSwitch();
+    if (upstream_sw != nullptr) {
+        for (size_t i = 0; i < _ports.size(); ++i) {
+            PacketSink* mine_remote = _ports[i]->getRemoteEndpoint();
+            if (mine_remote == upstream_sw) {
+                return static_cast<uint8_t>(i);
+            }
         }
+        assert(0 &&
+               "identify_ingress_port_idx: no port to upstream switch");
+        return 0;
+    } else {
+        // Host-originated packet (TOR ingress). pkt.from is the
+        // source host id; the matching port is this TOR's host
+        // downlink for that host.
+        int host = pkt.from;
+        BaseQueue* host_q = _ft->queues_nlp_ns
+                                    [_ft->HOST_POD_SWITCH(host)]
+                                    [host][0];
+        auto it = _port_idx_by_queue.find(host_q);
+        assert(it != _port_idx_by_queue.end() &&
+               "host downlink for pkt.from missing from port map");
+        return it->second;
     }
-    assert(0 && "identify_ingress_port_idx: no port matched");
-    return 0;
 }
 
 // Phase-2 multicast fanout dispatch. RPF: replicate the arriving

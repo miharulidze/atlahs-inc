@@ -59,6 +59,12 @@ string itoa_uec(uint64_t n);
 
 EventList eventlist;
 
+// Phase-2: -bcast_mode flag. baseline = phase-1's |G|-1 unicast leg
+// expansion (default). mcast = single-source multicast via the
+// switch-level INC FIB. Selected at the is_bcast block in main.
+enum BcastMode { BCAST_BASELINE, BCAST_MCAST };
+static BcastMode bcast_mode = BCAST_BASELINE;
+
 Logfile *lg;
 
 void exit_error(char *progr) {
@@ -304,6 +310,20 @@ int main(int argc, char **argv) {
             i++;
         } else if (!strcmp(argv[i], "-seed")) {
             seed = atoi(argv[i + 1]);
+            i++;
+        } else if (!strcmp(argv[i], "-bcast_mode")) {
+            // Phase-2: select baseline (|G|-1 unicast legs) vs.
+            // mcast (single-source switch-level INC fanout).
+            if (!strcmp(argv[i + 1], "baseline")) {
+                bcast_mode = BCAST_BASELINE;
+            } else if (!strcmp(argv[i + 1], "mcast")) {
+                bcast_mode = BCAST_MCAST;
+            } else {
+                cerr << "unknown -bcast_mode value: "
+                     << argv[i + 1]
+                     << " (expected baseline|mcast)" << endl;
+                exit(1);
+            }
             i++;
         } else if (!strcmp(argv[i], "-interdc_delay")) {
             interdc_delay = atoi(argv[i + 1]);
@@ -865,6 +885,81 @@ int main(int argc, char **argv) {
                             crt->recv_done_trigger, eventlist);
                     barrier->add_target(*new TriggerRelay(downstream));
                 }
+
+                // -----------------------------------------------------
+                // Phase-2 mcast branch: one UecBcastSrcMcast emits one
+                // UecMcastPacket; persistent UecMcastSinks (created by
+                // FatTreeTopology::set_up_mcast) absorb deliveries.
+                // The baseline branch below is preserved byte-identical.
+                // -----------------------------------------------------
+                if (bcast_mode == BCAST_MCAST) {
+                    flowid_t op_flow_id = crt->flowid
+                            ? crt->flowid : ++next_bcast_leg_flow_id;
+
+                    // Register per-op expectations on each member's
+                    // persistent (host, group) sink.
+                    for (int32_t m : group) {
+                        if (m == root) continue;
+                        UecMcastSink* sink =
+                                top->get_mcast_sink(m, dest);
+                        assert(sink &&
+                               "set_up_mcast did not create sink");
+                        sink->register_op(op_flow_id,
+                                          crt->size > 0 ? crt->size : 0,
+                                          barrier);
+                    }
+
+                    // One source per op. Connect via the standard
+                    // host-to-TOR srctotor route. The first packet
+                    // enters the root TOR with _type = UEC_MCAST and
+                    // FatTreeSwitch::receivePacket dispatches to
+                    // handle_mcast.
+                    UecBcastSrcMcast *bs = new UecBcastSrcMcast(
+                            NULL, NULL, eventlist,
+                            base_rtt_max_hops, bdp_local, 100, 6);
+                    bs->setNumberEntropies(256);
+                    bs->set_group_id(static_cast<uint32_t>(dest));
+                    bs->set_flowid(op_flow_id);
+                    if (crt->size > 0) bs->setFlowSize(crt->size);
+
+                    if (crt->trigger) {
+                        Trigger *trig = conns->getTrigger(
+                                crt->trigger, eventlist);
+                        trig->add_target(*bs);
+                    }
+
+                    string op_tag = crt->flowid
+                            ? ("op" + ntoa_uec(crt->flowid) + "_")
+                            : "";
+                    bs->setName("uec_bcast_mcast_" + op_tag
+                                + ntoa_uec(root) + "_g"
+                                + ntoa_uec(dest));
+                    logfile.writeName(*bs);
+
+                    Route *srctotor = new Route();
+                    if (top != NULL) {
+                        srctotor->push_back(top->queues_ns_nlp[root][top->HOST_POD_SWITCH(root)][0]);
+                        srctotor->push_back(top->pipes_ns_nlp[root][top->HOST_POD_SWITCH(root)][0]);
+                        srctotor->push_back(top->queues_ns_nlp[root][top->HOST_POD_SWITCH(root)][0]->getRemoteEndpoint());
+                    }
+
+                    bs->from = root;
+                    bs->to   = -1;     // multicast: no single dst
+                    bs->set_paths(number_entropies);
+                    // routeback / dummy_sink: ack-less, never used,
+                    // but UecSrc::connect → UecSink::connect both
+                    // require non-null routes for the configured
+                    // ECMP_FIB strategies. Empty routes satisfy the
+                    // assertion; no return traffic will ever walk
+                    // them under (A2) ack-less broadcast.
+                    static UecSink dummy_mcast_sink;
+                    Route *routeback = new Route();
+                    bs->connect(srctotor, routeback,
+                                dummy_mcast_sink, crt->start);
+
+                    continue;
+                }
+
                 for (int32_t m : group) {
                     if (m == root) continue;
 
