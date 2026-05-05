@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""Plot total link-crosses (PT6) as a function of group size,
+one line per (topology, mode). Captures network-footprint
+contrast between phase-1 ACK-less unicast and phase-2 switch-
+level multicast.
+
+CSV columns expected (produced by run_bcast_sweep.py
+--link-crosses):
+    nodes, group_size, rep, mode, payload_bytes, op_id, ...,
+    link_crosses
+"""
+
+import argparse
+import csv
+import os
+import sys
+from collections import defaultdict
+
+import matplotlib.pyplot as plt
+
+
+def load(path):
+    by = defaultdict(list)
+    with open(path) as f:
+        for row in csv.DictReader(f):
+            try:
+                lc = int(row["link_crosses"])
+            except (KeyError, ValueError):
+                continue
+            key = (int(row["nodes"]), int(row["group_size"]),
+                   row["mode"])
+            by[key].append(lc)
+    return by
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--csv", required=True)
+    p.add_argument("--out", required=True)
+    p.add_argument("--title",
+                   default="Total link traversals: phase-1 vs phase-2")
+    args = p.parse_args()
+
+    buckets = load(args.csv)
+    if not buckets:
+        sys.exit(f"no link_crosses rows in {args.csv}")
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    mode_style = {"baseline": "-", "mcast": "--"}
+
+    by_topo = defaultdict(list)  # (nodes, mode) -> [(g, lcs)]
+    for (nodes, g, mode), lcs in buckets.items():
+        by_topo[(nodes, mode)].append((g, lcs))
+    for k in by_topo:
+        by_topo[k].sort(key=lambda t: t[0])
+
+    for (nodes, mode), series in sorted(by_topo.items()):
+        xs = [g for g, _ in series]
+        medians = [sorted(d)[len(d) // 2] for _, d in series]
+        ls = mode_style.get(mode, "-")
+        suffix = "" if mode == "baseline" else " [mcast]"
+        ax.plot(xs, medians, marker="o", markersize=5,
+                linewidth=1.4, linestyle=ls,
+                label=f"{nodes}-host fat-tree{suffix}")
+
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("Group size |G|")
+    ax.set_ylabel("Total directional link traversals (count)")
+    ax.set_title(args.title)
+    ax.grid(True, which="both", linestyle=":", linewidth=0.5,
+            alpha=0.6)
+    ax.legend(fontsize=8, loc="upper left")
+    fig.tight_layout()
+
+    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+    for ext in ("pdf", "png"):
+        f = f"{args.out}.{ext}"
+        fig.savefig(f, dpi=150, bbox_inches="tight")
+        print(f"wrote {f}")
+
+
+if __name__ == "__main__":
+    main()

@@ -94,8 +94,12 @@ def main():
     p.add_argument(
         "--payload-bytes",
         type=int,
-        default=4096,
-        help="Bytes per broadcast operation (phase-one: single MTU)",
+        nargs="+",
+        default=[4096],
+        help="Bytes per broadcast operation. Accepts multiple "
+             "values for a multi-MTU sweep; the manifest gets a "
+             "size column and filenames include _m<size> when "
+             "more than one is supplied.",
     )
     p.add_argument(
         "--reps",
@@ -116,6 +120,8 @@ def main():
     # but different reps see different group memberships.
     base_rng = random.Random(args.seed)
 
+    payload_list = sorted(set(args.payload_bytes))
+    multi_mtu = len(payload_list) > 1
     manifest_lines = []
     for nodes in sorted(set(args.nodes)):
         for g in sorted(set(args.group_sizes)):
@@ -124,13 +130,23 @@ def main():
             for rep in range(args.reps):
                 rep_rng = random.Random(base_rng.random())
                 group = choose_group(nodes, g, rep_rng)
-                filename = f"bcast_n{nodes}_g{g}_r{rep}.cm"
-                path = os.path.join(args.out, filename)
-                write_cm(path, nodes, group, args.payload_bytes)
-                manifest_lines.append(f"{nodes} {g} {rep} {path}")
+                for payload in payload_list:
+                    if multi_mtu:
+                        filename = (f"bcast_n{nodes}_g{g}_r{rep}"
+                                    f"_m{payload}.cm")
+                    else:
+                        filename = f"bcast_n{nodes}_g{g}_r{rep}.cm"
+                    path = os.path.join(args.out, filename)
+                    write_cm(path, nodes, group, payload)
+                    if multi_mtu:
+                        manifest_lines.append(
+                            f"{nodes} {g} {rep} {payload} {path}")
+                    else:
+                        manifest_lines.append(
+                            f"{nodes} {g} {rep} {path}")
             print(
-                f"n={nodes} g={g}: wrote {args.reps} matrices "
-                f"(bcast_n{nodes}_g{g}_r0..{args.reps-1}.cm)"
+                f"n={nodes} g={g}: wrote {args.reps}"
+                f" × {len(payload_list)} matrices"
             )
     # so for each rep we choose_group
     #   picks g many random indicies among total_nodes many nodes essentially creating a new random
@@ -138,7 +154,10 @@ def main():
     #   the timing?
     manifest_path = os.path.join(args.out, "manifest.txt")
     with open(manifest_path, "w") as f:
-        f.write("# nodes group_size rep path\n")
+        if multi_mtu:
+            f.write("# nodes group_size rep payload_bytes path\n")
+        else:
+            f.write("# nodes group_size rep path\n")
         for line in manifest_lines:
             f.write(line + "\n")
     print(f"\nmanifest: {manifest_path}  ({len(manifest_lines)} matrices)")

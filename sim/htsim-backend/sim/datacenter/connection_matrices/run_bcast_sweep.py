@@ -37,10 +37,14 @@ BCAST_RE = re.compile(
 
 
 def read_manifest(path):
-    """Return list of (nodes, group_size, rep, cm_path).
+    """Return list of (nodes, group_size, rep, payload_bytes, cm_path).
 
-    Manifest columns: `nodes group_size rep path`. Each row is one
-    independent rep (one distinct random-group matrix).
+    Manifest columns are either:
+        nodes group_size rep path                   (4-col, single-MTU)
+        nodes group_size rep payload_bytes path     (5-col, multi-MTU)
+
+    payload_bytes is None for 4-col manifests; the runner can then
+    leave the size column empty in the output CSV.
     """
     entries = []
     with open(path) as f:
@@ -49,10 +53,16 @@ def read_manifest(path):
             if not line or line.startswith("#"):
                 continue
             parts = line.split()
-            if len(parts) < 4:
+            if len(parts) == 4:
+                nodes, group_size, rep, cm_path = parts
+                payload = None
+            elif len(parts) == 5:
+                nodes, group_size, rep, payload, cm_path = parts
+                payload = int(payload)
+            else:
                 continue
-            nodes, group_size, rep, cm_path = parts[0], parts[1], parts[2], parts[3]
-            entries.append((int(nodes), int(group_size), int(rep), cm_path))
+            entries.append((int(nodes), int(group_size), int(rep),
+                            payload, cm_path))
     return entries
 
 
@@ -177,7 +187,7 @@ def main():
     modes = (["baseline", "mcast"] if args.mode == "both"
              else [args.mode])
     rows = []
-    for (nodes, group_size, rep, cm_path) in entries:
+    for (nodes, group_size, rep, payload_bytes, cm_path) in entries:
         for mode in modes:
             hits, lc_total = run_one(
                 args.htsim, cm_path, nodes, args.seed,
@@ -190,6 +200,7 @@ def main():
                     "group_size": group_size,
                     "rep": rep,
                     "mode": mode,
+                    "payload_bytes": payload_bytes if payload_bytes is not None else "",
                     "op_id": int(h["op_id"]),
                     "root": int(h["root"]),
                     "group_idx": int(h["group"]),
