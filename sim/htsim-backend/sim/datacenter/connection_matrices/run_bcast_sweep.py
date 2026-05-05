@@ -56,7 +56,7 @@ def read_manifest(path):
     return entries
 
 
-def run_one(htsim, cm_path, nodes, seed, linkspeed, timeout_s):
+def run_one(htsim, cm_path, nodes, seed, linkspeed, timeout_s, mode):
     """Run htsim_uec once and return list of BCAST_COMPLETE matches."""
     cmd = [
         htsim,
@@ -65,6 +65,7 @@ def run_one(htsim, cm_path, nodes, seed, linkspeed, timeout_s):
         "-nodes", str(nodes),
         "-linkspeed", str(linkspeed),
         "-seed", str(seed),
+        "-bcast_mode", mode,
     ]
     try:
         proc = subprocess.run(
@@ -117,6 +118,13 @@ def main():
         default=120,
         help="Per-run timeout in seconds",
     )
+    p.add_argument(
+        "--mode",
+        choices=["baseline", "mcast", "both"],
+        default="both",
+        help="Which bcast_mode(s) to sweep. "
+             "'both' produces one CSV row per (matrix, mode).",
+    )
     p.add_argument("--out", required=True, help="Output CSV path")
     args = p.parse_args()
 
@@ -127,30 +135,35 @@ def main():
     if not entries:
         sys.exit(f"manifest empty: {args.manifest}")
 
+    modes = (["baseline", "mcast"] if args.mode == "both"
+             else [args.mode])
     rows = []
     for (nodes, group_size, rep, cm_path) in entries:
-        hits = run_one(
-            args.htsim, cm_path, nodes, args.seed, args.linkspeed, args.timeout
-        )
-        for h in hits:
-            rows.append({
-                "nodes": nodes,
-                "group_size": group_size,
-                "rep": rep,
-                "op_id": int(h["op_id"]),
-                "root": int(h["root"]),
-                "group_idx": int(h["group"]),
-                "size": int(h["size"]),
-                "legs": int(h["legs"]),
-                "start_ns": int(h["start_ns"]),
-                "complete_ns": int(h["complete_ns"]),
-                "duration_ns": int(h["duration_ns"]),
-                "matrix_path": cm_path,
-            })
-        print(
-            f"n={nodes} g={group_size} rep={rep}  "
-            f"-> {len(hits)} op(s)"
-        )
+        for mode in modes:
+            hits = run_one(
+                args.htsim, cm_path, nodes, args.seed,
+                args.linkspeed, args.timeout, mode,
+            )
+            for h in hits:
+                rows.append({
+                    "nodes": nodes,
+                    "group_size": group_size,
+                    "rep": rep,
+                    "mode": mode,
+                    "op_id": int(h["op_id"]),
+                    "root": int(h["root"]),
+                    "group_idx": int(h["group"]),
+                    "size": int(h["size"]),
+                    "legs": int(h["legs"]),
+                    "start_ns": int(h["start_ns"]),
+                    "complete_ns": int(h["complete_ns"]),
+                    "duration_ns": int(h["duration_ns"]),
+                    "matrix_path": cm_path,
+                })
+            print(
+                f"n={nodes} g={group_size} rep={rep} mode={mode}  "
+                f"-> {len(hits)} op(s)"
+            )
 
     if not rows:
         sys.exit("no results collected")
