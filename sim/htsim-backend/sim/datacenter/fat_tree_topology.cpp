@@ -8,6 +8,7 @@
 #include "main.h"
 #include "queue.h"
 #include "fat_tree_switch.h"
+#include "uec_bcast.h"  // for UecMcastSink in set_up_mcast
 #include "compositequeue.h"
 #include "aeolusqueue.h"
 #include "prioqueue.h"
@@ -593,9 +594,260 @@ void FatTreeTopology::set_params(uint32_t no_of_nodes) {
     alloc_vectors();
 }
 
+// ----------------------------------------------------------------
+// Phase-2: switch-level multicast setup
+// ----------------------------------------------------------------
+//
+// Helper: lookup a port index on a FatTreeSwitch by queue
+// pointer. The switch's _port_idx_by_queue is private but T6
+// added an inc_fib() accessor; for port lookups we use the
+// public Switch::getPort interface combined with a small
+// search. Used by build_mcast_tree to translate queues to
+// port indices.
+namespace {
+int find_port_idx(FatTreeSwitch* sw, BaseQueue* q) {
+    for (unsigned int i = 0; i < sw->portCount(); ++i) {
+        if (sw->getPort(i) == q) return static_cast<int>(i);
+    }
+    return -1;
+}
+}  // namespace
+
+std::vector<FatTreeTopology::McastTreeNode>
+FatTreeTopology::build_mcast_tree(uint32_t group_idx) {
+    std::vector<McastTreeNode> result;
+    if (groups == nullptr || group_idx >= groups->size()) return result;
+
+    const std::vector<int32_t>& members = (*groups)[group_idx];
+    if (members.size() < 2) return result;
+
+    // Collect membership info.
+    std::set<int> member_tors;
+    std::set<int> member_pods;
+    std::map<int, std::vector<int>> hosts_per_tor;
+    for (int h : members) {
+        int tor = static_cast<int>(HOST_POD_SWITCH(h));
+        int pod = static_cast<int>(HOST_POD(h));
+        member_tors.insert(tor);
+        member_pods.insert(pod);
+        hosts_per_tor[tor].push_back(h);
+    }
+
+    // Deterministic per-pod AGG choice. Same podpos in every
+    // pod ensures the chosen AGGs share access to a common
+    // set of Cores (the AGG-Core compatibility constraint, see
+    // v4 §3.6).
+    uint32_t podpos = group_idx % agg_switches_per_pod();
+    bool multi_pod  = member_pods.size() > 1;
+    bool tor_needs_uplink = (member_tors.size() > 1) || multi_pod;
+
+    // Per-member-TOR node: host downlinks for local members,
+    // plus an uplink if the tree extends beyond this TOR.
+    for (int tor : member_tors) {
+        FatTreeSwitch* sw =
+                static_cast<FatTreeSwitch*>(switches_lp[tor]);
+        int pod = static_cast<int>(HOST_POD(hosts_per_tor[tor][0]));
+        uint32_t agg = MIN_POD_AGG_SWITCH(pod) + podpos;
+
+        McastTreeNode node;
+        node.switch_ptr = sw;
+
+        for (int h : hosts_per_tor[tor]) {
+            BaseQueue* q = queues_nlp_ns[tor][h][0];
+            int idx = find_port_idx(sw, q);
+            assert(idx >= 0);
+            node.tree_port_indices.push_back(static_cast<uint8_t>(idx));
+            node.local_member_hosts.push_back(h);
+        }
+        if (tor_needs_uplink) {
+            BaseQueue* uq = queues_nlp_nup[tor][agg][0];
+            int idx = find_port_idx(sw, uq);
+            assert(idx >= 0);
+            node.tree_port_indices.push_back(static_cast<uint8_t>(idx));
+        }
+        result.push_back(std::move(node));
+    }
+
+    // Per-pod AGG node: downlinks to member TORs in the pod,
+    // plus an uplink to the chosen Core if multi-pod.
+    uint32_t chosen_core = 0;
+    if (multi_pod && get_tiers() == 3) {
+        uint32_t uplink_bundles =
+                radix_up(AGG_TIER) / bundlesize(CORE_TIER);
+        if (uplink_bundles == 0) uplink_bundles = 1;
+        uint32_t core_offset =
+                (group_idx / agg_switches_per_pod()) % uplink_bundles;
+        chosen_core =
+                core_offset * agg_switches_per_pod() + podpos;
+    }
+
+    for (int pod : member_pods) {
+        uint32_t agg = MIN_POD_AGG_SWITCH(pod) + podpos;
+        FatTreeSwitch* sw =
+                static_cast<FatTreeSwitch*>(switches_up[agg]);
+        McastTreeNode node;
+        node.switch_ptr = sw;
+
+        for (int tor : member_tors) {
+            if (static_cast<int>(HOST_POD(hosts_per_tor[tor][0])) != pod)
+                continue;
+            BaseQueue* q = queues_nup_nlp[agg][tor][0];
+            int idx = find_port_idx(sw, q);
+            assert(idx >= 0);
+            node.tree_port_indices.push_back(static_cast<uint8_t>(idx));
+        }
+        if (multi_pod && get_tiers() == 3) {
+            BaseQueue* uq = queues_nup_nc[agg][chosen_core][0];
+            int idx = find_port_idx(sw, uq);
+            assert(idx >= 0);
+            node.tree_port_indices.push_back(static_cast<uint8_t>(idx));
+        }
+        result.push_back(std::move(node));
+    }
+
+    // Per-Core node: downlinks to chosen AGG in each member pod.
+    if (multi_pod && get_tiers() == 3) {
+        FatTreeSwitch* sw =
+                static_cast<FatTreeSwitch*>(switches_c[chosen_core]);
+        McastTreeNode node;
+        node.switch_ptr = sw;
+        for (int pod : member_pods) {
+            uint32_t agg = MIN_POD_AGG_SWITCH(pod) + podpos;
+            BaseQueue* q = queues_nc_nup[chosen_core][agg][0];
+            int idx = find_port_idx(sw, q);
+            assert(idx >= 0);
+            node.tree_port_indices.push_back(static_cast<uint8_t>(idx));
+        }
+        result.push_back(std::move(node));
+    }
+
+    return result;
+}
+
+// ----------------------------------------------------------------
+// Helper: populate _port_pipe_by_queue on every FatTreeSwitch by
+// walking the topology's queue/pipe arrays. Called once at the
+// start of set_up_mcast, before build_egress_route_cache.
+// ----------------------------------------------------------------
+static void populate_port_pipes(FatTreeTopology* top) {
+    // TOR ports: host downlinks (queues_nlp_ns / pipes_nlp_ns)
+    // + uplinks (queues_nlp_nup / pipes_nlp_nup).
+    for (uint32_t tor = 0; tor < top->switches_lp.size(); ++tor) {
+        auto* sw = static_cast<FatTreeSwitch*>(top->switches_lp[tor]);
+        if (!sw) continue;
+        if (tor < top->queues_nlp_ns.size()) {
+            for (uint32_t srv = 0; srv < top->queues_nlp_ns[tor].size(); ++srv) {
+                for (uint32_t b = 0;
+                     b < top->queues_nlp_ns[tor][srv].size(); ++b) {
+                    BaseQueue* q = top->queues_nlp_ns[tor][srv][b];
+                    Pipe* p = top->pipes_nlp_ns[tor][srv][b];
+                    if (q && p) sw->register_port_pipe(q, p);
+                }
+            }
+        }
+        if (tor < top->queues_nlp_nup.size()) {
+            for (uint32_t agg = 0; agg < top->queues_nlp_nup[tor].size(); ++agg) {
+                for (uint32_t b = 0;
+                     b < top->queues_nlp_nup[tor][agg].size(); ++b) {
+                    BaseQueue* q = top->queues_nlp_nup[tor][agg][b];
+                    Pipe* p = top->pipes_nlp_nup[tor][agg][b];
+                    if (q && p) sw->register_port_pipe(q, p);
+                }
+            }
+        }
+    }
+    // AGG ports: downlinks to TORs (queues_nup_nlp) + uplinks to
+    // Cores (queues_nup_nc) when 3-tier.
+    for (uint32_t agg = 0; agg < top->switches_up.size(); ++agg) {
+        auto* sw = static_cast<FatTreeSwitch*>(top->switches_up[agg]);
+        if (!sw) continue;
+        if (agg < top->queues_nup_nlp.size()) {
+            for (uint32_t tor = 0; tor < top->queues_nup_nlp[agg].size(); ++tor) {
+                for (uint32_t b = 0;
+                     b < top->queues_nup_nlp[agg][tor].size(); ++b) {
+                    BaseQueue* q = top->queues_nup_nlp[agg][tor][b];
+                    Pipe* p = top->pipes_nup_nlp[agg][tor][b];
+                    if (q && p) sw->register_port_pipe(q, p);
+                }
+            }
+        }
+        if (top->get_tiers() == 3 && agg < top->queues_nup_nc.size()) {
+            for (uint32_t core = 0; core < top->queues_nup_nc[agg].size(); ++core) {
+                for (uint32_t b = 0;
+                     b < top->queues_nup_nc[agg][core].size(); ++b) {
+                    BaseQueue* q = top->queues_nup_nc[agg][core][b];
+                    Pipe* p = top->pipes_nup_nc[agg][core][b];
+                    if (q && p) sw->register_port_pipe(q, p);
+                }
+            }
+        }
+    }
+    // CORE ports: downlinks to AGGs (queues_nc_nup).
+    if (top->get_tiers() == 3) {
+        for (uint32_t core = 0; core < top->switches_c.size(); ++core) {
+            auto* sw = static_cast<FatTreeSwitch*>(top->switches_c[core]);
+            if (!sw) continue;
+            if (core < top->queues_nc_nup.size()) {
+                for (uint32_t agg = 0; agg < top->queues_nc_nup[core].size(); ++agg) {
+                    for (uint32_t b = 0;
+                         b < top->queues_nc_nup[core][agg].size(); ++b) {
+                        BaseQueue* q = top->queues_nc_nup[core][agg][b];
+                        Pipe* p = top->pipes_nc_nup[core][agg][b];
+                        if (q && p) sw->register_port_pipe(q, p);
+                    }
+                }
+            }
+        }
+    }
+}
+
 void FatTreeTopology::set_up_mcast() {
-    if (groups != nullptr) {
-        printf("set_up_mcast unimplemented\n");
+    if (groups == nullptr) return;
+
+    // Step 1: register every (queue, pipe) pair so each switch
+    // can build its egress-route cache.
+    populate_port_pipes(this);
+    for (auto* sw : switches_lp) {
+        if (sw) static_cast<FatTreeSwitch*>(sw)->build_egress_route_cache();
+    }
+    for (auto* sw : switches_up) {
+        if (sw) static_cast<FatTreeSwitch*>(sw)->build_egress_route_cache();
+    }
+    if (get_tiers() == 3) {
+        for (auto* sw : switches_c) {
+            if (sw) static_cast<FatTreeSwitch*>(sw)->build_egress_route_cache();
+        }
+    }
+
+    // Step 2: per-group tree construction + FIB install.
+    for (uint32_t g = 0; g < groups->size(); ++g) {
+        const auto& members = (*groups)[g];
+        if (members.size() < 2) continue;
+
+        auto tree = build_mcast_tree(g);
+        for (auto& node : tree) {
+            INCFibEntry* entry = new INCFibEntry();
+            for (uint8_t idx : node.tree_port_indices) {
+                entry->tree_port_mask.set(idx);
+            }
+            static_cast<FatTreeSwitch*>(node.switch_ptr)
+                    ->inc_fib()->install(g, entry);
+        }
+
+        // Step 3: per-member sink creation + leaf-TOR
+        // registration. Imports UecMcastSink lazily to avoid
+        // circular header dependency between fat_tree_topology
+        // and uec_bcast.
+        // (Forward-declared as `class UecMcastSink;` in the
+        // topology header.)
+        for (int h : members) {
+            UecMcastSink* sink = new UecMcastSink(h, g);
+            int tor_id = static_cast<int>(HOST_POD_SWITCH(h));
+            FatTreeSwitch* tor =
+                    static_cast<FatTreeSwitch*>(switches_lp[tor_id]);
+            tor->addMcastPort(h, g, sink);
+            _mcast_sinks[std::make_pair(h, g)] = sink;
+        }
     }
 }
 

@@ -85,6 +85,32 @@ public:
 
     void set_up_mcast();
 
+    // Phase-2 multicast tree construction. Returns a list of
+    // per-switch nodes (one per switch on the tree for this
+    // group), each carrying the tree-member port indices at
+    // that switch and (for leaf TORs) the local member host
+    // addresses. The algorithm is deterministic and
+    // root-agnostic --- it reads only group_idx and topology,
+    // never the source --- so the same FIB serves every
+    // potential root via RPF dispatch.
+    //
+    // See AA-plan-Phase2/v4.md §3.6 and §5 step T8.
+    struct McastTreeNode {
+        Switch*               switch_ptr;
+        std::vector<uint8_t>  tree_port_indices;
+        std::vector<int>      local_member_hosts;  // leaf-TOR only
+    };
+    std::vector<McastTreeNode> build_mcast_tree(uint32_t group_idx);
+
+    // Per-(host, group) UecMcastSink registry, populated by
+    // set_up_mcast and consumed by the driver. Key = (host, group).
+    std::map<std::pair<int, uint32_t>, class UecMcastSink*>
+            _mcast_sinks;
+    class UecMcastSink* get_mcast_sink(int host, uint32_t group_id) {
+        auto it = _mcast_sinks.find({host, group_id});
+        return it == _mcast_sinks.end() ? nullptr : it->second;
+    }
+
     static void set_tiers(uint32_t tiers) {_tiers = tiers;}
     static uint32_t get_tiers() {return _tiers;}
     static void set_latencies(simtime_picosec src_lp, simtime_picosec lp_up, simtime_picosec up_cs,

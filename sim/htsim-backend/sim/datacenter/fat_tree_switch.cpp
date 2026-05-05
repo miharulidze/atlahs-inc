@@ -47,8 +47,19 @@ void FatTreeSwitch::build_egress_route_cache() {
     for (size_t i = 0; i < _ports.size(); ++i) {
         BaseQueue* q = _ports[i];
         auto pit = _port_pipe_by_queue.find(q);
-        assert(pit != _port_pipe_by_queue.end() &&
-               "register_port_pipe must be called for every port");
+        if (pit == _port_pipe_by_queue.end()) {
+            // No pipe registered for this port (e.g. host-side
+            // queue whose pipe lives elsewhere). Leave the cached
+            // route nullptr; multicast will never use this port
+            // for fanout (only registered tree-member ports
+            // appear in tree_port_mask).
+            _port_egress_routes[i] = nullptr;
+            continue;
+        }
+        if (q->getRemoteEndpoint() == nullptr) {
+            _port_egress_routes[i] = nullptr;
+            continue;
+        }
         Route* r = new Route();
         r->push_back(q);
         r->push_back(pit->second);
