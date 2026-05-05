@@ -11,6 +11,7 @@
 
 class FatTreeTopology;
 class UecMcastSink;
+class UecMcastPacket;
 class Pipe;
 
 /*
@@ -141,6 +142,15 @@ public:
     const std::vector<Route*>& port_egress_routes() const {
         return _port_egress_routes;
     }
+
+    // Phase-2 multicast dispatch: RPF fanout. Reads
+    // pkt.group_id(), looks up the INCFibEntry, computes
+    // egress_mask = tree_port_mask & ~(1 << ingress), spawns
+    // one replica per set bit via UecMcastPacket::newpkt_replica
+    // (using cached egress routes or leaf-route per port), and
+    // sends each replica through _pipe to absorb switch
+    // latency. Original packet is freed for symmetric handling.
+    void handle_mcast(UecMcastPacket& pkt);
 
     uint32_t adaptive_route(vector<FibEntry*>* ecmp_set, int8_t (*cmp)(FibEntry*,FibEntry*));
     uint32_t replace_worst_choice(vector<FibEntry*>* ecmp_set, int8_t (*cmp)(FibEntry*,FibEntry*),uint32_t my_choice);

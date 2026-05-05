@@ -95,6 +95,75 @@ uint8_t FatTreeSwitch::identify_ingress_port_idx(Packet& pkt) const {
     return 0;
 }
 
+// Phase-2 multicast fanout dispatch. RPF: replicate the arriving
+// packet to every tree-member port except the ingress.
+//
+//   1. Look up the INCFibEntry by pkt.group_id().
+//   2. On the first call (ingress phase), identify the ingress
+//      port idx, compute egress_mask = tree_port_mask &
+//      ~(1 << ingress), and for each set bit spawn a replica:
+//        - leaf-TOR member port: route ends at UecMcastSink
+//          via leaf_route_for(port_idx).
+//        - interior tree port: route is the cached
+//          {queue, pipe, remote} for that port.
+//      Each replica is registered in _packets before being
+//      sent through _pipe so the pipe-callback path classifies
+//      it as egress (not a fresh ingress).
+//      The original packet is freed; replicas are independent
+//      allocations. Symmetric handling avoids the asymmetric
+//      _direction-state hazard called out in v4 §3.4.
+//   3. On the second call (egress, _packets contains the
+//      replica's pointer), erase the marker and sendOn().
+void FatTreeSwitch::handle_mcast(UecMcastPacket& pkt) {
+    if (_packets.find(&pkt) == _packets.end()) {
+        // Ingress: lookup, RPF dispatch, fanout.
+        INCFibEntry* entry = _inc_fib->lookup(pkt.group_id());
+        if (!entry) {
+            // No state for this group at this switch. Drop
+            // (set_up_mcast did not install — likely a bug;
+            // assert in debug, drop in release).
+            assert(0 && "handle_mcast: no INCFibEntry for group");
+            pkt.free();
+            return;
+        }
+
+        uint8_t ingress_idx = identify_ingress_port_idx(pkt);
+        std::bitset<128> egress_mask = entry->tree_port_mask;
+        egress_mask.reset(ingress_idx);
+
+        for (size_t i = 0; i < 128; ++i) {
+            if (!egress_mask.test(i)) continue;
+            uint8_t port_idx = static_cast<uint8_t>(i);
+
+            // Pick the route: leaf-TOR member port → end at sink;
+            // interior port → cached {queue, pipe, remote}.
+            Route* leaf = entry->leaf_route_for(port_idx);
+            const Route& route = leaf ? *leaf
+                                      : *_port_egress_routes[i];
+
+            UecMcastPacket* r = UecMcastPacket::newpkt_replica(
+                    pkt, route, port_idx);
+            // Reset direction so the next switch can re-establish
+            // it via Packet::set_direction without triggering the
+            // DOWN→UP assert. (Qualifying NONE because
+            // FatTreeSwitch::NONE shadows the global
+            // packet_direction::NONE in this scope.)
+            r->set_direction(::NONE);
+            // Mark the replica as already-ingressed so the
+            // pipe-callback hits the egress branch (sendOn).
+            _packets[r] = true;
+            _pipe->receivePacket(*r);
+        }
+        // Symmetric: free the original; replicas are fresh.
+        pkt.free();
+    } else {
+        // Egress callback from _pipe: send the replica on its
+        // attached route.
+        _packets.erase(&pkt);
+        pkt.sendOn();
+    }
+}
+
 void FatTreeSwitch::addMcastPort(int host_addr, uint32_t group_id,
                                  UecMcastSink* sink) {
     INCFibEntry* entry = _inc_fib->lookup(group_id);
@@ -130,7 +199,7 @@ void FatTreeSwitch::receivePacket(Packet& pkt){
     if (pkt.type()==ETH_PAUSE){
         EthPausePacket* p = (EthPausePacket*)&pkt;
         //I must be in lossless mode!
-        //find the egress queue that should process this, and pass it over for processing. 
+        //find the egress queue that should process this, and pass it over for processing.
         for (size_t i = 0;i < _ports.size();i++){
             LosslessQueue* q = (LosslessQueue*)_ports.at(i);
             if (q->getRemoteEndpoint() && ((Switch*)q->getRemoteEndpoint())->getID() == p->senderID()){
@@ -138,7 +207,15 @@ void FatTreeSwitch::receivePacket(Packet& pkt){
                 break;
             }
         }
-        
+
+        return;
+    }
+
+    // Phase-2 multicast dispatch: a UEC_MCAST packet bypasses the
+    // unicast _fib pipeline and is routed via the per-switch
+    // INCFib by group_id. Mirrors the ETH_PAUSE arm above.
+    if (pkt.type() == UEC_MCAST) {
+        handle_mcast(static_cast<UecMcastPacket&>(pkt));
         return;
     }
 
