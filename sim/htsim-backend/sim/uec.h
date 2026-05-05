@@ -41,6 +41,7 @@ class SentPacket {
 class UecSrc : public PacketSink, public EventSource, public TriggerTarget {
     friend class UecSink;
     friend class UecBcastSrc;
+    friend class UecBcastSrcMcast;
 
   public:
     UecSrc(UecLogger *logger, TrafficLogger *pktLogger, EventList &eventList,
@@ -500,6 +501,7 @@ class UecSrc : public PacketSink, public EventSource, public TriggerTarget {
 class UecSink : public PacketSink, public DataReceiver {
     friend class UecSrc;
     friend class UecBcastSink;
+    friend class UecMcastSink;
 
   public:
     UecSink();

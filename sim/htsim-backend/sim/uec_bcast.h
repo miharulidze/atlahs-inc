@@ -4,6 +4,8 @@
 
 #include "trigger.h"
 #include "uec.h"
+#include "uec_collective.h"
+#include "uecpacket.h"
 
 // ACK-less broadcast leg source.
 //
@@ -98,6 +100,48 @@ class TriggerRelay : public TriggerTarget {
 // divide by 1000. start_ns is the .cm-scheduled start time for the
 // operation (crt->start); complete_ns is the sim time at which the
 // last sink's byte was received.
+// Phase-two multicast broadcast source. Emits exactly one
+// UecMcastPacket per operation, addressed by group_id (no
+// per-leg unicast destination). All bookkeeping --- ACK-less
+// emission, single-shot guard, completion-trigger plumbing ---
+// is inherited from UecCollectiveSrc; this subclass only fixes
+// the packet type and seeds the path-hash from the source host
+// id.
+class UecBcastSrcMcast : public UecCollectiveSrc {
+  public:
+    UecBcastSrcMcast(UecLogger *logger, TrafficLogger *pktLogger,
+                     EventList &eventList, uint64_t rtt, uint64_t bdp,
+                     uint64_t queueDrainTime, int hops)
+            : UecCollectiveSrc(logger, pktLogger, eventList, rtt, bdp,
+                               queueDrainTime, hops) {}
+
+  protected:
+    void emit_once() override;
+};
+
+// Phase-two multicast sink. One persistent instance per (host,
+// group), created by FatTreeTopology::set_up_mcast. Per-operation
+// expectations are added incrementally via register_op() from
+// the driver. Accepts UEC_MCAST packets only; counts bytes by
+// data_packet_size().
+class UecMcastSink : public UecCollectiveSink {
+  public:
+    UecMcastSink(int host, uint32_t group)
+            : UecCollectiveSink(host, group) {
+        _nodename = "uec_mcast_sink";
+    }
+
+  protected:
+    bool accepts_packet_type(const Packet &pkt) const override {
+        return pkt.type() == UEC_MCAST;
+    }
+    void process_body(Packet &pkt, OpState &s) override {
+        UecMcastPacket &mp = static_cast<UecMcastPacket &>(pkt);
+        s.bytes_received += mp.data_packet_size();
+        mp.free();
+    }
+};
+
 class BcastCompletionRecorder : public TriggerTarget {
   public:
     BcastCompletionRecorder(EventList &eventlist, flowid_t op_id, int root,

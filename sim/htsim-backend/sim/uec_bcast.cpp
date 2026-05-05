@@ -47,6 +47,31 @@ void UecBcastSrc::bcast_send_once() {
     }
 }
 
+// Phase-two multicast source: emit exactly one UecMcastPacket per
+// operation, seeded with group_id and the source host's address
+// for the path-derived _pathid running hash.
+void UecBcastSrcMcast::emit_once() {
+    if (_sent_once) return;
+    mark_sent();
+    while (_highest_sent < _flow_size) {
+        UecMcastPacket *p = UecMcastPacket::newpkt(
+                _flow, *_route,
+                /*seqno=*/_highest_sent + 1, /*size=*/_mss,
+                _group_id,
+                /*source_host_id=*/static_cast<uint32_t>(this->from),
+                /*op_seq_id=*/0);
+        p->from = this->from;
+        p->to   = this->to;
+        p->tag  = this->tag;
+        p->timestamp_sent = eventlist().now();
+
+        _highest_sent  += _mss;
+        _packets_sent  += _mss;
+
+        p->sendOn();
+    }
+}
+
 UecBcastSink::UecBcastSink() : UecSink() { _nodename = "uec_bcast_sink"; }
 
 // No ACK, no NACK. Count bytes; fire _end_trigger exactly once when the
