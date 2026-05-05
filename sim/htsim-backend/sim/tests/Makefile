@@ -74,3 +74,6 @@ htsim_uec_mcast_packet_test:	main_uec_mcast_packet_test.o $(LIBDEP)
 
 htsim_inc_fib_test:	main_inc_fib_test.o $(LIBDEP)
 	$(CC) $(CFLAGS) main_inc_fib_test.o -o htsim_inc_fib_test $(LIBS)
+
+htsim_uec_collective_test:	main_uec_collective_test.o $(LIBDEP)
+	$(CC) $(CFLAGS) main_uec_collective_test.o -o htsim_uec_collective_test $(LIBS)
