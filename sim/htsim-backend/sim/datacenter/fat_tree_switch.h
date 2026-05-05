@@ -4,9 +4,14 @@
 
 #include "switch.h"
 #include "callback_pipe.h"
+#include "inc_fib.h"
+#include <cstdint>
 #include <unordered_map>
+#include <vector>
 
 class FatTreeTopology;
+class UecMcastSink;
+class Pipe;
 
 /*
  * Copyright (C) 2013-2014 Universita` di Pisa. All rights reserved.
@@ -96,10 +101,46 @@ public:
     };
 
     FatTreeSwitch(EventList& eventlist, string s, switch_type t, uint32_t id,simtime_picosec switch_delay, FatTreeTopology* ft);
-  
+    ~FatTreeSwitch();
+
     virtual void receivePacket(Packet& pkt);
     virtual Route* getNextHop(Packet& pkt, BaseQueue* ingress_port);
     virtual uint32_t getType() {return _type;}
+
+    // Phase-2: addPort override that maintains the
+    // _port_idx_by_queue map so identify_ingress_port_idx() can
+    // resolve the upstream queue → port index in O(1).
+    int addPort(BaseQueue* q) override;
+
+    // Phase-2: register the pipe paired with a queue at this
+    // switch. FatTreeTopology::set_up_mcast() walks the topology
+    // arrays and calls this for every (queue, pipe) pair so
+    // build_egress_route_cache() can produce 3-element routes.
+    void register_port_pipe(BaseQueue* q, Pipe* p);
+
+    // Phase-2: build the per-port pre-baked egress route cache
+    // {queue, pipe, remote_endpoint}. Called once after the
+    // topology has finished wiring queues+pipes.
+    void build_egress_route_cache();
+
+    // Phase-2: identify the ingress port index for an incoming
+    // multicast packet by walking back to the upstream queue
+    // (route element nexthop-2) and matching against this
+    // switch's _ports.
+    uint8_t identify_ingress_port_idx(Packet& pkt) const;
+
+    // Phase-2: register a (host, group, sink) leaf-TOR member
+    // with this switch's INC FIB. Builds a 3-element route to the
+    // sink via the host downlink and stashes it in the group's
+    // INCFibEntry.leaf_routes. The bit for the host downlink port
+    // must already be set in tree_port_mask (asserts on mismatch).
+    void addMcastPort(int host_addr, uint32_t group_id,
+                      UecMcastSink* sink);
+
+    INCFib* inc_fib() const { return _inc_fib; }
+    const std::vector<Route*>& port_egress_routes() const {
+        return _port_egress_routes;
+    }
 
     uint32_t adaptive_route(vector<FibEntry*>* ecmp_set, int8_t (*cmp)(FibEntry*,FibEntry*));
     uint32_t replace_worst_choice(vector<FibEntry*>* ecmp_set, int8_t (*cmp)(FibEntry*,FibEntry*),uint32_t my_choice);
@@ -146,6 +187,18 @@ private:
     simtime_picosec _last_choice;
 
     unordered_map<Packet*,bool> _packets;
+
+    // Phase-2 INC state. _inc_fib holds per-group INCFibEntry
+    // instances (multicast trees that traverse this switch).
+    // _port_idx_by_queue / _port_pipe_by_queue cache topology
+    // pairings for fast ingress identification and egress route
+    // construction. _port_egress_routes is the pre-baked
+    // {queue, pipe, remote_endpoint} per port, populated lazily
+    // by build_egress_route_cache().
+    INCFib* _inc_fib;
+    std::unordered_map<BaseQueue*, uint8_t> _port_idx_by_queue;
+    std::unordered_map<BaseQueue*, Pipe*>   _port_pipe_by_queue;
+    std::vector<Route*>                     _port_egress_routes;
 };
 
 #endif

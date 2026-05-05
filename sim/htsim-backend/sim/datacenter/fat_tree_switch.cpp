@@ -5,6 +5,9 @@
 #include "callback_pipe.h"
 #include "queue_lossless.h"
 #include "queue_lossless_output.h"
+#include "uec_bcast.h"
+
+#include <cassert>
 
 unordered_map<BaseQueue*,uint32_t> FatTreeSwitch::_port_flow_counts;
 
@@ -18,6 +21,109 @@ FatTreeSwitch::FatTreeSwitch(EventList& eventlist, string s, switch_type t, uint
     _hash_salt = random();
     _last_choice = eventlist.now();
     _fib = new RouteTable();
+    _inc_fib = new INCFib();
+}
+
+FatTreeSwitch::~FatTreeSwitch() {
+    delete _inc_fib;
+    // _port_egress_routes own their Route* contents; release them.
+    for (Route* r : _port_egress_routes) delete r;
+}
+
+// addPort override --- maintain the port-index reverse map so
+// identify_ingress_port_idx() is O(1).
+int FatTreeSwitch::addPort(BaseQueue* q) {
+    int idx = Switch::addPort(q);
+    _port_idx_by_queue[q] = static_cast<uint8_t>(idx);
+    return idx;
+}
+
+void FatTreeSwitch::register_port_pipe(BaseQueue* q, Pipe* p) {
+    _port_pipe_by_queue[q] = p;
+}
+
+void FatTreeSwitch::build_egress_route_cache() {
+    _port_egress_routes.resize(_ports.size());
+    for (size_t i = 0; i < _ports.size(); ++i) {
+        BaseQueue* q = _ports[i];
+        auto pit = _port_pipe_by_queue.find(q);
+        assert(pit != _port_pipe_by_queue.end() &&
+               "register_port_pipe must be called for every port");
+        Route* r = new Route();
+        r->push_back(q);
+        r->push_back(pit->second);
+        r->push_back(q->getRemoteEndpoint());
+        // Invariant: every cached egress route is a 3-element
+        // {queue, pipe, remote} chain. Asserting at install time
+        // guards against the Fraschetti-PR-#1 failure mode where
+        // multicast routes contained only the next-hop sink and
+        // per-hop latency was understated.
+        assert(r->size() == 3 &&
+               "egress route must be {queue, pipe, remote_endpoint}");
+        _port_egress_routes[i] = r;
+    }
+}
+
+uint8_t FatTreeSwitch::identify_ingress_port_idx(Packet& pkt) const {
+    // The packet's _route was last set by the upstream switch
+    // (or by the source for a host-originated packet). _nexthop
+    // has been advanced past the route element that just
+    // delivered us; nexthop-2 is the upstream queue, nexthop-1
+    // is the upstream pipe (or this switch in the source-side
+    // route shape).
+    assert(pkt.nexthop() >= 2 &&
+           "ingress identification requires _route walked >=2 hops");
+    PacketSink* upstream = pkt.route()->at(pkt.nexthop() - 2);
+    BaseQueue* uq = dynamic_cast<BaseQueue*>(upstream);
+    PacketSink* upstream_owner = nullptr;
+    if (uq) {
+        // The upstream queue belongs to the previous switch (or to
+        // a host's NIC). Its remote endpoint is *us*.
+        upstream_owner = uq->getRemoteEndpoint();
+    }
+    // Match against this switch's egress queues: the queue facing
+    // the upstream entity has its own remote endpoint matching
+    // either `upstream` (a queue) or `upstream_owner` (the
+    // upstream's remote = us, paired with our remote = them).
+    for (size_t i = 0; i < _ports.size(); ++i) {
+        PacketSink* mine_remote = _ports[i]->getRemoteEndpoint();
+        if (mine_remote == upstream || mine_remote == upstream_owner) {
+            return static_cast<uint8_t>(i);
+        }
+    }
+    assert(0 && "identify_ingress_port_idx: no port matched");
+    return 0;
+}
+
+void FatTreeSwitch::addMcastPort(int host_addr, uint32_t group_id,
+                                 UecMcastSink* sink) {
+    INCFibEntry* entry = _inc_fib->lookup(group_id);
+    assert(entry &&
+           "INCFib entry must be installed before addMcastPort");
+
+    // Find this leaf-TOR's host downlink queue for host_addr,
+    // then look up its port index.
+    BaseQueue* host_q = _ft->queues_nlp_ns
+                                [_ft->HOST_POD_SWITCH(host_addr)]
+                                [host_addr][0];
+    auto it = _port_idx_by_queue.find(host_q);
+    assert(it != _port_idx_by_queue.end() &&
+           "host downlink queue not found in this switch's port map");
+    uint8_t port_idx = it->second;
+
+    Route* r = new Route();
+    r->push_back(host_q);
+    r->push_back(_ft->pipes_nlp_ns
+                         [_ft->HOST_POD_SWITCH(host_addr)]
+                         [host_addr][0]);
+    r->push_back(sink);
+    entry->leaf_routes.emplace_back(port_idx, r);
+
+    // The bit for this port must already be set: tree
+    // construction ran first (build_mcast_tree) and set the
+    // mask; addMcastPort only attaches the sink-route to it.
+    assert(entry->tree_port_mask.test(port_idx) &&
+           "addMcastPort: tree_port_mask bit not set for this port");
 }
 
 void FatTreeSwitch::receivePacket(Packet& pkt){
