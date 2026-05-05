@@ -15,11 +15,12 @@
 class FibEntry{
 public:
     FibEntry(Route* outport, uint32_t cost, packet_direction direction){ _out = outport; _cost = cost;_direction = direction;}
+    virtual ~FibEntry() = default;
 
-    Route* getEgressPort(){return _out;}
+    virtual Route* getEgressPort(){return _out;}
     uint32_t getCost(){return _cost;}
     packet_direction getDirection(){return _direction;}
-    
+
 protected:
     Route* _out;
     uint32_t _cost;
