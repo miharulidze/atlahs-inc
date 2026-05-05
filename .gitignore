@@ -1,5 +1,8 @@
 .vscode/
 sim/htsim-backend/sim/tests/*
+# allow test source files (the rule above ignores build artefacts)
+!sim/htsim-backend/sim/tests/main_*.cpp
+!sim/htsim-backend/sim/tests/*.py
 *.bin
 *.tmp
 idmap.txt

@@ -68,3 +68,6 @@ clean:
 
 .cpp.o:
 	source='$<' object='$@' libtool=no depfile='$(DEPDIR)/$*.Po' tmpdepfile='$(DEPDIR)/$*.TPo' $(CXXDEPMODE) $(depcomp) $(CC) $(CFLAGS) $(INCLUDE) -Wuninitialized  -c -o $@ `test -f $< || echo '$(srcdir)/'`$<
+
+htsim_uec_mcast_packet_test:	main_uec_mcast_packet_test.o $(LIBDEP)
+	$(CC) $(CFLAGS) main_uec_mcast_packet_test.o -o htsim_uec_mcast_packet_test $(LIBS)

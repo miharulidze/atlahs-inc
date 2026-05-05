@@ -207,4 +207,101 @@ class UecNack : public Packet {
     static PacketDB<UecNack> _packetdb;
 };
 
+// UecMcastPacket --- first-class multicast packet for the phase-two
+// switch-level INC mechanism. Peer of UecPacket / UecAck / UecNack
+// (not a subclass). Carries an explicit group identifier so the
+// per-switch INC FIB can route by group_id rather than by _dst.
+//
+// _pathid is derived deterministically from (group_id, source_host,
+// egress-port sequence) via a running hash so that packets that
+// traverse identical physical paths --- across different multicast
+// operations --- receive identical _pathid values. See AA-plan-Phase2/
+// v4.md §3.2.1 for the rationale.
+class UecMcastPacket : public Packet {
+  public:
+    typedef uint64_t seq_t;
+
+    // Phase-2 fields. _op_seq_id is reserved for phase-3 aggregation
+    // and stays zero in phase 2.
+    seq_t    _seqno;
+    uint32_t _group_id;
+    uint32_t _op_seq_id;
+
+    // Header overhead (matches UecPacket convention). On-wire size of
+    // a data packet is `data_size + acksize` so queue serialisation
+    // latency accounts for the header.
+    const static int acksize = 64;
+
+    // Path-hash mixing constants. Knuth's golden-ratio multiplicative
+    // for the seed; standard small-prime chaining for hop updates.
+    static constexpr uint32_t PATHID_SEED_MIX = 2654435761u;
+    static constexpr uint32_t PATHID_HOP_MIX  = 31u;
+
+    UecMcastPacket() : Packet() {}
+
+    // Source-side factory: seeded path-hash from group_id and the
+    // emitting host's address.
+    inline static UecMcastPacket *newpkt(PacketFlow &flow,
+                                         const Route &route,
+                                         seq_t seqno, int size,
+                                         uint32_t group_id,
+                                         uint32_t source_host_id,
+                                         uint32_t op_seq_id = 0) {
+        UecMcastPacket *p = _packetdb.allocPacket();
+        // Wire size = data + header overhead. _id is the last data
+        // byte (independent of header), matching UecPacket.
+        p->set_route(flow, route, size + acksize, seqno + size - 1);
+        p->_type = UEC_MCAST;
+        p->_is_header = false;
+        p->_bounced = false;
+        p->_seqno = seqno;
+        p->_group_id = group_id;
+        p->_op_seq_id = op_seq_id;
+        p->_pathid = (group_id ^ source_host_id) * PATHID_SEED_MIX;
+        p->_direction = NONE;
+        // _dst left at default; group_id drives FIB lookup.
+        return p;
+    }
+
+    // Switch-side factory: spawn a replica for fanout. Inherits the
+    // source's group/op identity and extends the path-hash with the
+    // chosen egress port index. Same physical path -> same _pathid
+    // across operations.
+    inline static UecMcastPacket *newpkt_replica(UecMcastPacket &source,
+                                                 const Route &branch_route,
+                                                 uint8_t egress_port_idx) {
+        UecMcastPacket *p = _packetdb.allocPacket();
+        // Replica inherits source's wire size (already includes header
+        // overhead via the source-side factory).
+        p->set_route(source.flow(), branch_route,
+                     source.size(), source.id());
+        p->_type = UEC_MCAST;
+        p->_is_header = false;
+        p->_bounced = false;
+        p->_seqno = source._seqno;
+        p->_group_id = source._group_id;
+        p->_op_seq_id = source._op_seq_id;
+        p->_pathid = source._pathid * PATHID_HOP_MIX
+                     + static_cast<uint32_t>(egress_port_idx) + 1u;
+        p->_direction = NONE;
+        p->from = source.from;
+        p->to   = source.to;
+        p->tag  = source.tag;
+        return p;
+    }
+
+    void free() { _packetdb.freePacket(this); }
+    virtual ~UecMcastPacket() {}
+
+    inline uint32_t group_id()  const { return _group_id; }
+    inline seq_t    seqno()     const { return _seqno; }
+    inline uint32_t op_seq_id() const { return _op_seq_id; }
+
+    virtual int data_packet_size() const { return _size; }
+    virtual PktPriority priority() const { return Packet::PRIO_LO; }
+
+  protected:
+    static PacketDB<UecMcastPacket> _packetdb;
+};
+
 #endif
