@@ -5,7 +5,6 @@
 #include "trigger.h"
 #include "uec.h"
 #include "uec_collective.h"
-#include "uecpacket.h"
 
 // ACK-less broadcast leg source.
 //
@@ -122,8 +121,8 @@ class UecBcastSrcMcast : public UecCollectiveSrc {
 // Phase-two multicast sink. One persistent instance per (host,
 // group), created by FatTreeTopology::set_up_mcast. Per-operation
 // expectations are added incrementally via register_op() from
-// the driver. Accepts UEC_MCAST packets only; counts bytes by
-// data_packet_size().
+// the driver. Accepts UEC_MCAST packets only; counts bytes via
+// Packet::size() (the on-wire packet size).
 class UecMcastSink : public UecCollectiveSink {
   public:
     UecMcastSink(int host, uint32_t group)
@@ -136,9 +135,8 @@ class UecMcastSink : public UecCollectiveSink {
         return pkt.type() == UEC_MCAST;
     }
     void process_body(Packet &pkt, OpState &s) override {
-        UecMcastPacket &mp = static_cast<UecMcastPacket &>(pkt);
-        s.bytes_received += mp.data_packet_size();
-        mp.free();
+        s.bytes_received += pkt.size();
+        pkt.free();
     }
 };
 

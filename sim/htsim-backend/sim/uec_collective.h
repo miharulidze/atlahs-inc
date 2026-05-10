@@ -115,8 +115,7 @@ class UecCollectiveSink : public UecSink {
     virtual bool accepts_packet_type(const Packet &pkt) const = 0;
 
     // Subclass: update s.bytes_received from the packet body and
-    // call pkt.free(). For aggregating sinks (phase 3) this is also
-    // where partial-reduction values are combined.
+    // call pkt.free().
     virtual void process_body(Packet &pkt, OpState &s) = 0;
 
     int      _host_addr;

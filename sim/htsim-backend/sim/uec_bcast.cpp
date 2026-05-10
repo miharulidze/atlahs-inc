@@ -92,10 +92,8 @@ void UecBcastSink::receivePacket(Packet &pkt) {
         return;
     }
 
-    UecPacket *p = dynamic_cast<UecPacket *>(&pkt);
-    int size = p->data_packet_size();
-    _bytes_received += size;
-    p->free();
+    _bytes_received += pkt.size();
+    pkt.free();
 
     if (!_completed && _bytes_received >= _expected_bytes) {
         _completed = true;

@@ -46,9 +46,8 @@ class StubSink : public UecCollectiveSink {
         return pkt.type() == UEC_MCAST;
     }
     void process_body(Packet &pkt, OpState &s) override {
-        UecMcastPacket &mp = static_cast<UecMcastPacket &>(pkt);
-        s.bytes_received += mp.data_packet_size();
-        mp.free();
+        s.bytes_received += pkt.size();
+        pkt.free();
     }
 };
 
