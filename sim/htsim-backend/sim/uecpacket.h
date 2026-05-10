@@ -297,7 +297,6 @@ class UecMcastPacket : public Packet {
     inline seq_t    seqno()     const { return _seqno; }
     inline uint32_t op_seq_id() const { return _op_seq_id; }
 
-    virtual int data_packet_size() const { return _size; }
     virtual PktPriority priority() const { return Packet::PRIO_LO; }
 
   protected:
