@@ -16,20 +16,17 @@
 // See AA-plan-Phase2/v4.md §3.3 for the design rationale and
 // §10 for the phase-3 forward-compatibility argument.
 
-#include "routetable.h"
+#include "route.h"
 
 #include <bitset>
-#include <cassert>
 #include <cstdint>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
-class INCFibEntry : public FibEntry {
+class INCFibEntry {
   public:
-    INCFibEntry()
-            : FibEntry(/*out=*/nullptr, /*cost=*/0,
-                       /*direction=*/NONE) {}
+    INCFibEntry() = default;
 
     // Multicast tree at this switch. Bit i set ↔ Switch::_ports[i]
     // is in this group's tree. Width 128 covers htsim's per-switch
@@ -53,15 +50,6 @@ class INCFibEntry : public FibEntry {
     // a plain int with -1 sentinel works the same and avoids
     // forcing C++17 into headers that include this one.
     int root_port_idx_or_neg1 = -1;
-
-    // Defensive override: legacy ECMP-traversing code paths must
-    // never reach an INCFibEntry. If they do, fail loudly at the
-    // misuse site instead of silently misrouting.
-    Route *getEgressPort() override {
-        assert(0 && "INCFibEntry has fanout/aggregation semantics; "
-                    "use tree_port_mask + Switch::_ports");
-        return nullptr;
-    }
 
     // Look up the leaf-TOR member route for a given port index, or
     // nullptr if the port is interior at this switch. O(N) over a
