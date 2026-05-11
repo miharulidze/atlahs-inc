@@ -143,6 +143,14 @@ public:
         return _port_egress_routes;
     }
 
+    // O(1) reverse lookup of a port index from its queue. Returns
+    // -1 if the queue is not one of this switch's ports.
+    int port_idx_for(BaseQueue* q) const {
+        auto it = _port_idx_by_queue.find(q);
+        return it == _port_idx_by_queue.end()
+                ? -1 : static_cast<int>(it->second);
+    }
+
     // Phase-2 multicast dispatch: RPF fanout. Reads
     // pkt.group_id(), looks up the INCFibEntry, computes
     // egress_mask = tree_port_mask & ~(1 << ingress), spawns

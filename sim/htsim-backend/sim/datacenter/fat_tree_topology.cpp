@@ -597,22 +597,6 @@ void FatTreeTopology::set_params(uint32_t no_of_nodes) {
 // ----------------------------------------------------------------
 // Phase-2: switch-level multicast setup
 // ----------------------------------------------------------------
-//
-// Helper: lookup a port index on a FatTreeSwitch by queue
-// pointer. The switch's _port_idx_by_queue is private but T6
-// added an inc_fib() accessor; for port lookups we use the
-// public Switch::getPort interface combined with a small
-// search. Used by build_mcast_tree to translate queues to
-// port indices.
-namespace {
-int find_port_idx(FatTreeSwitch* sw, BaseQueue* q) {
-    for (unsigned int i = 0; i < sw->portCount(); ++i) {
-        if (sw->getPort(i) == q) return static_cast<int>(i);
-    }
-    return -1;
-}
-}  // namespace
-
 std::vector<FatTreeTopology::McastTreeNode>
 FatTreeTopology::build_mcast_tree(uint32_t group_idx,
                                   uint32_t assignment_idx) {
@@ -657,14 +641,14 @@ FatTreeTopology::build_mcast_tree(uint32_t group_idx,
 
         for (int h : hosts_per_tor[tor]) {
             BaseQueue* q = queues_nlp_ns[tor][h][0];
-            int idx = find_port_idx(sw, q);
+            int idx = sw->port_idx_for(q);
             assert(idx >= 0);
             node.tree_port_indices.push_back(static_cast<uint8_t>(idx));
             node.local_member_hosts.push_back(h);
         }
         if (tor_needs_uplink) {
             BaseQueue* uq = queues_nlp_nup[tor][agg][0];
-            int idx = find_port_idx(sw, uq);
+            int idx = sw->port_idx_for(uq);
             assert(idx >= 0);
             node.tree_port_indices.push_back(static_cast<uint8_t>(idx));
         }
@@ -695,13 +679,13 @@ FatTreeTopology::build_mcast_tree(uint32_t group_idx,
             if (static_cast<int>(HOST_POD(hosts_per_tor[tor][0])) != pod)
                 continue;
             BaseQueue* q = queues_nup_nlp[agg][tor][0];
-            int idx = find_port_idx(sw, q);
+            int idx = sw->port_idx_for(q);
             assert(idx >= 0);
             node.tree_port_indices.push_back(static_cast<uint8_t>(idx));
         }
         if (multi_pod && get_tiers() == 3) {
             BaseQueue* uq = queues_nup_nc[agg][chosen_core][0];
-            int idx = find_port_idx(sw, uq);
+            int idx = sw->port_idx_for(uq);
             assert(idx >= 0);
             node.tree_port_indices.push_back(static_cast<uint8_t>(idx));
         }
@@ -717,7 +701,7 @@ FatTreeTopology::build_mcast_tree(uint32_t group_idx,
         for (int pod : member_pods) {
             uint32_t agg = MIN_POD_AGG_SWITCH(pod) + podpos;
             BaseQueue* q = queues_nc_nup[chosen_core][agg][0];
-            int idx = find_port_idx(sw, q);
+            int idx = sw->port_idx_for(q);
             assert(idx >= 0);
             node.tree_port_indices.push_back(static_cast<uint8_t>(idx));
         }
