@@ -113,16 +113,14 @@ public:
     // resolve the upstream queue → port index in O(1).
     int addPort(BaseQueue* q) override;
 
-    // Phase-2: register the pipe paired with a queue at this
-    // switch. FatTreeTopology::set_up_mcast() walks the topology
-    // arrays and calls this for every (queue, pipe) pair so
-    // build_egress_route_cache() can produce 3-element routes.
-    void register_port_pipe(BaseQueue* q, Pipe* p);
-
     // Phase-2: build the per-port pre-baked egress route cache
     // {queue, pipe, remote_endpoint}. Called once after the
-    // topology has finished wiring queues+pipes.
-    void build_egress_route_cache();
+    // topology has finished wiring queues+pipes. The caller
+    // (FatTreeTopology::set_up_mcast) builds a queue→pipe index
+    // from the topology arrays and passes it in by const-ref;
+    // the map is setup-time-only and not retained.
+    void build_egress_route_cache(
+            const std::unordered_map<BaseQueue*, Pipe*>& q2p);
 
     // Phase-2: identify the ingress port index for an incoming
     // multicast packet by walking back to the upstream queue
@@ -208,14 +206,14 @@ private:
 
     // Phase-2 INC state. _inc_fib holds per-group INCFibEntry
     // instances (multicast trees that traverse this switch).
-    // _port_idx_by_queue / _port_pipe_by_queue cache topology
-    // pairings for fast ingress identification and egress route
-    // construction. _port_egress_routes is the pre-baked
-    // {queue, pipe, remote_endpoint} per port, populated lazily
-    // by build_egress_route_cache().
+    // _port_idx_by_queue caches the inverse of Switch::_ports for
+    // fast ingress identification. _port_egress_routes is the
+    // pre-baked {queue, pipe, remote_endpoint} per port, populated
+    // by build_egress_route_cache(). The queue→pipe index needed
+    // to build that cache is owned by FatTreeTopology::set_up_mcast
+    // (setup-time-only) and passed in by const-ref; no member.
     INCFib* _inc_fib;
     std::unordered_map<BaseQueue*, uint8_t> _port_idx_by_queue;
-    std::unordered_map<BaseQueue*, Pipe*>   _port_pipe_by_queue;
     std::vector<Route*>                     _port_egress_routes;
 };
 

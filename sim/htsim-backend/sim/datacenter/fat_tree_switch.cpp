@@ -25,6 +25,7 @@ FatTreeSwitch::FatTreeSwitch(EventList& eventlist, string s, switch_type t, uint
 }
 
 FatTreeSwitch::~FatTreeSwitch() {
+    delete _fib;
     delete _inc_fib;
     // _port_egress_routes own their Route* contents; release them.
     for (Route* r : _port_egress_routes) delete r;
@@ -49,16 +50,13 @@ int FatTreeSwitch::addPort(BaseQueue* q) {
     return idx;
 }
 
-void FatTreeSwitch::register_port_pipe(BaseQueue* q, Pipe* p) {
-    _port_pipe_by_queue[q] = p;
-}
-
-void FatTreeSwitch::build_egress_route_cache() {
+void FatTreeSwitch::build_egress_route_cache(
+        const std::unordered_map<BaseQueue*, Pipe*>& q2p) {
     _port_egress_routes.resize(_ports.size());
     for (size_t i = 0; i < _ports.size(); ++i) {
         BaseQueue* q = _ports[i];
-        auto pit = _port_pipe_by_queue.find(q);
-        if (pit == _port_pipe_by_queue.end()) {
+        auto pit = q2p.find(q);
+        if (pit == q2p.end()) {
             // No pipe registered for this port (e.g. host-side
             // queue whose pipe lives elsewhere). Leave the cached
             // route nullptr; multicast will never use this port

@@ -712,23 +712,24 @@ FatTreeTopology::build_mcast_tree(uint32_t group_idx,
 }
 
 // ----------------------------------------------------------------
-// Helper: populate _port_pipe_by_queue on every FatTreeSwitch by
-// walking the topology's queue/pipe arrays. Called once at the
-// start of set_up_mcast, before build_egress_route_cache.
+// Helper: build a one-shot queue→pipe index by walking the
+// topology's queue/pipe arrays. Consumed exclusively by
+// build_egress_route_cache in set_up_mcast and discarded at end of
+// scope; no per-switch member.
 // ----------------------------------------------------------------
-static void populate_port_pipes(FatTreeTopology* top) {
+static std::unordered_map<BaseQueue*, Pipe*>
+build_queue_pipe_map(FatTreeTopology* top) {
+    std::unordered_map<BaseQueue*, Pipe*> q2p;
     // TOR ports: host downlinks (queues_nlp_ns / pipes_nlp_ns)
     // + uplinks (queues_nlp_nup / pipes_nlp_nup).
     for (uint32_t tor = 0; tor < top->switches_lp.size(); ++tor) {
-        auto* sw = static_cast<FatTreeSwitch*>(top->switches_lp[tor]);
-        if (!sw) continue;
         if (tor < top->queues_nlp_ns.size()) {
             for (uint32_t srv = 0; srv < top->queues_nlp_ns[tor].size(); ++srv) {
                 for (uint32_t b = 0;
                      b < top->queues_nlp_ns[tor][srv].size(); ++b) {
                     BaseQueue* q = top->queues_nlp_ns[tor][srv][b];
                     Pipe* p = top->pipes_nlp_ns[tor][srv][b];
-                    if (q && p) sw->register_port_pipe(q, p);
+                    if (q && p) q2p[q] = p;
                 }
             }
         }
@@ -738,7 +739,7 @@ static void populate_port_pipes(FatTreeTopology* top) {
                      b < top->queues_nlp_nup[tor][agg].size(); ++b) {
                     BaseQueue* q = top->queues_nlp_nup[tor][agg][b];
                     Pipe* p = top->pipes_nlp_nup[tor][agg][b];
-                    if (q && p) sw->register_port_pipe(q, p);
+                    if (q && p) q2p[q] = p;
                 }
             }
         }
@@ -746,15 +747,13 @@ static void populate_port_pipes(FatTreeTopology* top) {
     // AGG ports: downlinks to TORs (queues_nup_nlp) + uplinks to
     // Cores (queues_nup_nc) when 3-tier.
     for (uint32_t agg = 0; agg < top->switches_up.size(); ++agg) {
-        auto* sw = static_cast<FatTreeSwitch*>(top->switches_up[agg]);
-        if (!sw) continue;
         if (agg < top->queues_nup_nlp.size()) {
             for (uint32_t tor = 0; tor < top->queues_nup_nlp[agg].size(); ++tor) {
                 for (uint32_t b = 0;
                      b < top->queues_nup_nlp[agg][tor].size(); ++b) {
                     BaseQueue* q = top->queues_nup_nlp[agg][tor][b];
                     Pipe* p = top->pipes_nup_nlp[agg][tor][b];
-                    if (q && p) sw->register_port_pipe(q, p);
+                    if (q && p) q2p[q] = p;
                 }
             }
         }
@@ -764,7 +763,7 @@ static void populate_port_pipes(FatTreeTopology* top) {
                      b < top->queues_nup_nc[agg][core].size(); ++b) {
                     BaseQueue* q = top->queues_nup_nc[agg][core][b];
                     Pipe* p = top->pipes_nup_nc[agg][core][b];
-                    if (q && p) sw->register_port_pipe(q, p);
+                    if (q && p) q2p[q] = p;
                 }
             }
         }
@@ -772,37 +771,38 @@ static void populate_port_pipes(FatTreeTopology* top) {
     // CORE ports: downlinks to AGGs (queues_nc_nup).
     if (top->get_tiers() == 3) {
         for (uint32_t core = 0; core < top->switches_c.size(); ++core) {
-            auto* sw = static_cast<FatTreeSwitch*>(top->switches_c[core]);
-            if (!sw) continue;
             if (core < top->queues_nc_nup.size()) {
                 for (uint32_t agg = 0; agg < top->queues_nc_nup[core].size(); ++agg) {
                     for (uint32_t b = 0;
                          b < top->queues_nc_nup[core][agg].size(); ++b) {
                         BaseQueue* q = top->queues_nc_nup[core][agg][b];
                         Pipe* p = top->pipes_nc_nup[core][agg][b];
-                        if (q && p) sw->register_port_pipe(q, p);
+                        if (q && p) q2p[q] = p;
                     }
                 }
             }
         }
     }
+    return q2p;
 }
 
 void FatTreeTopology::set_up_mcast() {
     if (groups == nullptr) return;
 
-    // Step 1: register every (queue, pipe) pair so each switch
-    // can build its egress-route cache.
-    populate_port_pipes(this);
+    // Step 1: build a setup-time queue→pipe index from the
+    // topology arrays, hand it to each switch's egress-route
+    // cache builder. The map is local; it goes out of scope at
+    // the end of this function.
+    auto q2p = build_queue_pipe_map(this);
     for (auto* sw : switches_lp) {
-        if (sw) static_cast<FatTreeSwitch*>(sw)->build_egress_route_cache();
+        if (sw) static_cast<FatTreeSwitch*>(sw)->build_egress_route_cache(q2p);
     }
     for (auto* sw : switches_up) {
-        if (sw) static_cast<FatTreeSwitch*>(sw)->build_egress_route_cache();
+        if (sw) static_cast<FatTreeSwitch*>(sw)->build_egress_route_cache(q2p);
     }
     if (get_tiers() == 3) {
         for (auto* sw : switches_c) {
-            if (sw) static_cast<FatTreeSwitch*>(sw)->build_egress_route_cache();
+            if (sw) static_cast<FatTreeSwitch*>(sw)->build_egress_route_cache(q2p);
         }
     }
 
