@@ -905,7 +905,7 @@ int main(int argc, char **argv) {
                 // -----------------------------------------------------
                 if (bcast_mode == BCAST_MCAST) {
                     flowid_t op_flow_id = crt->flowid
-                            ? crt->flowid : ++next_bcast_leg_flow_id;
+                            ? crt->flowid : ++next_bcast_leg_flow_id; // name is misleading since each "leg" has the same id in mcast
 
                     // Register per-op expectations on each member's
                     // persistent (host, group) sink.
@@ -928,7 +928,7 @@ int main(int argc, char **argv) {
                     UecBcastSrcMcast *bs = new UecBcastSrcMcast(
                             NULL, NULL, eventlist,
                             base_rtt_max_hops, bdp_local, 100, 6);
-                    bs->setNumberEntropies(256);
+                    bs->setNumberEntropies(256);    // not relevant for this src type
                     bs->set_group_id(static_cast<uint32_t>(dest));
                     bs->set_flowid(op_flow_id);
                     if (crt->size > 0) bs->setFlowSize(crt->size);
@@ -957,16 +957,7 @@ int main(int argc, char **argv) {
                     bs->from = root;
                     bs->to   = -1;     // multicast: no single dst
                     bs->set_paths(number_entropies);
-                    // routeback / dummy_sink: ack-less, never used,
-                    // but UecSrc::connect → UecSink::connect both
-                    // require non-null routes for the configured
-                    // ECMP_FIB strategies. Empty routes satisfy the
-                    // assertion; no return traffic will ever walk
-                    // them under (A2) ack-less broadcast.
-                    static UecSink dummy_mcast_sink;
-                    Route *routeback = new Route();
-                    bs->connect(srctotor, routeback,
-                                dummy_mcast_sink, crt->start);
+                    bs->connect_collective(srctotor, crt->start);
 
                     continue;
                 }

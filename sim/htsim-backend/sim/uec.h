@@ -42,6 +42,7 @@ class UecSrc : public PacketSink, public EventSource, public TriggerTarget {
     friend class UecSink;
     friend class UecBcastSrc;
     friend class UecBcastSrcMcast;
+    friend class UecCollectiveSrc;
 
   public:
     UecSrc(UecLogger *logger, TrafficLogger *pktLogger, EventList &eventList,

@@ -41,6 +41,20 @@ class UecCollectiveSrc : public UecSrc {
     void set_group_id(uint32_t g) { _group_id = g; }
     uint32_t group_id() const { return _group_id; }
 
+    // Ack-less wiring for collective sources: stores the forward route,
+    // names the flow, and schedules emission at starttime. No sink, no
+    // routeback --- collective sources never receive return traffic.
+    void connect_collective(Route *routeout, simtime_picosec starttime) {
+        if (_route_strategy == SINGLE_PATH || _route_strategy == ECMP_FIB ||
+            _route_strategy == ECMP_FIB_ECN || _route_strategy == REACTIVE_ECN) {
+            assert(routeout);
+            _route = routeout;
+        }
+        _flow.set_id(get_id());
+        _flow._name = _name;
+        eventlist().sourceIsPending(*this, starttime);
+    }
+
   protected:
     // Subclass: allocate one operation-specific packet, populate
     // metadata, and send. Must check _sent_once and call mark_sent()
