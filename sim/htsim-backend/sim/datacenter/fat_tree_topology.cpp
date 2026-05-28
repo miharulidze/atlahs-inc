@@ -606,14 +606,19 @@ FatTreeTopology::build_mcast_tree(uint32_t group_idx,
     const std::vector<int32_t>& members = (*groups)[group_idx];
     if (members.size() < 2) return result;
 
-    // Collect membership info.
+    // Collect membership info. tors_per_pod groups member TORs by
+    // their pod so the AGG-node loop can iterate its pod's TORs
+    // directly instead of filter-scanning member_tors.
     std::set<int> member_tors;
     std::set<int> member_pods;
     std::map<int, std::vector<int>> hosts_per_tor;
+    std::map<int, std::vector<int>> tors_per_pod;
     for (int h : members) {
         int tor = static_cast<int>(HOST_POD_SWITCH(h));
         int pod = static_cast<int>(HOST_POD(h));
-        member_tors.insert(tor);
+        if (member_tors.insert(tor).second) {
+            tors_per_pod[pod].push_back(tor);
+        }
         member_pods.insert(pod);
         hosts_per_tor[tor].push_back(h);
     }
@@ -668,16 +673,16 @@ FatTreeTopology::build_mcast_tree(uint32_t group_idx,
                 core_offset * agg_switches_per_pod() + podpos;
     }
 
-    for (int pod : member_pods) {
+    for (const auto& kv : tors_per_pod) {
+        int pod = kv.first;
+        const std::vector<int>& tors = kv.second;
         uint32_t agg = MIN_POD_AGG_SWITCH(pod) + podpos;
         FatTreeSwitch* sw =
                 static_cast<FatTreeSwitch*>(switches_up[agg]);
         McastTreeNode node;
         node.switch_ptr = sw;
 
-        for (int tor : member_tors) {
-            if (static_cast<int>(HOST_POD(hosts_per_tor[tor][0])) != pod)
-                continue;
+        for (int tor : tors) {
             BaseQueue* q = queues_nup_nlp[agg][tor][0];
             int idx = sw->port_idx_for(q);
             assert(idx >= 0);
