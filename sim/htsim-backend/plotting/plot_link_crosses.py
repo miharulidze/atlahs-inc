@@ -39,11 +39,25 @@ def main():
     p.add_argument("--out", required=True)
     p.add_argument("--title",
                    default="Total link traversals: phase-1 vs phase-2")
+    p.add_argument(
+        "--modes",
+        nargs="+",
+        default=None,
+        help="Restrict to these bcast modes (e.g. 'baseline' or "
+             "'mcast'). Default: every mode in the CSV. Use a single "
+             "mode for a standalone per-phase footprint figure.",
+    )
     args = p.parse_args()
 
     buckets = load(args.csv)
     if not buckets:
         sys.exit(f"no link_crosses rows in {args.csv}")
+
+    if args.modes:
+        keep = set(args.modes)
+        buckets = {k: v for k, v in buckets.items() if k[2] in keep}
+        if not buckets:
+            sys.exit(f"no link_crosses rows for modes {sorted(keep)}")
 
     fig, ax = plt.subplots(figsize=(8, 5))
     mode_style = {"baseline": "-", "mcast": "--"}

@@ -87,6 +87,22 @@ def main():
              "is only visible at small |G|) easier to read.",
     )
     p.add_argument(
+        "--modes",
+        nargs="+",
+        default=None,
+        help="Restrict the plot to these bcast modes (e.g. "
+             "'baseline', 'mcast', or both). Default: every mode "
+             "present in the CSV. Use a single mode to reproduce a "
+             "phase-1-style standalone figure.",
+    )
+    p.add_argument(
+        "--median-only",
+        action="store_true",
+        help="Plot median lines only, with no min/max band or error "
+             "bars. Intended for the overlay comparison figures "
+             "(e.g. baseline vs mcast) where spread is not the focus.",
+    )
+    p.add_argument(
         "--theory-tser-ns",
         type=float,
         default=168.96,
@@ -122,6 +138,12 @@ def main():
     buckets = load_results(args.csv)
     if not buckets:
         sys.exit(f"no rows in {args.csv}")
+
+    if args.modes:
+        keep = set(args.modes)
+        buckets = {k: v for k, v in buckets.items() if k[2] in keep}
+        if not buckets:
+            sys.exit(f"no rows for modes {sorted(keep)} in {args.csv}")
 
     # Organise by (topology size, mode) so we get one line per
     # (fat-tree, mode) pair. Phase-1 CSVs (no mode column) end up
@@ -166,7 +188,18 @@ def main():
         maxs = [max(d) for _, d in series]
         ls = mode_style.get(mode, "-")
         label_suffix = "" if mode == "baseline" else f" [{mode}]"
-        if args.mmm:
+        if args.median_only:
+            ax.plot(
+                xs,
+                medians,
+                marker="o",
+                markersize=5,
+                linewidth=1.5,
+                linestyle=ls,
+                label=f"{nodes}-host fat-tree{label_suffix}",
+                zorder=3,
+            )
+        elif args.mmm:
             line, = ax.plot(
                 xs,
                 medians,
