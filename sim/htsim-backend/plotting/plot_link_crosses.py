@@ -99,16 +99,12 @@ def main():
         if args.mmm:
             mins = [min(d) for _, d in series]
             maxs = [max(d) for _, d in series]
-            line, = ax.plot(xs, medians, marker="o", markersize=5,
-                            linewidth=1.5, linestyle=ls, zorder=3,
-                            label=f"{nodes}-host fat-tree{suffix}")
-            color = line.get_color()
-            ax.fill_between(xs, mins, maxs, color=color, alpha=0.22,
-                            edgecolor="none", zorder=1)
-            ax.plot(xs, mins, color=color, linestyle=":",
-                    linewidth=0.9, alpha=0.7, zorder=2)
-            ax.plot(xs, maxs, color=color, linestyle=":",
-                    linewidth=0.9, alpha=0.7, zorder=2)
+            lower = [m - lo for m, lo in zip(medians, mins)]
+            upper = [hi - m for m, hi in zip(medians, maxs)]
+            ax.errorbar(xs, medians, yerr=[lower, upper], marker="o",
+                        capsize=3, markersize=5, linestyle=ls,
+                        linewidth=1.3, alpha=0.85,
+                        label=f"{nodes}-host fat-tree{suffix}")
         else:
             ax.plot(xs, medians, marker="o", markersize=5,
                     linewidth=1.4, linestyle=ls,
