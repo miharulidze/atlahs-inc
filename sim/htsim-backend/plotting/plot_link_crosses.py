@@ -47,6 +47,23 @@ def main():
              "'mcast'). Default: every mode in the CSV. Use a single "
              "mode for a standalone per-phase footprint figure.",
     )
+    p.add_argument(
+        "--nodes",
+        nargs="+",
+        type=int,
+        default=None,
+        help="Restrict to these topology sizes (e.g. 1024). Default: "
+             "every size in the CSV. Use a single size for an overlay "
+             "comparison figure where the topologies behave alike.",
+    )
+    p.add_argument(
+        "--mmm",
+        action="store_true",
+        help="Render min/max as a translucent band per series with "
+             "the median as a solid line on top, instead of a bare "
+             "median line. Use for standalone per-phase figures where "
+             "the footprint genuinely varies with the group layout.",
+    )
     args = p.parse_args()
 
     buckets = load(args.csv)
@@ -58,6 +75,12 @@ def main():
         buckets = {k: v for k, v in buckets.items() if k[2] in keep}
         if not buckets:
             sys.exit(f"no link_crosses rows for modes {sorted(keep)}")
+
+    if args.nodes:
+        keepn = set(args.nodes)
+        buckets = {k: v for k, v in buckets.items() if k[0] in keepn}
+        if not buckets:
+            sys.exit(f"no link_crosses rows for nodes {sorted(keepn)}")
 
     fig, ax = plt.subplots(figsize=(8, 5))
     mode_style = {"baseline": "-", "mcast": "--"}
@@ -73,9 +96,23 @@ def main():
         medians = [sorted(d)[len(d) // 2] for _, d in series]
         ls = mode_style.get(mode, "-")
         suffix = "" if mode == "baseline" else " [mcast]"
-        ax.plot(xs, medians, marker="o", markersize=5,
-                linewidth=1.4, linestyle=ls,
-                label=f"{nodes}-host fat-tree{suffix}")
+        if args.mmm:
+            mins = [min(d) for _, d in series]
+            maxs = [max(d) for _, d in series]
+            line, = ax.plot(xs, medians, marker="o", markersize=5,
+                            linewidth=1.5, linestyle=ls, zorder=3,
+                            label=f"{nodes}-host fat-tree{suffix}")
+            color = line.get_color()
+            ax.fill_between(xs, mins, maxs, color=color, alpha=0.22,
+                            edgecolor="none", zorder=1)
+            ax.plot(xs, mins, color=color, linestyle=":",
+                    linewidth=0.9, alpha=0.7, zorder=2)
+            ax.plot(xs, maxs, color=color, linestyle=":",
+                    linewidth=0.9, alpha=0.7, zorder=2)
+        else:
+            ax.plot(xs, medians, marker="o", markersize=5,
+                    linewidth=1.4, linestyle=ls,
+                    label=f"{nodes}-host fat-tree{suffix}")
 
     ax.set_xscale("log")
     ax.set_yscale("log")

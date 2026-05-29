@@ -96,6 +96,15 @@ def main():
              "phase-1-style standalone figure.",
     )
     p.add_argument(
+        "--nodes",
+        nargs="+",
+        type=int,
+        default=None,
+        help="Restrict the plot to these topology sizes (e.g. 1024). "
+             "Default: every size present in the CSV. Use a single "
+             "size for an overlay where the topologies behave alike.",
+    )
+    p.add_argument(
         "--median-only",
         action="store_true",
         help="Plot median lines only, with no min/max band or error "
@@ -144,6 +153,12 @@ def main():
         buckets = {k: v for k, v in buckets.items() if k[2] in keep}
         if not buckets:
             sys.exit(f"no rows for modes {sorted(keep)} in {args.csv}")
+
+    if args.nodes:
+        keepn = set(args.nodes)
+        buckets = {k: v for k, v in buckets.items() if k[0] in keepn}
+        if not buckets:
+            sys.exit(f"no rows for nodes {sorted(keepn)} in {args.csv}")
 
     # Organise by (topology size, mode) so we get one line per
     # (fat-tree, mode) pair. Phase-1 CSVs (no mode column) end up
