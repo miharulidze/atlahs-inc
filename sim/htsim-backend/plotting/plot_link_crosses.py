@@ -129,79 +129,6 @@ def main():
         if not buckets:
             sys.exit(f"no link_crosses rows for nodes {sorted(keepn)}")
 
-    # Two-panel view: measured footprint (left) vs the occupancy model
-    # (right), instead of overlaying the model on the data.
-    if args.theory_mcast:
-        by_topo = defaultdict(list)
-        for (nodes, g, mode), lcs in buckets.items():
-            by_topo[(nodes, mode)].append((g, lcs))
-        for k in by_topo:
-            by_topo[k].sort(key=lambda t: t[0])
-        topos = sorted({n for n, _ in by_topo})
-        nt = len(topos)
-        cyc = plt.rcParams["axes.prop_cycle"].by_key()["color"]
-        tcol = {n: cyc[i % len(cyc)] for i, n in enumerate(topos)}
-        offs = {n: (1.0 + 0.04 * (i - (nt - 1) / 2)
-                    if args.offset_topologies and nt > 1 else 1.0)
-                for i, n in enumerate(topos)}
-
-        fig, (axL, axR) = plt.subplots(1, 2, figsize=(12, 5),
-                                       sharey=True)
-        # Left: measured median with min/max bars.
-        for (nodes, mode), series in sorted(by_topo.items()):
-            xs = [g * offs[nodes] for g, _ in series]
-            medians = [sorted(d)[len(d) // 2] for _, d in series]
-            lower = [med_ - min(d) for med_, (_, d) in zip(medians, series)]
-            upper = [max(d) - med_ for med_, (_, d) in zip(medians, series)]
-            axL.errorbar(xs, medians, yerr=[lower, upper], marker="o",
-                         capsize=3, markersize=5, linestyle="--",
-                         linewidth=1.3, alpha=0.85, color=tcol[nodes],
-                         label=f"{nodes}-host fat-tree")
-        # Right: occupancy model |G| + E[ToR] + E[pod].
-        for N in topos:
-            K = int(round((4 * N) ** (1.0 / 3.0)))
-            n_tor, s_tor = K * K // 2, K // 2
-            n_pod, s_pod = K, N // K
-
-            def e_occ(units, slots, G, N=N):
-                if N - slots < G:
-                    return float(units)
-                return units * (1.0 - math.comb(N - slots, G)
-                                / math.comb(N, G))
-
-            kmax = math.log2(N)
-            gvals = sorted({max(2, min(N, int(round(2.0 ** k))))
-                            for k in [1 + i * (kmax - 1) / 49
-                                      for i in range(50)]})
-            ys_m = []
-            for G in gvals:
-                e_pod = e_occ(n_pod, s_pod, G)
-                apex = e_pod if e_pod > 1.0001 else 1.0
-                ys_m.append(G + e_occ(n_tor, s_tor, G) + apex)
-            axR.plot(gvals, ys_m, color=tcol[N], linestyle="-",
-                     linewidth=1.7, alpha=0.9,
-                     label=f"{N}-host fat-tree")
-
-        for a in (axL, axR):
-            a.set_xscale("log", base=2)
-            a.set_yscale("log")
-            a.set_xlabel("Group size |G|")
-            a.grid(True, which="both", linestyle=":", linewidth=0.5,
-                   alpha=0.6)
-        axL.set_ylabel("Total directional link traversals (count)")
-        axL.set_title("Measured (median, min/max)")
-        axR.set_title(r"Model  $|G|+E[\mathrm{ToR}]+E[\mathrm{pod}]$")
-        axL.legend(fontsize=8, loc="upper left")
-        if args.title:
-            fig.suptitle(args.title)
-        fig.tight_layout()
-        os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-        for ext in ("pdf", "png"):
-            f = f"{args.out}.{ext}"
-            fig.savefig(f, dpi=150, bbox_inches="tight")
-            print(f"wrote {f}")
-        return
-
     fig, ax = plt.subplots(figsize=(8, 5))
     mode_style = {"baseline": "-", "mcast": "--"}
 
@@ -301,7 +228,7 @@ def main():
                 apex = e_pod if e_pod > 1.0001 else 1.0  # core vs agg apex
                 xs_m.append(G)
                 ys_m.append(G + e_tor + apex)
-            ax.plot(xs_m, ys_m, color="0.5", linestyle=":",
+            ax.plot(xs_m, ys_m, color="black", linestyle=":",
                     linewidth=1.3, alpha=0.85, zorder=1,
                     label=(r"model $|G|+E[\mathrm{ToR}]"
                            r"+E[\mathrm{pod}]$") if idx == 0 else None)
