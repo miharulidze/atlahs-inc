@@ -41,6 +41,14 @@ def main():
                    help="Output base name (.pdf and .png appended)")
     p.add_argument("--title",
                    default="Broadcast completion time vs message size")
+    p.add_argument(
+        "--modes",
+        nargs="+",
+        default=["baseline", "mcast"],
+        help="Which bcast modes to plot (e.g. 'baseline', 'mcast', "
+             "or both). A single mode produces a standalone per-phase "
+             "message-size figure; both produces the overlay.",
+    )
     args = p.parse_args()
 
     buckets = load(args.csv)
@@ -60,7 +68,7 @@ def main():
         # Series for this topology.
         groups = sorted({k[1] for k in buckets if k[0] == nodes})
         for g in groups:
-            for mode in ("baseline", "mcast"):
+            for mode in args.modes:
                 payloads = sorted({k[3] for k in buckets
                                    if k[0] == nodes
                                    and k[1] == g
@@ -74,12 +82,16 @@ def main():
                     durs.sort()
                     ys.append(durs[len(durs) // 2])
                 ls = "-" if mode == "baseline" else "--"
+                # When only one mode is plotted the linestyle alone is
+                # ambiguous, so drop the mode tag from the label.
+                lbl = f"|G|={g}" if len(args.modes) == 1 \
+                    else f"|G|={g} {mode}"
                 if g not in color_map:
                     color_map[g] = None  # let matplotlib pick
                 line, = ax.plot(xs, ys, marker="o", markersize=4,
                                 linewidth=1.4, linestyle=ls,
                                 color=color_map[g],
-                                label=f"|G|={g} {mode}")
+                                label=lbl)
                 color_map[g] = line.get_color()
         ax.set_xscale("log")
         ax.set_yscale("log")
