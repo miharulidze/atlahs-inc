@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Single-core backpressure illustration: force N concurrent broadcasts
-through ONE core (fixed assignment_idx via -mcast_pin_core) and show that
-the lossless (PFC) fabric carries them all with ZERO packet loss, the
-backpressure serialising them so completion grows with contention --
-whereas spreading the same N across cores keeps completion low. A lossy
-(composite) fabric is shown for contrast.
+"""Single-core backpressure sanity check: force N concurrent Allreduces
+(disjoint 4-host groups, one host per pod across pods 0-3) through ONE core
+(fixed assignment_idx via -mcast_pin_core) versus distributing them across
+cores, on the lossless fabric. Expected behaviour: pinning serialises the
+operations via PFC backpressure so completion grows ~linearly with N, while
+distributing keeps it flat -- both with ZERO packet loss. Confirms the
+lossless mechanism absorbs a hotspot by pausing, not dropping.
 
-Run from sim/htsim-backend/plotting:
+Run from sim/htsim-backend/plotting (k=12, 432-host tree):
     /usr/bin/python3 plot_backpressure.py
 """
 import os, re, subprocess, tempfile
@@ -16,20 +17,27 @@ import matplotlib.pyplot as plt
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BIN = os.path.normpath(os.path.join(HERE, "..", "sim", "datacenter", "htsim_uec"))
-NODES = 16
+NODES = 432                # k=12 fat tree: 12 pods x 36 hosts, 36 cores
+HOSTS_PER_POD = 36
 SIZE = 65536               # 64 KiB, multi-MTU -> sustained streams
-NS = [1, 2, 3, 4]
-# Disjoint groups, one host per pod -> each host is in <=1 collective, so the
-# host edges carry a single stream and the *core* is the contended resource.
-GROUPS = [[0, 4, 8, 12], [1, 5, 9, 13], [2, 6, 10, 14], [3, 7, 11, 15]]
-PFC = ["-pfc_high", "10", "-pfc_low", "5"]   # conservative -> lossless
+NS = [1, 4, 8, 12, 16, 20]
+PFC = ["-pfc_high", "4", "-pfc_low", "2"]    # conservative -> lossless (0 drops)
 DONE_RE = re.compile(r"ALLREDUCE_COMPLETE\b.*?complete_ns=(\d+)")
 DROP_RE = re.compile(r"LOSSLESS not working")
 
 
+def disjoint_group(g):
+    """g-th disjoint 4-host group, one host per pod across pods 0-3 (slot g).
+    Disjoint => each host is in exactly one collective, so the host edges
+    carry a single stream and the *core* is the contended resource. All
+    groups span the same four pods, so when pinned they share the same
+    core<->agg links (monotonic contention); 36 hosts/pod allows up to 36."""
+    return [p * HOSTS_PER_POD + g for p in (0, 1, 2, 3)]
+
+
 def run(n, queue, pin):
     cm = "Nodes %d\n" % NODES
-    for g in GROUPS[:n]:
+    for g in (disjoint_group(i) for i in range(n)):
         cm += "Grp %s\n" % " ".join(map(str, g))
     cm += "Connections %d\n" % n
     for i in range(n):
@@ -54,36 +62,33 @@ def run(n, queue, pin):
 
 def main():
     series = {
-        "lossless, pinned to 1 core": ("lossless_input", True),
-        "lossless, spread (round-robin)": ("lossless_input", False),
+        "single core (pinned)": ("lossless_input", True),
+        "distributed (across cores)": ("lossless_input", False),
     }
     results = {lab: [] for lab in series}
-    print("%-32s %-4s %-9s %-6s %s" % ("series", "N", "completes", "drops", "slowest_us"))
+    maxdrops = 0
+    print("%-28s %-4s %-9s %-6s %s" % ("series", "N", "completes", "drops", "slowest_us"))
     for lab, (queue, pin) in series.items():
         for n in NS:
             c, d, s = run(n, queue, pin)
             results[lab].append(s)
-            print("%-32s %-4d %d/%-7d %-6d %s" % (lab, n, c, n, d,
+            maxdrops = max(maxdrops, d)
+            print("%-26s %-4d %d/%-7d %-6d %s" % (lab, n, c, n, d,
                                                   ("%.2f" % s) if s else "-"))
-    # composite contrast (lossy): does it stay lossless? print only.
-    print("-- composite (lossy) reference --")
-    for n in NS:
-        c, d, s = run(n, "composite", True)
-        print("composite, pinned                N=%d completes=%d/%d drops=%d slowest_us=%s"
-              % (n, c, n, d, ("%.2f" % s) if s else "-"))
 
     fig, ax = plt.subplots(figsize=(6.4, 4.0))
-    markers = {"lossless, pinned to 1 core": "s",
-               "lossless, spread (round-robin)": "o"}
+    markers = {"single core (pinned)": "s", "distributed (across cores)": "o"}
     for lab in series:
-        ys = results[lab]
-        ax.plot(NS, ys, marker=markers[lab], linewidth=1.6, markersize=6, label=lab)
+        ax.plot(NS, results[lab], marker=markers[lab], linewidth=1.6,
+                markersize=6, label=lab)
     ax.set_xlabel("concurrent allreduces (disjoint groups, each 64 KiB)")
     ax.set_ylabel("completion time (us)")
-    ax.set_title("Single-core backpressure: lossless carries the hotspot (0 drops)")
+    ax.set_title("Lossless backpressure: one core serialises, many cores share")
+    ax.set_xticks(NS)                       # integer ticks, no fractions
+    ax.set_xlim(left=0)
     ax.grid(True, alpha=0.3)
     ax.legend()
-    ax.annotate("all lossless points: 0 packet loss",
+    ax.annotate("lossless throughout: %d packet drops" % maxdrops,
                 xy=(0.02, 0.02), xycoords="axes fraction", fontsize=8,
                 style="italic")
     fig.tight_layout()
