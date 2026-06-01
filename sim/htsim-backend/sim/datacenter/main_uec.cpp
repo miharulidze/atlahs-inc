@@ -66,6 +66,12 @@ EventList eventlist;
 enum BcastMode { BCAST_BASELINE, BCAST_MCAST };
 static BcastMode bcast_mode = BCAST_BASELINE;
 
+// Allreduce implementation selector for direct comparison:
+//   apex        = in-network apex turn-around (reduce-up, multicast-down) [default]
+//   reduce_bcast = rooted Reduce to R + phase-2 Broadcast from R, trigger-chained
+enum AllreduceMode { AR_APEX, AR_REDUCE_BCAST };
+static AllreduceMode allreduce_mode = AR_APEX;
+
 // PT6 (post-meeting): when non-null, write a tiny CSV with the
 // total link-cross count at simulation end. Set via the
 // -link_crosses_csv CLI flag.
@@ -333,6 +339,19 @@ int main(int argc, char **argv) {
                 cerr << "unknown -bcast_mode value: "
                      << argv[i + 1]
                      << " (expected baseline|mcast)" << endl;
+                exit(1);
+            }
+            i++;
+        } else if (!strcmp(argv[i], "-allreduce_mode")) {
+            // Select Allreduce implementation: apex turn-around (default) or
+            // rooted Reduce + Broadcast composition (for direct comparison).
+            if (!strcmp(argv[i + 1], "apex")) {
+                allreduce_mode = AR_APEX;
+            } else if (!strcmp(argv[i + 1], "reduce_bcast")) {
+                allreduce_mode = AR_REDUCE_BCAST;
+            } else {
+                cerr << "unknown -allreduce_mode value: " << argv[i + 1]
+                     << " (expected apex|reduce_bcast)" << endl;
                 exit(1);
             }
             i++;
@@ -910,6 +929,108 @@ int main(int argc, char **argv) {
 
                 flowid_t op_flow_id = crt->flowid
                         ? crt->flowid : ++next_bcast_leg_flow_id;
+
+                // ------------------------------------------------------
+                // Comparison variant: Allreduce = rooted Reduce to R then
+                // phase-2 Broadcast from R, trigger-chained. Reuses both
+                // primitives unchanged; the only coupling is a trigger from
+                // the reduce-at-R completion to the broadcast emission. The
+                // end-to-end time (every member has the result) is when the
+                // broadcast's last leg lands. Reported as ALLREDUCE_RB.
+                // ------------------------------------------------------
+                if (allreduce_mode == AR_REDUCE_BCAST) {
+                    int R = root_label;                   // designated root
+                    flowid_t reduce_flow = op_flow_id;
+                    flowid_t bcast_flow  = ++next_bcast_leg_flow_id;
+                    size_t leg_count = group.size() - 1;  // bcast recipients
+
+                    // Final completion: the |G|-1 non-root members receive
+                    // the broadcast (R already has the result by then).
+                    BarrierTrigger *finalBarrier = new BarrierTrigger(
+                            eventlist, ++next_bcast_barrier_id, leg_count);
+                    finalBarrier->add_target(*new ReduceCompletionRecorder(
+                            eventlist, "ALLREDUCE_RB", op_flow_id, R, dest,
+                            crt->size, group.size(), crt->start));
+                    if (crt->recv_done_trigger) {
+                        Trigger *downstream = conns->getTrigger(
+                                crt->recv_done_trigger, eventlist);
+                        finalBarrier->add_target(*new TriggerRelay(downstream));
+                    }
+
+                    // Broadcast-from-R source, fired when the reduce reaches R.
+                    UecBcastSrcMcast *bs = new UecBcastSrcMcast(
+                            NULL, NULL, eventlist,
+                            base_rtt_max_hops, bdp_local, 100, 6);
+                    bs->setNumberEntropies(256);
+                    bs->set_group_id(static_cast<uint32_t>(dest));
+                    bs->set_flowid(bcast_flow);
+                    if (crt->size > 0) bs->setFlowSize(crt->size);
+                    bs->setName("uec_arrb_bcast_" + ntoa_uec(R)
+                                + "_g" + ntoa_uec(dest));
+                    logfile.writeName(*bs);
+                    {
+                        Route *btor = new Route();
+                        uint32_t Rtor = top->HOST_POD_SWITCH(R);
+                        btor->push_back(top->queues_ns_nlp[R][Rtor][0]);
+                        btor->push_back(top->pipes_ns_nlp[R][Rtor][0]);
+                        btor->push_back(
+                              top->queues_ns_nlp[R][Rtor][0]->getRemoteEndpoint());
+                        bs->from = R; bs->to = -1;
+                        bs->set_paths(number_entropies);
+                        // TRIGGER_START => not scheduled; emits only when fired.
+                        bs->connect_collective(btor, TRIGGER_START);
+                    }
+                    // Bcast recipients (every member except R) fire finalBarrier.
+                    for (int32_t m : group) {
+                        if (m == R) continue;
+                        UecMcastSink* sink = top->get_mcast_sink(m, dest);
+                        assert(sink && "set_up_mcast did not create sink");
+                        sink->register_op(bcast_flow,
+                                          crt->size > 0 ? crt->size : 0,
+                                          finalBarrier);
+                    }
+
+                    // Reduce-at-R completion fires the broadcast.
+                    SingleShotTrigger *reduceDone = new SingleShotTrigger(
+                            eventlist, ++next_bcast_barrier_id);
+                    reduceDone->add_target(*bs);
+                    UecReduceSink *rsink = new UecReduceSink(R,
+                            static_cast<uint32_t>(dest));
+                    rsink->register_op(reduce_flow,
+                                       crt->size > 0 ? crt->size : 0, reduceDone);
+                    top->switches_lp[top->HOST_POD_SWITCH(R)]
+                            ->addHostPort(R, reduce_flow, rsink);
+
+                    // Reduce sources: every member contributes toward R.
+                    for (int32_t m : group) {
+                        UecReduceSrc *rs = new UecReduceSrc(
+                                NULL, NULL, eventlist,
+                                base_rtt_max_hops, bdp_local, 100, 6);
+                        rs->setNumberEntropies(256);
+                        rs->set_group_id(static_cast<uint32_t>(dest));
+                        rs->set_flowid(reduce_flow);
+                        rs->set_reduce_root(R);
+                        if (crt->size > 0) rs->setFlowSize(crt->size);
+                        if (crt->trigger) {
+                            Trigger *trig = conns->getTrigger(crt->trigger,
+                                                              eventlist);
+                            trig->add_target(*rs);
+                        }
+                        rs->setName("uec_arrb_red_" + ntoa_uec(m)
+                                    + "_g" + ntoa_uec(dest));
+                        logfile.writeName(*rs);
+                        Route *srctotor = new Route();
+                        uint32_t tor = top->HOST_POD_SWITCH(m);
+                        srctotor->push_back(top->queues_ns_nlp[m][tor][0]);
+                        srctotor->push_back(top->pipes_ns_nlp[m][tor][0]);
+                        srctotor->push_back(
+                              top->queues_ns_nlp[m][tor][0]->getRemoteEndpoint());
+                        rs->from = m; rs->to = -1;
+                        rs->set_paths(number_entropies);
+                        rs->connect_collective(srctotor, crt->start);
+                    }
+                    continue;
+                }
 
                 // Completion = every member receives the turned-around result.
                 BarrierTrigger *barrier = new BarrierTrigger(
