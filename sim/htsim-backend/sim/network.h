@@ -50,7 +50,7 @@ typedef enum {IP, TCP, TCPACK, TCPNACK, SWIFT, SWIFTACK, STRACK, STRACKACK,
               ROCE, ROCEACK, ROCENACK,
               HPCC, HPCCACK, HPCCNACK,
               EQDSDATA, EQDSPULL, EQDSACK, EQDSNACK, EQDSRTS, UEC, UECACK, UECNACK, UEC_DROP, UECACK_DROP,UECNACK_DROP,
-              UEC_MCAST } packet_type;
+              UEC_MCAST, UEC_REDUCE } packet_type;
 
 
 enum RouteStrategy

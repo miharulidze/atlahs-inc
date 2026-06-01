@@ -311,4 +311,86 @@ class UecMcastPacket : public Packet {
     static PacketDB<UecMcastPacket> _packetdb;
 };
 
+// Phase-3 in-network aggregation packet. Peer of UecMcastPacket
+// (UEC_REDUCE), carrying the same group/op identity. Flows UP the
+// tree from each group member; switches hold per-operation until all
+// children have contributed (fan-in), then emit one combined packet
+// toward the root via newpkt_combined(). No replica factory --- reduce
+// never fans out (the Allreduce turn-around at the apex hands off to
+// UecMcastPacket instead). Timing/bytes-only: no payload is carried or
+// combined; the wire size of the one upward packet equals a single
+// contribution's size.
+class UecReducePacket : public Packet {
+  public:
+    typedef uint64_t seq_t;
+
+    seq_t    _seqno;
+    uint32_t _group_id;
+    uint32_t _op_seq_id;
+
+    const static int acksize = 64;
+    static constexpr uint32_t PATHID_SEED_MIX = 2654435761u;
+    static constexpr uint32_t PATHID_HOP_MIX  = 31u;
+
+    UecReducePacket() : Packet() {}
+
+    // Source-side factory: one member's contribution heading toward the
+    // root. Mirrors UecMcastPacket::newpkt.
+    inline static UecReducePacket *newpkt(PacketFlow &flow,
+                                          const Route &route,
+                                          seq_t seqno, int size,
+                                          uint32_t group_id,
+                                          uint32_t source_host_id,
+                                          uint32_t op_seq_id = 0) {
+        UecReducePacket *p = _packetdb.allocPacket();
+        p->set_route(flow, route, size + acksize, seqno + size - 1);
+        p->_type = UEC_REDUCE;
+        p->_is_header = false;
+        p->_bounced = false;
+        p->_seqno = seqno;
+        p->_group_id = group_id;
+        p->_op_seq_id = op_seq_id;
+        p->_pathid = (group_id ^ source_host_id) * PATHID_SEED_MIX;
+        p->_direction = NONE;
+        p->_ingressqueue = NULL;
+        return p;
+    }
+
+    // Switch-side factory: the single combined packet emitted toward the
+    // root once a switch's fan-in barrier is satisfied. Inherits the
+    // group/op identity of the contributions it stands for; takes the
+    // cached toward-root route.
+    inline static UecReducePacket *newpkt_combined(UecReducePacket &any_child,
+                                                   const Route &toward_root) {
+        UecReducePacket *p = _packetdb.allocPacket();
+        p->set_route(any_child.flow(), toward_root,
+                     any_child.size(), any_child.id());
+        p->_type = UEC_REDUCE;
+        p->_is_header = false;
+        p->_bounced = false;
+        p->_seqno = any_child._seqno;
+        p->_group_id = any_child._group_id;
+        p->_op_seq_id = any_child._op_seq_id;
+        p->_pathid = any_child._pathid * PATHID_HOP_MIX + 1u;
+        p->_direction = NONE;
+        p->_ingressqueue = NULL;
+        p->from = any_child.from;
+        p->to   = any_child.to;
+        p->tag  = any_child.tag;
+        return p;
+    }
+
+    void free() { _packetdb.freePacket(this); }
+    virtual ~UecReducePacket() {}
+
+    inline uint32_t group_id()  const { return _group_id; }
+    inline seq_t    seqno()     const { return _seqno; }
+    inline uint32_t op_seq_id() const { return _op_seq_id; }
+
+    virtual PktPriority priority() const { return Packet::PRIO_LO; }
+
+  protected:
+    static PacketDB<UecReducePacket> _packetdb;
+};
+
 #endif

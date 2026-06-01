@@ -757,9 +757,24 @@ bool ConnectionMatrix::load(istream& file){
             c->priority = 2000000;
             c->start = NO_START;
             c->is_bcast = false;
+            c->is_reduce = false;
+            c->is_allreduce = false;
             for (size_t i = 1; i < tokens.size(); i++) {
                 if (tokens[i] == "start_bcast") {
                     c->is_bcast = true;
+                    i++;
+                    c->start = stof(tokens[i]);
+                }
+                else if (tokens[i] == "start_reduce") {
+                    // phase-3 in-network Reduce: ROOT->GRP, time follows.
+                    c->is_reduce = true;
+                    i++;
+                    c->start = stof(tokens[i]);
+                }
+                else if (tokens[i] == "start_allreduce") {
+                    // phase-3 in-network Allreduce: GRP (root index ignored,
+                    // symmetric); time follows.
+                    c->is_allreduce = true;
                     i++;
                     c->start = stof(tokens[i]);
                 }

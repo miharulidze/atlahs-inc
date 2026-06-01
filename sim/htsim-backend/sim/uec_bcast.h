@@ -85,20 +85,6 @@ class TriggerRelay : public TriggerTarget {
     Trigger *_downstream;
 };
 
-// Records collective-completion timestamps for a single broadcast
-// operation. Attached as a TriggerTarget to the operation's
-// BarrierTrigger so it fires exactly once when the last leg reports
-// last-byte-received. Emits one machine-parseable line to stdout that
-// a downstream plotting script can grep for.
-//
-// Output format (single line, space-separated key=value):
-//   BCAST_COMPLETE op_id=<id> root=<node> group=<idx> size=<bytes>
-//   legs=<|G|-1> start_ns=<t0> complete_ns=<t1> duration_ns=<dt>
-//
-// Times are in nanoseconds; sim time is internally picoseconds so we
-// divide by 1000. start_ns is the .cm-scheduled start time for the
-// operation (crt->start); complete_ns is the sim time at which the
-// last sink's byte was received.
 // Phase-two multicast broadcast source. Emits exactly one
 // UecMcastPacket per operation, addressed by group_id (no
 // per-leg unicast destination). All bookkeeping --- ACK-less
@@ -140,6 +126,87 @@ class UecMcastSink : public UecCollectiveSink {
     }
 };
 
+// Phase-three reduce source. One per group member; emits exactly one
+// UecReducePacket per operation, addressed by group_id and routed UP
+// the tree by the per-switch INCFib. The fan-in barrier and combine
+// happen in the switches (FatTreeSwitch::handle_reduce); this source
+// is just an ACK-less single-shot emitter, identical in shape to
+// UecBcastSrcMcast but with the reduce packet type and upward route.
+class UecReduceSrc : public UecCollectiveSrc {
+  public:
+    UecReduceSrc(UecLogger *logger, TrafficLogger *pktLogger,
+                 EventList &eventList, uint64_t rtt, uint64_t bdp,
+                 uint64_t queueDrainTime, int hops)
+            : UecCollectiveSrc(logger, pktLogger, eventList, rtt, bdp,
+                               queueDrainTime, hops) {}
+
+  protected:
+    void emit_once() override;
+};
+
+// Phase-three reduce sink. For a rooted Reduce there is one instance,
+// at the root host; it receives the single combined packet that the
+// fan-in tree produces and fires the completion trigger. Accepts
+// UEC_REDUCE only; counts bytes via Packet::size().
+class UecReduceSink : public UecCollectiveSink {
+  public:
+    UecReduceSink(int host, uint32_t group)
+            : UecCollectiveSink(host, group) {
+        _nodename = "uec_reduce_sink";
+    }
+
+  protected:
+    bool accepts_packet_type(const Packet &pkt) const override {
+        return pkt.type() == UEC_REDUCE;
+    }
+    void process_body(Packet &pkt, OpState &s) override {
+        s.bytes_received += pkt.size();
+        pkt.free();
+    }
+};
+
+// Records reduce/allreduce completion. Peer of BcastCompletionRecorder;
+// emits one machine-parseable line. `label` is REDUCE or ALLREDUCE so a
+// single recorder class serves both. For Reduce, fired by the root
+// sink's trigger; for Allreduce, fired by the BarrierTrigger over all
+// member mcast-sinks (every rank receives the turned-around result).
+class ReduceCompletionRecorder : public TriggerTarget {
+  public:
+    ReduceCompletionRecorder(EventList &eventlist, const char *label,
+                             flowid_t op_id, int root, int group_idx,
+                             int payload_bytes, size_t member_count,
+                             simtime_picosec scheduled_start)
+            : _eventlist(eventlist), _label(label), _op_id(op_id),
+              _root(root), _group_idx(group_idx), _size(payload_bytes),
+              _member_count(member_count), _start(scheduled_start) {}
+
+    void activate() override;
+
+  private:
+    EventList &_eventlist;
+    const char *_label;
+    flowid_t _op_id;
+    int _root;
+    int _group_idx;
+    int _size;
+    size_t _member_count;
+    simtime_picosec _start;
+};
+
+// Records collective-completion timestamps for a single broadcast
+// operation. Attached as a TriggerTarget to the operation's
+// BarrierTrigger so it fires exactly once when the last leg reports
+// last-byte-received. Emits one machine-parseable line to stdout that
+// a downstream plotting script can grep for.
+//
+// Output format (single line, space-separated key=value):
+//   BCAST_COMPLETE op_id=<id> root=<node> group=<idx> size=<bytes>
+//   legs=<|G|-1> start_ns=<t0> complete_ns=<t1> duration_ns=<dt>
+//
+// Times are in nanoseconds; sim time is internally picoseconds so we
+// divide by 1000. start_ns is the .cm-scheduled start time for the
+// operation (crt->start); complete_ns is the sim time at which the
+// last sink's byte was received.
 class BcastCompletionRecorder : public TriggerTarget {
   public:
     BcastCompletionRecorder(EventList &eventlist, flowid_t op_id, int root,

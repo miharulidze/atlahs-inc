@@ -99,6 +99,11 @@ public:
         Switch*               switch_ptr;
         std::vector<uint8_t>  tree_port_indices;
         std::vector<int>      local_member_hosts;  // leaf-TOR only
+        // Port index stepping toward the tree apex (the uplink). -1 means
+        // this node IS the apex (topmost switch with no uplink). Used by
+        // the phase-3 reduce ascent: root_port = uplink (forward up), and
+        // the apex (uplink == -1) turns the aggregate around.
+        int                   uplink_port_idx_or_neg1 = -1;
     };
     std::vector<McastTreeNode> build_mcast_tree(uint32_t group_idx,
                                                 uint32_t assignment_idx);

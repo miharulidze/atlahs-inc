@@ -101,6 +101,46 @@ void UecBcastSink::receivePacket(Packet &pkt) {
     }
 }
 
+// Phase-three reduce source: emit exactly one UecReducePacket per
+// operation, routed up the tree by group_id. Mirror of
+// UecBcastSrcMcast::emit_once with the reduce packet type.
+void UecReduceSrc::emit_once() {
+    if (_sent_once) return;
+    mark_sent();
+    while (_highest_sent < _flow_size) {
+        UecReducePacket *p = UecReducePacket::newpkt(
+                _flow, *_route,
+                /*seqno=*/_highest_sent + 1, /*size=*/_mss,
+                _group_id,
+                /*source_host_id=*/static_cast<uint32_t>(this->from),
+                /*op_seq_id=*/0);
+        p->from = this->from;
+        p->to   = this->to;
+        p->tag  = this->tag;
+        p->timestamp_sent = eventlist().now();
+
+        _highest_sent  += _mss;
+        _packets_sent  += _mss;
+
+        p->sendOn();
+    }
+}
+
+void ReduceCompletionRecorder::activate() {
+    simtime_picosec now = _eventlist.now();
+    simtime_picosec dt = (now > _start) ? (now - _start) : 0;
+    std::cout << _label << "_COMPLETE"
+              << " op_id=" << _op_id
+              << " root=" << _root
+              << " group=" << _group_idx
+              << " size=" << _size
+              << " members=" << _member_count
+              << " start_ns=" << (_start / 1000)
+              << " complete_ns=" << (now / 1000)
+              << " duration_ns=" << (dt / 1000)
+              << std::endl;
+}
+
 void BcastCompletionRecorder::activate() {
     simtime_picosec now = _eventlist.now();
     simtime_picosec dt = (now > _start) ? (now - _start) : 0;

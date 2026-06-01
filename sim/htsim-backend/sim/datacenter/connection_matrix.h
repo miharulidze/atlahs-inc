@@ -16,6 +16,8 @@
 struct connection{
     int src, dst, size;
     bool is_bcast;
+    bool is_reduce;     // phase-3: in-network Reduce (many->one root)
+    bool is_allreduce;  // phase-3: in-network Allreduce (apex turn-around)
     flowid_t flowid;
     triggerid_t send_done_trigger;
     triggerid_t recv_done_trigger;

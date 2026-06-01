@@ -70,7 +70,10 @@ public:
 
     virtual void completedService(Packet& pkt) {
         if (--_pending == 0) {
-            _iq->release_bytes(_size);
+            // _iq is null for switch-originated fanout (the Allreduce apex
+            // turn-around): there is no ingress charge to release, the credit
+            // exists only to give the egress queue a non-null prev to pair.
+            if (_iq) _iq->release_bytes(_size);
             delete this;
         }
     }

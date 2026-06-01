@@ -43,6 +43,7 @@ class UecSrc : public PacketSink, public EventSource, public TriggerTarget {
     friend class UecBcastSrc;
     friend class UecBcastSrcMcast;
     friend class UecCollectiveSrc;
+    friend class UecReduceSrc;
 
   public:
     UecSrc(UecLogger *logger, TrafficLogger *pktLogger, EventList &eventList,
@@ -503,6 +504,7 @@ class UecSink : public PacketSink, public DataReceiver {
     friend class UecSrc;
     friend class UecBcastSink;
     friend class UecMcastSink;
+    friend class UecReduceSink;
 
   public:
     UecSink();

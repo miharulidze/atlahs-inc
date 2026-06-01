@@ -884,6 +884,85 @@ int main(int argc, char **argv) {
             // multicast mechanism — a separate concern; the naming here
             // reflects the collective, not the phase-two mechanism.
             // --------------------------------------------------------------
+            // --------------------------------------------------------------
+            // Allreduce (MPI_Allreduce), in-network apex turn-around.
+            //
+            // `allreduce ROOT->GRP` (is_allreduce). Symmetric: every member
+            // is both a reduce source (emits one UEC_REDUCE up the tree) and
+            // a sink (receives the result the apex switch turns around and
+            // multicasts back down). Completion = all |G| members receive.
+            // The root index is ignored (no semantic root, §sec:lossless /
+            // AA-plan-Aggregation §4).
+            // --------------------------------------------------------------
+            if (crt->is_allreduce) {
+                if (static_cast<size_t>(dest) >= conns->groups.size()) {
+                    cerr << "allreduce connection refers to undefined group index "
+                         << dest << "\n";
+                    exit(1);
+                }
+                const vector<int32_t> &group = conns->groups[dest];
+                if (group.size() < 2) {
+                    cerr << "allreduce group " << dest << " has size < 2\n";
+                    exit(1);
+                }
+                int root_label = (static_cast<size_t>(src) < group.size())
+                        ? group[src] : group[0];   // label only; symmetric op
+
+                flowid_t op_flow_id = crt->flowid
+                        ? crt->flowid : ++next_bcast_leg_flow_id;
+
+                // Completion = every member receives the turned-around result.
+                BarrierTrigger *barrier = new BarrierTrigger(
+                        eventlist, ++next_bcast_barrier_id, group.size());
+                barrier->add_target(*new ReduceCompletionRecorder(
+                        eventlist, "ALLREDUCE", op_flow_id, root_label, dest,
+                        crt->size, group.size(), crt->start));
+                if (crt->recv_done_trigger) {
+                    Trigger *downstream = conns->getTrigger(
+                            crt->recv_done_trigger, eventlist);
+                    barrier->add_target(*new TriggerRelay(downstream));
+                }
+
+                for (int32_t m : group) {
+                    // Descent sink: receives the result the apex multicasts
+                    // back down (the persistent (host,group) UecMcastSink).
+                    UecMcastSink* sink = top->get_mcast_sink(m, dest);
+                    assert(sink && "set_up_mcast did not create sink");
+                    sink->register_op(op_flow_id,
+                                      crt->size > 0 ? crt->size : 0, barrier);
+
+                    // Ascent source: emit one UEC_REDUCE contribution up the
+                    // tree; the switch fan-in barriers combine toward the apex.
+                    UecReduceSrc *rs = new UecReduceSrc(
+                            NULL, NULL, eventlist,
+                            base_rtt_max_hops, bdp_local, 100, 6);
+                    rs->setNumberEntropies(256);
+                    rs->set_group_id(static_cast<uint32_t>(dest));
+                    rs->set_flowid(op_flow_id);
+                    if (crt->size > 0) rs->setFlowSize(crt->size);
+                    if (crt->trigger) {
+                        Trigger *trig = conns->getTrigger(crt->trigger, eventlist);
+                        trig->add_target(*rs);
+                    }
+                    rs->setName("uec_allreduce_src_" + ntoa_uec(m)
+                                + "_g" + ntoa_uec(dest));
+                    logfile.writeName(*rs);
+
+                    Route *srctotor = new Route();
+                    uint32_t tor = top->HOST_POD_SWITCH(m);
+                    srctotor->push_back(top->queues_ns_nlp[m][tor][0]);
+                    srctotor->push_back(top->pipes_ns_nlp[m][tor][0]);
+                    srctotor->push_back(
+                            top->queues_ns_nlp[m][tor][0]->getRemoteEndpoint());
+
+                    rs->from = m;
+                    rs->to   = -1;
+                    rs->set_paths(number_entropies);
+                    rs->connect_collective(srctotor, crt->start);
+                }
+                continue;
+            }
+
             if (crt->is_bcast) {
                 // Development-phase guardrails against malformed .cm input.
                 // TODO: remove once the collective track stabilises.

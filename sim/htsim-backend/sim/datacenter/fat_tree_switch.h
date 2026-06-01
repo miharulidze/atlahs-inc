@@ -12,6 +12,8 @@
 class FatTreeTopology;
 class UecMcastSink;
 class UecMcastPacket;
+class UecReducePacket;
+class VirtualQueue;
 class Pipe;
 
 /*
@@ -158,6 +160,26 @@ public:
     // latency. Original packet is freed for symmetric handling.
     void handle_mcast(UecMcastPacket& pkt);
 
+    // Phase-3 in-network aggregation (Reduce / Allreduce). Fan-in dual
+    // of handle_mcast: collect one UEC_REDUCE contribution per downstream
+    // tree port (the per-operation barrier), then on the last arrival
+    // either forward one combined packet toward the root (root_port set)
+    // or, at the apex (root_port == -1), turn around and multicast the
+    // result back down the tree via fanout_replicas (Allreduce).
+    void handle_reduce(UecReducePacket& pkt);
+
+    // Shared fan-out: spawn one UecMcastPacket replica per set bit of
+    // egress_mask, route via leaf-route or cached egress route, register
+    // in _packets, and send through _pipe. Under lossless, a shared
+    // McastFanoutCredit releases the ingress charge after the last
+    // replica drains (ingress_iq == nullptr for switch-originated apex
+    // fanout, where there is no ingress charge). Used by handle_mcast and
+    // the Allreduce apex turn-around.
+    void fanout_replicas(INCFibEntry* entry,
+                         const std::bitset<128>& egress_mask,
+                         UecMcastPacket& templ,
+                         VirtualQueue* ingress_iq, bool lossless);
+
     uint32_t adaptive_route(vector<FibEntry*>* ecmp_set, int8_t (*cmp)(FibEntry*,FibEntry*));
     uint32_t replace_worst_choice(vector<FibEntry*>* ecmp_set, int8_t (*cmp)(FibEntry*,FibEntry*),uint32_t my_choice);
     uint32_t adaptive_route_p2c(vector<FibEntry*>* ecmp_set, int8_t (*cmp)(FibEntry*,FibEntry*));
@@ -203,6 +225,12 @@ private:
     simtime_picosec _last_choice;
 
     unordered_map<Packet*,bool> _packets;
+
+    // Phase-3 reduce fan-in barriers. Keyed by (group_id<<32 | op_seq_id);
+    // value is the count of contributions received so far. When it reaches
+    // the entry's expected_children, the switch emits/turns-around and the
+    // key is erased. Single-MTU: one barrier per operation.
+    unordered_map<uint64_t,int> _reduce_barriers;
 
     // Phase-2 INC state. _inc_fib holds per-group INCFibEntry
     // instances (multicast trees that traverse this switch).

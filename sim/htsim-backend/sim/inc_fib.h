@@ -51,6 +51,14 @@ class INCFibEntry {
     // forcing C++17 into headers that include this one.
     int root_port_idx_or_neg1 = -1;
 
+    // PHASE 3 (reduce/allreduce): how many downstream contributions
+    // this switch must collect before it emits one combined packet
+    // toward the root (fan-in barrier size). For a leaf TOR this is the
+    // number of local member hosts; for an interior switch it is the
+    // count of downstream tree ports (child switches). Zero for phase-2
+    // multicast-only entries. Set by set_up_reduce / set_up_allreduce.
+    int expected_children = 0;
+
     // Look up the leaf-TOR member route for a given port index, or
     // nullptr if the port is interior at this switch. O(N) over a
     // sparse list; N ≤ K/2 for any leaf TOR. Negligible.

@@ -183,55 +183,13 @@ void FatTreeSwitch::handle_mcast(UecMcastPacket& pkt) {
         std::bitset<128> egress_mask = entry->tree_port_mask;
         egress_mask.reset(ingress_idx);
 
-        // Lossless (PFC) fan-out accounting. The packet charged its ingress
-        // LosslessInputQueue once on arrival; that occupancy is one stored
-        // copy that must be released exactly once, after the LAST of the k
-        // replicas has drained from its egress queue --- this keeps the
-        // upstream paused while any branch is still buffered (preserving
-        // losslessness). We route every replica's egress-drain notification
-        // through a shared McastFanoutCredit that refcounts down to k=0.
-        // peek_ingress_queue() is NULL outside lossless mode, where this
-        // whole block is skipped and behaviour is unchanged.
-        size_t k = egress_mask.count();
+        // Fan out to the tree ports except the ingress (RPF). Lossless
+        // accounting --- one ingress charge released once the whole fanout
+        // has drained --- is handled inside fanout_replicas. We are in
+        // lossless mode iff the packet arrived carrying an ingress queue.
         VirtualQueue* iq = pkt.peek_ingress_queue();
-        McastFanoutCredit* credit = nullptr;
-        if (iq) {
-            LosslessInputQueue* liq = static_cast<LosslessInputQueue*>(iq);
-            if (k == 0)
-                // Degenerate: no replicas to carry the charge. Release now.
-                liq->release_bytes(pkt.size());
-            else
-                credit = new McastFanoutCredit(liq, pkt.size(),
-                                               static_cast<int>(k));
-        }
+        fanout_replicas(entry, egress_mask, pkt, iq, /*lossless=*/iq != nullptr);
 
-        for (size_t i = 0; i < 128; ++i) {
-            if (!egress_mask.test(i)) continue;
-            uint8_t port_idx = static_cast<uint8_t>(i);
-
-            // Pick the route: leaf-TOR member port → end at sink;
-            // interior port → cached {queue, pipe, remote}.
-            Route* leaf = entry->leaf_route_for(port_idx);
-            const Route& route = leaf ? *leaf
-                                      : *_port_egress_routes[i];
-
-            UecMcastPacket* r = UecMcastPacket::newpkt_replica(
-                    pkt, route, port_idx);
-            // Reset direction so the next switch can re-establish
-            // it via Packet::set_direction without triggering the
-            // DOWN→UP assert. (Qualifying NONE because
-            // FatTreeSwitch::NONE shadows the global
-            // packet_direction::NONE in this scope.)
-            r->set_direction(::NONE);
-            // Under PFC, hand this replica's egress-drain release to the
-            // shared credit so the original ingress charge is freed once
-            // the fan-out has fully drained.
-            if (credit) r->set_ingress_queue(credit);
-            // Mark the replica as already-ingressed so the
-            // pipe-callback hits the egress branch (sendOn).
-            _packets[r] = true;
-            _pipe->receivePacket(*r);
-        }
         // Symmetric: free the original; replicas are fresh.
         pkt.free();
     } else {
@@ -240,6 +198,134 @@ void FatTreeSwitch::handle_mcast(UecMcastPacket& pkt) {
         _packets.erase(&pkt);
         pkt.sendOn();
     }
+}
+
+// Shared fan-out used by handle_mcast and the Allreduce apex turn-around.
+// Spawns one UecMcastPacket replica per set bit of egress_mask. Under
+// lossless, a single McastFanoutCredit releases the ingress charge once the
+// last replica has drained; ingress_iq == nullptr means the traffic is
+// switch-originated (apex turn-around) and carries no ingress charge, so the
+// credit's release is a no-op but still gives each egress queue a non-null
+// prev to pair with.
+void FatTreeSwitch::fanout_replicas(INCFibEntry* entry,
+                                    const std::bitset<128>& egress_mask,
+                                    UecMcastPacket& templ,
+                                    VirtualQueue* ingress_iq, bool lossless) {
+    size_t k = egress_mask.count();
+    McastFanoutCredit* credit = nullptr;
+    if (lossless) {
+        LosslessInputQueue* liq =
+                ingress_iq ? static_cast<LosslessInputQueue*>(ingress_iq)
+                           : nullptr;
+        if (k == 0) {
+            // No replicas to carry the charge; release immediately.
+            if (liq) liq->release_bytes(templ.size());
+        } else {
+            credit = new McastFanoutCredit(liq, templ.size(),
+                                           static_cast<int>(k));
+        }
+    }
+
+    for (size_t i = 0; i < 128; ++i) {
+        if (!egress_mask.test(i)) continue;
+        uint8_t port_idx = static_cast<uint8_t>(i);
+
+        // leaf-TOR member port → route ends at the sink; interior port →
+        // cached {queue, pipe, remote}.
+        Route* leaf = entry->leaf_route_for(port_idx);
+        const Route& route = leaf ? *leaf : *_port_egress_routes[i];
+
+        UecMcastPacket* r = UecMcastPacket::newpkt_replica(templ, route,
+                                                           port_idx);
+        r->set_direction(::NONE);
+        if (credit) r->set_ingress_queue(credit);
+        _packets[r] = true;
+        _pipe->receivePacket(*r);
+    }
+}
+
+// Phase-3 in-network aggregation. Fan-in dual of handle_mcast: collect one
+// contribution per downstream tree port (the per-operation barrier), then on
+// the last arrival either forward one combined packet toward the root, or --
+// at the apex (root_port == -1) -- turn the result around into a downward
+// multicast (Allreduce).
+void FatTreeSwitch::handle_reduce(UecReducePacket& pkt) {
+    if (_packets.find(&pkt) != _packets.end()) {
+        // Egress callback from _pipe for a combined packet we emitted up.
+        _packets.erase(&pkt);
+        pkt.sendOn();
+        return;
+    }
+
+    INCFibEntry* entry = _inc_fib->lookup(pkt.group_id());
+    if (!entry) {
+        assert(0 && "handle_reduce: no INCFibEntry for group");
+        pkt.free();
+        return;
+    }
+
+    // PFC: this contribution is absorbed here (it never reaches an egress
+    // queue), so release its ingress charge now -- the fan-in dual of the
+    // multicast original-free release. Otherwise the ingress port leaks and
+    // latches PAUSED.
+    if (VirtualQueue* iq = pkt.peek_ingress_queue())
+        static_cast<LosslessInputQueue*>(iq)->release_bytes(pkt.size());
+
+    // Record arrival against this operation's barrier.
+    uint64_t key = (static_cast<uint64_t>(pkt.group_id()) << 32)
+                   | pkt.op_seq_id();
+    int arrived = ++_reduce_barriers[key];
+
+    if (arrived < entry->expected_children) {
+        // Not all children in yet; fold this contribution (timing/bytes
+        // only -- no payload arithmetic) and wait.
+        pkt.free();
+        return;
+    }
+
+    // Last child: the barrier is satisfied. Clear it.
+    _reduce_barriers.erase(key);
+    bool lossless = (pkt.peek_ingress_queue() != nullptr);
+
+    if (entry->root_port_idx_or_neg1 < 0) {
+        // APEX (Allreduce turn-around): fan the result back down the whole
+        // tree as a multicast. Synthesise a UecMcastPacket seed carrying the
+        // operation identity, fan it out, and discard the seed. payload size
+        // matches one contribution (subtract the header overhead that
+        // UecMcastPacket::newpkt re-adds).
+        const std::bitset<128>& mask = entry->tree_port_mask;
+        size_t first = 0;
+        while (first < 128 && !mask.test(first)) ++first;
+        const Route& seed_route =
+                (entry->leaf_route_for(static_cast<uint8_t>(first)))
+                    ? *entry->leaf_route_for(static_cast<uint8_t>(first))
+                    : *_port_egress_routes[first];
+        int payload = static_cast<int>(pkt.size()) - UecMcastPacket::acksize;
+        UecMcastPacket* seed = UecMcastPacket::newpkt(
+                pkt.flow(), seed_route, pkt.seqno(), payload,
+                pkt.group_id(), static_cast<uint32_t>(pkt.from),
+                pkt.op_seq_id());
+        fanout_replicas(entry, mask, *seed, /*ingress_iq=*/nullptr, lossless);
+        seed->free();
+    } else {
+        // Forward one combined packet toward the root via the toward-root
+        // port: leaf route if the root host hangs off this switch, else the
+        // cached egress route.
+        int rp = entry->root_port_idx_or_neg1;
+        Route* leaf = entry->leaf_route_for(static_cast<uint8_t>(rp));
+        const Route& route = leaf ? *leaf : *_port_egress_routes[rp];
+        UecReducePacket* c = UecReducePacket::newpkt_combined(pkt, route);
+        c->set_direction(::NONE);
+        // Switch-originated: under lossless it still traverses the uplink's
+        // LosslessOutputQueue, which requires a non-null ingress queue to
+        // pair. Give it a no-op credit (pending=1, null iq -> no release);
+        // the parent switch re-assigns a real ingress queue on arrival.
+        if (lossless)
+            c->set_ingress_queue(new McastFanoutCredit(nullptr, c->size(), 1));
+        _packets[c] = true;
+        _pipe->receivePacket(*c);
+    }
+    pkt.free();
 }
 
 void FatTreeSwitch::addMcastPort(int host_addr, uint32_t group_id,
@@ -294,6 +380,13 @@ void FatTreeSwitch::receivePacket(Packet& pkt){
     // INCFib by group_id. Mirrors the ETH_PAUSE arm above.
     if (pkt.type() == UEC_MCAST) {
         handle_mcast(static_cast<UecMcastPacket&>(pkt));
+        return;
+    }
+
+    // Phase-3 in-network aggregation: a UEC_REDUCE packet is routed via the
+    // INCFib fan-in barrier (handle_reduce), the dual of the mcast arm.
+    if (pkt.type() == UEC_REDUCE) {
+        handle_reduce(static_cast<UecReducePacket&>(pkt));
         return;
     }
 
