@@ -91,16 +91,16 @@ def main():
     p.add_argument(
         "--theory-intra-rack",
         type=float,
-        default=3.0,
-        help="Per-receiver directional traversals on an intra-rack "
-             "path (2 hops -> 2h-1 = 3). Lower-bound slope.",
+        default=2.0,
+        help="Physical links on an intra-rack path (host-ToR-host = "
+             "2 links). Lower-bound slope.",
     )
     p.add_argument(
         "--theory-cross-pod",
         type=float,
-        default=11.0,
-        help="Per-receiver directional traversals on a cross-pod "
-             "path (6 hops -> 2h-1 = 11). Upper-bound slope.",
+        default=6.0,
+        help="Physical links on a cross-pod path (6 links). "
+             "Upper-bound slope.",
     )
     p.add_argument(
         "--theory-mcast",
@@ -197,10 +197,11 @@ def main():
                 label=fr"Upper bound: all cross-pod "
                       fr"(${args.theory_cross_pod:.0f}(|G|{{-}}1)$)")
 
-    # Occupancy model for the multicast footprint. The distribution
-    # tree's branching at each tier equals the number of distinct
-    # racks/pods the members occupy, so the footprint is
-    #   2*(|G| + E[ToRs] + E[pods]) - 1,
+    # Occupancy model for the multicast footprint (physical links).
+    # The distribution tree's branching at each tier equals the
+    # number of distinct racks/pods the members occupy, so the
+    # footprint is
+    #   |G| + E[ToRs] + E[pods],
     # where E[units occupied] = U*(1 - C(N-s,|G|)/C(N,|G|)) for U
     # units of s host-slots each (balls-in-bins). A larger fat tree
     # has more racks/pods, so the same |G| collides less and spreads
@@ -226,11 +227,11 @@ def main():
                 e_tor, e_pod = e_occ(n_tor, s_tor, G), e_occ(n_pod, s_pod, G)
                 apex = e_pod if e_pod > 1.0001 else 1.0  # core vs agg apex
                 xs_m.append(G)
-                ys_m.append(2.0 * (G + e_tor + apex) - 1.0)
+                ys_m.append(G + e_tor + apex)
             ax.plot(xs_m, ys_m, color="black", linestyle=":",
                     linewidth=1.3, alpha=0.75, zorder=1,
-                    label=(r"model $2(|G|+E[\mathrm{ToR}]"
-                           r"+E[\mathrm{pod}])-1$") if idx == 0 else None)
+                    label=(r"model $|G|+E[\mathrm{ToR}]"
+                           r"+E[\mathrm{pod}]$") if idx == 0 else None)
 
     ax.set_xscale("log", base=2)
     ax.set_yscale("log")

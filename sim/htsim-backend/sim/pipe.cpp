@@ -33,9 +33,12 @@ Pipe::receivePacket(Packet& pkt)
     }
     // PT6 link-cross accounting: every packet that enters the
     // pipe is one directional link traversal. Increment both
-    // per-pipe and class-level totals.
+    // per-pipe and class-level totals. Switch-latency pipes
+    // (CallbackPipe) set _count_in_total=false so the headline
+    // total reports physical link traversals only.
     _packet_count++;
-    _total_packets++;
+    if (_count_in_total)
+        _total_packets++;
     _count++;
     if (_count == _size) {
         _inflight_v.resize(_size*2);

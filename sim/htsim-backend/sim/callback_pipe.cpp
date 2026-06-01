@@ -6,6 +6,10 @@
 CallbackPipe::CallbackPipe(simtime_picosec delay, EventList& eventlist,PacketSink* c)
     : Pipe(delay, eventlist)
 {
+    // Switch-latency stage, not a physical link: exclude from the
+    // headline link-cross total so the footprint metric counts only
+    // real topology links.
+    _count_in_total = false;
     stringstream ss;
     ss << "callbackpipe(" << delay/1000000 << "us)";
     _nodename= ss.str();

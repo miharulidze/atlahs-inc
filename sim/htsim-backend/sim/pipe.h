@@ -52,6 +52,11 @@ protected:
     //list<pktrecord_t> _inflight; // the packets in flight (or being serialized)
     vector<pktrecord_t> _inflight_v;
     int _next_insert, _next_pop, _count, _size;
+    // Whether this pipe counts toward the static link-cross total.
+    // True for real topology links; CallbackPipe (the switch-latency
+    // stage) sets it false so the footprint metric reports physical
+    // link traversals only, not internal switch pipes.
+    bool _count_in_total = true;
 private:
     simtime_picosec _delay;
     PacketSink* _next_sink{nullptr}; // used in generic topology for linkage
