@@ -70,10 +70,7 @@ public:
 
     virtual void completedService(Packet& pkt) {
         if (--_pending == 0) {
-            // _iq is null for switch-originated fanout (the Allreduce apex
-            // turn-around): there is no ingress charge to release, the credit
-            // exists only to give the egress queue a non-null prev to pair.
-            if (_iq) _iq->release_bytes(_size);
+            _iq->release_bytes(_size);
             delete this;
         }
     }
@@ -82,6 +79,21 @@ private:
     LosslessInputQueue* _iq;
     mem_b _size;
     int _pending;
+};
+
+// Zero-allocation no-op virtual queue for switch-originated lossless packets
+// that carry no ingress charge to release --- the Allreduce apex turn-around
+// fanout and the reduce combined-up packet. It exists only to give the egress
+// LosslessOutputQueue a non-null prev to pair with; completedService does
+// nothing. A single shared instance is reused for every such packet (no
+// per-packet allocation), which matters on the multi-MTU streaming path.
+class NoOpVirtualQueue : public VirtualQueue {
+public:
+    virtual void completedService(Packet& pkt) {}
+    static NoOpVirtualQueue* instance() {
+        static NoOpVirtualQueue inst;
+        return &inst;
+    }
 };
 
 #endif

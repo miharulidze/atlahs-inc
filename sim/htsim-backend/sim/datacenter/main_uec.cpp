@@ -834,6 +834,16 @@ int main(int argc, char **argv) {
         map<flowid_t, TriggerTarget *> flowmap;
         vector<connection *> *all_conns = conns->getAllConnections();
         top->groups = &(conns->groups);
+        // Rooted Reduce: tell the topology each reduce target's root host
+        // before set_up_mcast, so it installs R's descent branch.
+        for (connection *c : *all_conns) {
+            if (c->is_reduce &&
+                static_cast<size_t>(c->dst) < conns->groups.size() &&
+                static_cast<size_t>(c->src) < conns->groups[c->dst].size()) {
+                top->set_reduce_root(static_cast<uint32_t>(c->dst),
+                                     conns->groups[c->dst][c->src]);
+            }
+        }
         top->set_up_mcast(); // for real mcast switch routing, configure switch tables
         UecSrc *uecSrc;
         UecSink *uecSnk;
@@ -945,6 +955,85 @@ int main(int argc, char **argv) {
                         trig->add_target(*rs);
                     }
                     rs->setName("uec_allreduce_src_" + ntoa_uec(m)
+                                + "_g" + ntoa_uec(dest));
+                    logfile.writeName(*rs);
+
+                    Route *srctotor = new Route();
+                    uint32_t tor = top->HOST_POD_SWITCH(m);
+                    srctotor->push_back(top->queues_ns_nlp[m][tor][0]);
+                    srctotor->push_back(top->pipes_ns_nlp[m][tor][0]);
+                    srctotor->push_back(
+                            top->queues_ns_nlp[m][tor][0]->getRemoteEndpoint());
+
+                    rs->from = m;
+                    rs->to   = -1;
+                    rs->set_paths(number_entropies);
+                    rs->connect_collective(srctotor, crt->start);
+                }
+                continue;
+            }
+
+            // --------------------------------------------------------------
+            // Reduce (MPI_Reduce), in-network many->one.
+            //
+            // `reduce ROOT->GRP` (is_reduce). Every member is a reduce source
+            // (emits one UEC_REDUCE up the tree); the aggregate turns around
+            // at the apex and is delivered down R's single branch to the one
+            // root host R. Completion = R receives. set_up_mcast installed R's
+            // descent under a synthetic group id (reduce_descent_group).
+            // --------------------------------------------------------------
+            if (crt->is_reduce) {
+                if (static_cast<size_t>(dest) >= conns->groups.size()) {
+                    cerr << "reduce connection refers to undefined group index "
+                         << dest << "\n";
+                    exit(1);
+                }
+                const vector<int32_t> &group = conns->groups[dest];
+                if (static_cast<size_t>(src) >= group.size()) {
+                    cerr << "reduce root-index " << src
+                         << " out of range for group " << dest << "\n";
+                    exit(1);
+                }
+                int root = group[src];
+                int gdesc = top->reduce_descent_group(static_cast<uint32_t>(dest));
+                assert(gdesc >= 0 && "set_up_mcast did not install reduce descent");
+
+                flowid_t op_flow_id = crt->flowid
+                        ? crt->flowid : ++next_bcast_leg_flow_id;
+
+                // Completion = the single root receives the combined result.
+                BarrierTrigger *barrier = new BarrierTrigger(
+                        eventlist, ++next_bcast_barrier_id, 1);
+                barrier->add_target(*new ReduceCompletionRecorder(
+                        eventlist, "REDUCE", op_flow_id, root, dest,
+                        crt->size, group.size(), crt->start));
+                if (crt->recv_done_trigger) {
+                    Trigger *downstream = conns->getTrigger(
+                            crt->recv_done_trigger, eventlist);
+                    barrier->add_target(*new TriggerRelay(downstream));
+                }
+
+                // R's descent sink (synthetic descent group) fires completion.
+                UecMcastSink* rsink =
+                        top->get_mcast_sink(root, static_cast<uint32_t>(gdesc));
+                assert(rsink && "reduce descent sink missing");
+                rsink->register_op(op_flow_id,
+                                   crt->size > 0 ? crt->size : 0, barrier);
+
+                // Every member contributes one UEC_REDUCE up the tree.
+                for (int32_t m : group) {
+                    UecReduceSrc *rs = new UecReduceSrc(
+                            NULL, NULL, eventlist,
+                            base_rtt_max_hops, bdp_local, 100, 6);
+                    rs->setNumberEntropies(256);
+                    rs->set_group_id(static_cast<uint32_t>(dest));
+                    rs->set_flowid(op_flow_id);
+                    if (crt->size > 0) rs->setFlowSize(crt->size);
+                    if (crt->trigger) {
+                        Trigger *trig = conns->getTrigger(crt->trigger, eventlist);
+                        trig->add_target(*rs);
+                    }
+                    rs->setName("uec_reduce_src_" + ntoa_uec(m)
                                 + "_g" + ntoa_uec(dest));
                     logfile.writeName(*rs);
 

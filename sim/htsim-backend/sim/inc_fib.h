@@ -59,6 +59,14 @@ class INCFibEntry {
     // multicast-only entries. Set by set_up_reduce / set_up_allreduce.
     int expected_children = 0;
 
+    // PHASE 3 (apex only): which group's tree to fan the aggregate down
+    // when this switch is the apex (root_port == -1). -1 (default) means
+    // "use my own group" --- Allreduce, where the descent tree IS the
+    // ascent tree (fan to all members). Rooted Reduce sets this to a
+    // synthetic single-member descent group so the apex delivers only to
+    // the reduction root R. Ignored at non-apex switches.
+    int turnaround_group_or_neg1 = -1;
+
     // Look up the leaf-TOR member route for a given port index, or
     // nullptr if the port is interior at this switch. O(N) over a
     // sparse list; N ≤ K/2 for any leaf TOR. Negligible.

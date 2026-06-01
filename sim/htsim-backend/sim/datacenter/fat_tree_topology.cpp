@@ -867,7 +867,87 @@ void FatTreeTopology::set_up_mcast() {
             tor->addMcastPort(h, g, sink);
             _mcast_sinks[std::make_pair(h, g)] = sink;
         }
+
+        // Rooted Reduce: if this group is a reduce target, install R's
+        // single-branch descent and aim the apex turn-around at it.
+        auto rr = _reduce_roots.find(g);
+        if (rr != _reduce_roots.end())
+            install_reduce_descent(g, rr->second, tree);
     }
+}
+
+// Build the descent path apex -> ... -> R for a rooted Reduce. Installs a
+// synthetic single-member multicast group (R's branch only) so the apex's
+// UEC_MCAST turn-around reaches only R, and records that group on the apex's
+// INCFibEntry. Reuses the ascent tree's apex node; the branch switches and
+// downlink ports are read straight from the topology queue arrays (no
+// per-packet cost --- this is one-time setup).
+void FatTreeTopology::install_reduce_descent(
+        uint32_t group_idx, int root_host,
+        const std::vector<McastTreeNode>& tree) {
+    if (tree.empty()) return;
+
+    // Apex = the node with no uplink.
+    const McastTreeNode* apex = nullptr;
+    for (auto& n : tree)
+        if (n.uplink_port_idx_or_neg1 < 0) { apex = &n; break; }
+    assert(apex && "reduce descent: no apex node in tree");
+
+    uint32_t gdesc = _next_descent_group++;
+    _reduce_descent_group[group_idx] = gdesc;
+
+    // Point the group's apex turn-around at the descent group.
+    FatTreeSwitch* apex_sw = static_cast<FatTreeSwitch*>(apex->switch_ptr);
+    INCFibEntry* apex_entry = apex_sw->inc_fib()->lookup(group_idx);
+    assert(apex_entry && "reduce descent: apex group entry missing");
+    apex_entry->turnaround_group_or_neg1 = static_cast<int>(gdesc);
+
+    // R's branch switches.
+    int tor_R = static_cast<int>(HOST_POD_SWITCH(root_host));
+    int pod_R = static_cast<int>(HOST_POD(root_host));
+    uint32_t apex_type = apex_sw->getType();
+
+    // Helper: install a one-downlink descent entry at sw for the given queue.
+    auto install_hop = [&](Switch* sw_base, BaseQueue* dq) {
+        FatTreeSwitch* sw = static_cast<FatTreeSwitch*>(sw_base);
+        int port = sw->port_idx_for(dq);
+        assert(port >= 0 && "reduce descent: downlink not a port of switch");
+        INCFibEntry* e = new INCFibEntry();
+        e->tree_port_mask.set(static_cast<size_t>(port));
+        sw->inc_fib()->install(gdesc, e);
+    };
+
+    // Walk apex -> ... -> tor_R using the topology downlink queues.
+    if (apex_type == FatTreeSwitch::CORE) {
+        int core = static_cast<int>(apex_sw->getID());
+        // The agg on R's branch: the AGG-tier node in R's pod (read from the
+        // tree so it matches the assignment used to build it).
+        int agg_R = -1;
+        for (auto& n : tree) {
+            FatTreeSwitch* s = static_cast<FatTreeSwitch*>(n.switch_ptr);
+            if (s->getType() == FatTreeSwitch::AGG &&
+                static_cast<int>(s->getID() / agg_switches_per_pod()) == pod_R) {
+                agg_R = static_cast<int>(s->getID());
+                break;
+            }
+        }
+        assert(agg_R >= 0 && "reduce descent: no agg node in R's pod");
+        install_hop(switches_c[core],  queues_nc_nup[core][agg_R][0]);
+        install_hop(switches_up[agg_R], queues_nup_nlp[agg_R][tor_R][0]);
+        install_hop(switches_lp[tor_R], queues_nlp_ns[tor_R][root_host][0]);
+    } else if (apex_type == FatTreeSwitch::AGG) {
+        int agg_R = static_cast<int>(apex_sw->getID());
+        install_hop(switches_up[agg_R], queues_nup_nlp[agg_R][tor_R][0]);
+        install_hop(switches_lp[tor_R], queues_nlp_ns[tor_R][root_host][0]);
+    } else { // TOR apex (single-TOR group)
+        install_hop(switches_lp[tor_R], queues_nlp_ns[tor_R][root_host][0]);
+    }
+
+    // Leaf delivery: R's sink under the descent group + leaf route at tor_R.
+    UecMcastSink* sink = new UecMcastSink(root_host, gdesc);
+    static_cast<FatTreeSwitch*>(switches_lp[tor_R])
+            ->addMcastPort(root_host, gdesc, sink);
+    _mcast_sinks[std::make_pair(root_host, gdesc)] = sink;
 }
 
 void FatTreeTopology::alloc_vectors() {

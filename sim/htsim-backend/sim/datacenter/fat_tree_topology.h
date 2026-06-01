@@ -117,6 +117,20 @@ public:
         return it == _mcast_sinks.end() ? nullptr : it->second;
     }
 
+    // Rooted-Reduce wiring. The driver records (group -> root host) before
+    // set_up_mcast; set_up_mcast then installs, for each such group, a
+    // single-member descent (R's branch) under a synthetic group id and
+    // points the group's apex turn-around at it. The driver reads the
+    // descent group id back to register R's completion sink.
+    void set_reduce_root(uint32_t group_idx, int root_host) {
+        _reduce_roots[group_idx] = root_host;
+    }
+    int reduce_descent_group(uint32_t group_idx) const {
+        auto it = _reduce_descent_group.find(group_idx);
+        return it == _reduce_descent_group.end()
+                ? -1 : static_cast<int>(it->second);
+    }
+
     static void set_tiers(uint32_t tiers) {_tiers = tiers;}
     static uint32_t get_tiers() {return _tiers;}
 
@@ -234,6 +248,17 @@ private:
     // Multicast tree assignment pin; -1 = round-robin (default). See
     // set_mcast_pin_assignment().
     static int _mcast_pin_assignment;
+
+    // Rooted-Reduce state (see set_reduce_root / reduce_descent_group).
+    std::unordered_map<uint32_t,int>      _reduce_roots;          // group -> R
+    std::unordered_map<uint32_t,uint32_t> _reduce_descent_group;  // group -> gdesc
+    uint32_t _next_descent_group = 1000000;  // synthetic ids, above real groups
+
+    // Install R's single-branch descent (apex -> ... -> R) under a fresh
+    // synthetic group id and point the group's apex turn-around at it.
+    // Called from set_up_mcast where the tree + assignment index are in scope.
+    void install_reduce_descent(uint32_t group_idx, int root_host,
+                                const std::vector<McastTreeNode>& tree);
 
     // _link_latencies[0] is the ToR->host latency.
     static simtime_picosec _link_latencies[3];

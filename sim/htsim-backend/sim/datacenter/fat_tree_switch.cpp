@@ -212,17 +212,24 @@ void FatTreeSwitch::fanout_replicas(INCFibEntry* entry,
                                     UecMcastPacket& templ,
                                     VirtualQueue* ingress_iq, bool lossless) {
     size_t k = egress_mask.count();
-    McastFanoutCredit* credit = nullptr;
+    // Under lossless, every replica needs a non-null prev for the egress
+    // queue to pair. Two cases:
+    //  - real ingress charge (hop-by-hop traffic): one refcounting credit
+    //    releases the charge after the last replica drains;
+    //  - switch-originated (apex turn-around, ingress_iq == null): no charge
+    //    to release, so reuse the shared zero-alloc no-op sentinel.
+    VirtualQueue* prev = nullptr;
     if (lossless) {
-        LosslessInputQueue* liq =
-                ingress_iq ? static_cast<LosslessInputQueue*>(ingress_iq)
-                           : nullptr;
-        if (k == 0) {
-            // No replicas to carry the charge; release immediately.
-            if (liq) liq->release_bytes(templ.size());
+        if (ingress_iq) {
+            LosslessInputQueue* liq =
+                    static_cast<LosslessInputQueue*>(ingress_iq);
+            if (k == 0)
+                liq->release_bytes(templ.size());  // nothing to carry it
+            else
+                prev = new McastFanoutCredit(liq, templ.size(),
+                                             static_cast<int>(k));
         } else {
-            credit = new McastFanoutCredit(liq, templ.size(),
-                                           static_cast<int>(k));
+            prev = NoOpVirtualQueue::instance();
         }
     }
 
@@ -238,7 +245,7 @@ void FatTreeSwitch::fanout_replicas(INCFibEntry* entry,
         UecMcastPacket* r = UecMcastPacket::newpkt_replica(templ, route,
                                                            port_idx);
         r->set_direction(::NONE);
-        if (credit) r->set_ingress_queue(credit);
+        if (prev) r->set_ingress_queue(prev);
         _packets[r] = true;
         _pipe->receivePacket(*r);
     }
@@ -292,20 +299,27 @@ void FatTreeSwitch::handle_reduce(UecReducePacket& pkt) {
         // tree as a multicast. Synthesise a UecMcastPacket seed carrying the
         // operation identity, fan it out, and discard the seed. payload size
         // matches one contribution (subtract the header overhead that
-        // UecMcastPacket::newpkt re-adds).
-        const std::bitset<128>& mask = entry->tree_port_mask;
+        // UecMcastPacket::newpkt re-adds). The descent uses the
+        // turn-around group: own group (Allreduce, fan to all members) or a
+        // synthetic single-member descent group (rooted Reduce, deliver to R).
+        uint32_t tg = (entry->turnaround_group_or_neg1 >= 0)
+                ? static_cast<uint32_t>(entry->turnaround_group_or_neg1)
+                : pkt.group_id();
+        INCFibEntry* dent =
+                (tg == pkt.group_id()) ? entry : _inc_fib->lookup(tg);
+        assert(dent && "reduce apex: turn-around (descent) group entry missing");
+        const std::bitset<128>& mask = dent->tree_port_mask;
         size_t first = 0;
         while (first < 128 && !mask.test(first)) ++first;
         const Route& seed_route =
-                (entry->leaf_route_for(static_cast<uint8_t>(first)))
-                    ? *entry->leaf_route_for(static_cast<uint8_t>(first))
+                (dent->leaf_route_for(static_cast<uint8_t>(first)))
+                    ? *dent->leaf_route_for(static_cast<uint8_t>(first))
                     : *_port_egress_routes[first];
         int payload = static_cast<int>(pkt.size()) - UecMcastPacket::acksize;
         UecMcastPacket* seed = UecMcastPacket::newpkt(
                 pkt.flow(), seed_route, pkt.seqno(), payload,
-                pkt.group_id(), static_cast<uint32_t>(pkt.from),
-                pkt.op_seq_id());
-        fanout_replicas(entry, mask, *seed, /*ingress_iq=*/nullptr, lossless);
+                tg, static_cast<uint32_t>(pkt.from), pkt.op_seq_id());
+        fanout_replicas(dent, mask, *seed, /*ingress_iq=*/nullptr, lossless);
         seed->free();
     } else {
         // Forward one combined packet toward the root via the toward-root
@@ -318,10 +332,11 @@ void FatTreeSwitch::handle_reduce(UecReducePacket& pkt) {
         c->set_direction(::NONE);
         // Switch-originated: under lossless it still traverses the uplink's
         // LosslessOutputQueue, which requires a non-null ingress queue to
-        // pair. Give it a no-op credit (pending=1, null iq -> no release);
-        // the parent switch re-assigns a real ingress queue on arrival.
+        // pair. No charge to release, so use the shared no-op sentinel (no
+        // allocation); the parent switch assigns a real ingress queue on
+        // arrival.
         if (lossless)
-            c->set_ingress_queue(new McastFanoutCredit(nullptr, c->size(), 1));
+            c->set_ingress_queue(NoOpVirtualQueue::instance());
         _packets[c] = true;
         _pipe->receivePacket(*c);
     }
