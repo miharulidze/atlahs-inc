@@ -12,6 +12,7 @@ CSV columns expected (produced by run_bcast_sweep.py
 
 import argparse
 import csv
+import math
 import os
 import sys
 from collections import defaultdict
@@ -78,6 +79,29 @@ def main():
         action="store_false",
         dest="offset_topologies",
     )
+    p.add_argument(
+        "--theory",
+        action="store_true",
+        help="Overlay the first-principles unicast footprint bounds "
+             "c*(|G|-1): a lower bound where every receiver is "
+             "intra-rack and an upper bound where every receiver is "
+             "cross-pod. Only meaningful for the phase-1 (baseline) "
+             "footprint, whose total is a sum of independent paths.",
+    )
+    p.add_argument(
+        "--theory-intra-rack",
+        type=float,
+        default=3.0,
+        help="Per-receiver directional traversals on an intra-rack "
+             "path (2 hops -> 2h-1 = 3). Lower-bound slope.",
+    )
+    p.add_argument(
+        "--theory-cross-pod",
+        type=float,
+        default=11.0,
+        help="Per-receiver directional traversals on a cross-pod "
+             "path (6 hops -> 2h-1 = 11). Upper-bound slope.",
+    )
     args = p.parse_args()
 
     buckets = load(args.csv)
@@ -139,6 +163,30 @@ def main():
             ax.plot(xs, medians, marker="o", markersize=5,
                     linewidth=1.4, linestyle=ls,
                     label=f"{nodes}-host fat-tree{suffix}")
+
+    # First-principles unicast footprint bounds. The phase-1 total is
+    # a sum of (|G|-1) independent root->receiver paths, each costing
+    # 2h-1 directional traversals: 3 intra-rack (h=2) up to 11
+    # cross-pod (h=6). So the whole sweep is bounded by c*(|G|-1) for
+    # c in {intra-rack, cross-pod}.
+    if args.theory:
+        gs = sorted({g for _, g, _ in buckets})
+        g_lo, g_hi = max(gs[0], 2), gs[-1]
+        n = 80
+        xs_t = [2.0 ** (math.log2(g_lo) + i * (math.log2(g_hi)
+                - math.log2(g_lo)) / (n - 1)) for i in range(n)]
+        lo = [args.theory_intra_rack * (x - 1.0) for x in xs_t]
+        hi = [args.theory_cross_pod * (x - 1.0) for x in xs_t]
+        ax.fill_between(xs_t, lo, hi, color="black", alpha=0.06,
+                        zorder=0)
+        ax.plot(xs_t, lo, color="black", linestyle=":", linewidth=1.4,
+                alpha=0.85, zorder=1,
+                label=fr"Lower bound: all intra-rack "
+                      fr"(${args.theory_intra_rack:.0f}(|G|{{-}}1)$)")
+        ax.plot(xs_t, hi, color="black", linestyle="--", linewidth=1.4,
+                alpha=0.85, zorder=1,
+                label=fr"Upper bound: all cross-pod "
+                      fr"(${args.theory_cross_pod:.0f}(|G|{{-}}1)$)")
 
     ax.set_xscale("log", base=2)
     ax.set_yscale("log")
