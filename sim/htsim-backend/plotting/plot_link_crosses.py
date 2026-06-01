@@ -228,8 +228,8 @@ def main():
                 apex = e_pod if e_pod > 1.0001 else 1.0  # core vs agg apex
                 xs_m.append(G)
                 ys_m.append(G + e_tor + apex)
-            ax.plot(xs_m, ys_m, color="black", linestyle=":",
-                    linewidth=1.3, alpha=0.75, zorder=1,
+            ax.plot(xs_m, ys_m, color="0.5", linestyle=":",
+                    linewidth=1.3, alpha=0.85, zorder=1,
                     label=(r"model $|G|+E[\mathrm{ToR}]"
                            r"+E[\mathrm{pod}]$") if idx == 0 else None)
 
