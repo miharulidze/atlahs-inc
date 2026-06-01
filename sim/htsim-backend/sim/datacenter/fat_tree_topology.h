@@ -114,6 +114,15 @@ public:
 
     static void set_tiers(uint32_t tiers) {_tiers = tiers;}
     static uint32_t get_tiers() {return _tiers;}
+
+    // Experiment knob (multicast PFC backpressure). Normally set_up_mcast
+    // hands each group a round-robin assignment index so AGG/Core
+    // convergence points spread across the fabric. Setting this >= 0 pins
+    // EVERY group's tree to the same assignment index, collapsing all
+    // multicast trees onto one aggregation position and one core switch ---
+    // a deliberate single-core hotspot for stressing lossless backpressure.
+    // -1 (default) keeps the load-balanced behaviour.
+    static void set_mcast_pin_assignment(int a) {_mcast_pin_assignment = a;}
     static void set_latencies(simtime_picosec src_lp, simtime_picosec lp_up, simtime_picosec up_cs,
                               simtime_picosec lp_switch, simtime_picosec up_switch, simtime_picosec core_switch) {
         _link_latencies[0] = src_lp;
@@ -216,6 +225,10 @@ private:
     uint32_t NCORE, NAGG, NTOR, NSRV, NPOD;
     uint32_t _tor_switches_per_pod, _agg_switches_per_pod;
     static uint32_t _tiers;
+
+    // Multicast tree assignment pin; -1 = round-robin (default). See
+    // set_mcast_pin_assignment().
+    static int _mcast_pin_assignment;
 
     // _link_latencies[0] is the ToR->host latency.
     static simtime_picosec _link_latencies[3];

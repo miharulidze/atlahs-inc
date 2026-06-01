@@ -5,6 +5,7 @@
 #include "callback_pipe.h"
 #include "queue_lossless.h"
 #include "queue_lossless_output.h"
+#include "queue_lossless_input.h"
 #include "uec_bcast.h"
 
 #include <cassert>
@@ -111,7 +112,20 @@ uint8_t FatTreeSwitch::identify_ingress_port_idx(Packet& pkt) const {
     if (upstream_sw != nullptr) {
         for (size_t i = 0; i < _ports.size(); ++i) {
             PacketSink* mine_remote = _ports[i]->getRemoteEndpoint();
+            // COMPOSITE wiring: a port's remote endpoint is the
+            // downstream switch directly.
             if (mine_remote == upstream_sw) {
+                return static_cast<uint8_t>(i);
+            }
+            // LOSSLESS_INPUT wiring: a port's remote endpoint is the
+            // downstream switch's ingress LosslessInputQueue (set by the
+            // input queue's constructor via peer->setRemoteEndpoint). That
+            // input queue carries the switch it sits in, so match through
+            // it: the port whose downstream input queue belongs to the
+            // upstream switch is our ingress port toward it.
+            LosslessInputQueue* riq =
+                    dynamic_cast<LosslessInputQueue*>(mine_remote);
+            if (riq && riq->getSwitch() == upstream_sw) {
                 return static_cast<uint8_t>(i);
             }
         }
@@ -169,6 +183,28 @@ void FatTreeSwitch::handle_mcast(UecMcastPacket& pkt) {
         std::bitset<128> egress_mask = entry->tree_port_mask;
         egress_mask.reset(ingress_idx);
 
+        // Lossless (PFC) fan-out accounting. The packet charged its ingress
+        // LosslessInputQueue once on arrival; that occupancy is one stored
+        // copy that must be released exactly once, after the LAST of the k
+        // replicas has drained from its egress queue --- this keeps the
+        // upstream paused while any branch is still buffered (preserving
+        // losslessness). We route every replica's egress-drain notification
+        // through a shared McastFanoutCredit that refcounts down to k=0.
+        // peek_ingress_queue() is NULL outside lossless mode, where this
+        // whole block is skipped and behaviour is unchanged.
+        size_t k = egress_mask.count();
+        VirtualQueue* iq = pkt.peek_ingress_queue();
+        McastFanoutCredit* credit = nullptr;
+        if (iq) {
+            LosslessInputQueue* liq = static_cast<LosslessInputQueue*>(iq);
+            if (k == 0)
+                // Degenerate: no replicas to carry the charge. Release now.
+                liq->release_bytes(pkt.size());
+            else
+                credit = new McastFanoutCredit(liq, pkt.size(),
+                                               static_cast<int>(k));
+        }
+
         for (size_t i = 0; i < 128; ++i) {
             if (!egress_mask.test(i)) continue;
             uint8_t port_idx = static_cast<uint8_t>(i);
@@ -187,6 +223,10 @@ void FatTreeSwitch::handle_mcast(UecMcastPacket& pkt) {
             // FatTreeSwitch::NONE shadows the global
             // packet_direction::NONE in this scope.)
             r->set_direction(::NONE);
+            // Under PFC, hand this replica's egress-drain release to the
+            // shared credit so the original ingress charge is freed once
+            // the fan-out has fully drained.
+            if (credit) r->set_ingress_queue(credit);
             // Mark the replica as already-ingressed so the
             // pipe-callback hits the egress branch (sendOn).
             _packets[r] = true;

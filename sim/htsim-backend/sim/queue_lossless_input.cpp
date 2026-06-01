@@ -93,7 +93,11 @@ LosslessInputQueue::receivePacket(Packet& pkt)
 }
 
 void LosslessInputQueue::completedService(Packet& pkt){
-    _queuesize -= pkt.size();
+    release_bytes(pkt.size());
+}
+
+void LosslessInputQueue::release_bytes(mem_b bytes){
+    _queuesize -= bytes;
 
     //unblock if that is the case
     assert(_queuesize >= 0);

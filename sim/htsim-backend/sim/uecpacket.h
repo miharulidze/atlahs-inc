@@ -259,6 +259,9 @@ class UecMcastPacket : public Packet {
         p->_op_seq_id = op_seq_id;
         p->_pathid = (group_id ^ source_host_id) * PATHID_SEED_MIX;
         p->_direction = NONE;
+        // PacketDB recycles packets; clear any stale lossless ingress
+        // pointer so set_ingress_queue()'s assert(!_ingressqueue) holds.
+        p->_ingressqueue = NULL;
         // _dst left at default; group_id drives FIB lookup.
         return p;
     }
@@ -284,6 +287,11 @@ class UecMcastPacket : public Packet {
         p->_pathid = source._pathid * PATHID_HOP_MIX
                      + static_cast<uint32_t>(egress_port_idx) + 1u;
         p->_direction = NONE;
+        // Fresh ingress accounting per replica: handle_mcast points this at
+        // a shared McastFanoutCredit under PFC. NULL otherwise (set_ingress_
+        // queue asserts !_ingressqueue, and PacketDB may hand back a packet
+        // whose pointer is stale from a prior life).
+        p->_ingressqueue = NULL;
         p->from = source.from;
         p->to   = source.to;
         p->tag  = source.tag;

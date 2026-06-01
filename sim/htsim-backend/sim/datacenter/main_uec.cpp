@@ -336,6 +336,13 @@ int main(int argc, char **argv) {
                 exit(1);
             }
             i++;
+        } else if (!strcmp(argv[i], "-mcast_pin_core")) {
+            // Experiment: pin every multicast tree to assignment index N,
+            // collapsing all trees onto one aggregation position + one core
+            // switch (single-core hotspot for lossless backpressure tests).
+            // Use 0 for the canonical single core. -1 keeps round-robin.
+            FatTreeTopology::set_mcast_pin_assignment(atoi(argv[i + 1]));
+            i++;
         } else if (!strcmp(argv[i], "-interdc_delay")) {
             interdc_delay = atoi(argv[i + 1]);
             interdc_delay *= 1000;
@@ -778,8 +785,26 @@ int main(int argc, char **argv) {
     LogSimInterface *lgs = NULL;
 
     queue_type snd_type = FAIR_PRIO;
-    queue_type qt = COMPOSITE;
+    // Honour -queue_type (default COMPOSITE). Previously hardcoded, which
+    // silently ignored -queue_type lossless_input.
+    queue_type qt = queue_choice;
     FatTreeTopology *top = NULL;
+
+    // PFC thresholds for lossless operation. The LosslessInputQueue
+    // constructor asserts _high_threshold > _low_threshold > 0, so these
+    // must be set before the topology builds its queues. Expressed in
+    // packets (matching main_ndp.cpp); -pfc_high / -pfc_low override the
+    // defaults of 100 / 80 packets (both well below the -q buffer).
+    if (qt == LOSSLESS_INPUT || qt == LOSSLESS_INPUT_ECN) {
+        if (pfc_high == 0) pfc_high = 100;
+        if (pfc_low == 0)  pfc_low = 80;
+        LosslessInputQueue::_high_threshold =
+                Packet::data_packet_size() * pfc_high;
+        LosslessInputQueue::_low_threshold =
+                Packet::data_packet_size() * pfc_low;
+        cout << "PFC lossless: high_threshold=" << pfc_high
+             << "pkt low_threshold=" << pfc_low << "pkt" << endl;
+    }
 
     if (tm_file != NULL) {
         if (topo_file) {

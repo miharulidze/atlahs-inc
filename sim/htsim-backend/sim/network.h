@@ -174,8 +174,17 @@ class Packet {
     virtual void set_route(const Route *route=nullptr);
     virtual void set_route(PacketFlow& flow, const Route &route, int pkt_size, packetid_t id);
 
-    void set_ingress_queue(LosslessInputQueue* t){assert(!_ingressqueue); _ingressqueue = t;}
-    LosslessInputQueue* get_ingress_queue(){assert(_ingressqueue); return _ingressqueue;}
+    // Ingress accounting hook for lossless (PFC) operation. Generalised from
+    // LosslessInputQueue* to VirtualQueue* so a multicast fan-out can route its
+    // egress-drain notifications through a refcounting McastFanoutCredit instead
+    // of a single ingress queue (one packet in -> k copies out). The egress
+    // LosslessOutputQueue only ever calls completedService() on this, which the
+    // VirtualQueue base already exposes.
+    void set_ingress_queue(VirtualQueue* t){assert(!_ingressqueue); _ingressqueue = t;}
+    VirtualQueue* get_ingress_queue(){assert(_ingressqueue); return _ingressqueue;}
+    // Non-asserting variant: returns NULL outside lossless mode (COMPOSITE
+    // packets carry no ingress queue). Used by the multicast fan-out path.
+    VirtualQueue* peek_ingress_queue(){return _ingressqueue;}
     void clear_ingress_queue(){assert(_ingressqueue); _ingressqueue = NULL;}
 
     //    void set_detour(PacketSink* n, int rewind) {_detour = n;_nexthop -= rewind;}
@@ -222,7 +231,7 @@ class Packet {
     packetid_t _id;
     PacketFlow* _flow{nullptr};
     static PacketFlow _defaultFlow;
-    LosslessInputQueue* _ingressqueue;
+    VirtualQueue* _ingressqueue;
     uint32_t _path_len; // length of the path in hops - used in BCube priority routing with NDP
 };
 

@@ -24,6 +24,7 @@ extern void tokenize(string const &str, const char delim, vector<string> &out);
 
 // default to 3-tier topology.  Change this with set_tiers() before calling the constructor.
 uint32_t FatTreeTopology::_tiers = 3;
+int FatTreeTopology::_mcast_pin_assignment = -1;
 simtime_picosec FatTreeTopology::_link_latencies[] = {0,0,0};
 simtime_picosec FatTreeTopology::_switch_latencies[] = {0,0,0};
 uint32_t FatTreeTopology::_hosts_per_pod = 0;
@@ -823,7 +824,12 @@ void FatTreeTopology::set_up_mcast() {
         const auto& members = (*groups)[g];
         if (members.size() < 2) continue;
 
-        auto tree = build_mcast_tree(g, rr_counter);
+        // Pin all trees to one convergence point if the experiment knob
+        // is set (single-core hotspot), else round-robin load-balance.
+        uint32_t aidx = (_mcast_pin_assignment >= 0)
+                ? static_cast<uint32_t>(_mcast_pin_assignment)
+                : rr_counter;
+        auto tree = build_mcast_tree(g, aidx);
         ++rr_counter;
         for (auto& node : tree) {
             INCFibEntry* entry = new INCFibEntry();

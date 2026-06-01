@@ -33,9 +33,9 @@ LosslessOutputQueue::receivePacket(Packet& pkt){
     if (pkt.type()==ETH_PAUSE)
         receivePacket(pkt,NULL);
     else {
-        LosslessInputQueue* q = pkt.get_ingress_queue();
+        VirtualQueue* q = pkt.get_ingress_queue();
         pkt.clear_ingress_queue();
-        receivePacket(pkt,dynamic_cast<VirtualQueue*>(q));
+        receivePacket(pkt,q);
     }
 }
 
