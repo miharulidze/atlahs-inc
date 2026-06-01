@@ -7,6 +7,8 @@
  */
 
 #include <list>
+#include <vector>
+#include <utility>
 #include "config.h"
 #include "eventlist.h"
 #include "network.h"
@@ -78,6 +80,35 @@ public:
 private:
     LosslessInputQueue* _iq;
     mem_b _size;
+    int _pending;
+};
+
+// Fan-in release credit for in-network aggregation under PFC --- the dual of
+// McastFanoutCredit. A reduce switch absorbs k child contributions (each having
+// charged its ingress LosslessInputQueue) and emits one (or, at the Allreduce
+// apex, several) result packet(s). The children's ingress charges are HELD
+// until the result has drained from the egress: this keeps the switch's ingress
+// occupied while the uplink is paused, so the children get paused too and no
+// egress queue overflows (true losslessness). The credit holds the list of
+// (ingress queue, bytes) to release and a count of egress drains to wait for
+// (1 for a combined-up / rooted-Reduce-down packet; k for the Allreduce apex
+// fan-out, where all k replicas share one credit).
+class ReduceFanInCredit : public VirtualQueue {
+public:
+    ReduceFanInCredit(std::vector<std::pair<LosslessInputQueue*, mem_b>> charges,
+                      int pending)
+        : _charges(std::move(charges)), _pending(pending) {}
+
+    virtual void completedService(Packet& pkt) {
+        if (--_pending == 0) {
+            for (auto& c : _charges)
+                c.first->release_bytes(c.second);
+            delete this;
+        }
+    }
+
+private:
+    std::vector<std::pair<LosslessInputQueue*, mem_b>> _charges;
     int _pending;
 };
 

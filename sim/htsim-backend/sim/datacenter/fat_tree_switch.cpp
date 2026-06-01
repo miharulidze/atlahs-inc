@@ -210,16 +210,18 @@ void FatTreeSwitch::handle_mcast(UecMcastPacket& pkt) {
 void FatTreeSwitch::fanout_replicas(INCFibEntry* entry,
                                     const std::bitset<128>& egress_mask,
                                     UecMcastPacket& templ,
-                                    VirtualQueue* ingress_iq, bool lossless) {
+                                    VirtualQueue* ingress_iq, bool lossless,
+                                    VirtualQueue* prev_override) {
     size_t k = egress_mask.count();
     // Under lossless, every replica needs a non-null prev for the egress
-    // queue to pair. Two cases:
+    // queue to pair. Cases:
+    //  - prev_override given (Allreduce apex fan-in credit): use it for all
+    //    replicas --- it already counts k drains before releasing;
     //  - real ingress charge (hop-by-hop traffic): one refcounting credit
     //    releases the charge after the last replica drains;
-    //  - switch-originated (apex turn-around, ingress_iq == null): no charge
-    //    to release, so reuse the shared zero-alloc no-op sentinel.
-    VirtualQueue* prev = nullptr;
-    if (lossless) {
+    //  - switch-originated, no charge: reuse the shared zero-alloc sentinel.
+    VirtualQueue* prev = prev_override;
+    if (lossless && !prev) {
         if (ingress_iq) {
             LosslessInputQueue* liq =
                     static_cast<LosslessInputQueue*>(ingress_iq);
@@ -271,13 +273,6 @@ void FatTreeSwitch::handle_reduce(UecReducePacket& pkt) {
         return;
     }
 
-    // PFC: this contribution is absorbed here (it never reaches an egress
-    // queue), so release its ingress charge now -- the fan-in dual of the
-    // multicast original-free release. Otherwise the ingress port leaks and
-    // latches PAUSED.
-    if (VirtualQueue* iq = pkt.peek_ingress_queue())
-        static_cast<LosslessInputQueue*>(iq)->release_bytes(pkt.size());
-
     // Record arrival against this operation's PER-CHUNK barrier. Key by the
     // op's flow id (globally unique per collective op) and the chunk's seqno:
     // contributions of the same chunk from all children aggregate
@@ -288,24 +283,36 @@ void FatTreeSwitch::handle_reduce(UecReducePacket& pkt) {
     // (seqno < 2^32 for any simulated flow size).
     uint64_t key = (static_cast<uint64_t>(pkt.flow_id()) << 32)
                    | (static_cast<uint32_t>(pkt.seqno()) & 0xFFFFFFFFu);
-    int arrived = ++_reduce_barriers[key];
+    ReduceBarrier& b = _reduce_barriers[key];
+
+    // PFC (Step B): do NOT release the contribution's ingress charge here.
+    // Hold it on the barrier and release it only once the combined result has
+    // drained from the egress (via ReduceFanInCredit). Holding is what
+    // backpressures the children: while the result is stuck behind a paused
+    // uplink, this switch's ingress stays occupied and pauses the children,
+    // so no egress queue overflows. (Composite: no ingress queue, no charge.)
+    if (VirtualQueue* iq = pkt.peek_ingress_queue())
+        b.charges.emplace_back(static_cast<LosslessInputQueue*>(iq), pkt.size());
+    ++b.arrived;
     // Each child contributes a given chunk exactly once, so a per-chunk
     // barrier never exceeds its expected size. A violation means a duplicate
     // contribution or a key alias --- fail loudly rather than emit a wrong
     // result.
-    assert(arrived <= entry->expected_children &&
+    assert(b.arrived <= entry->expected_children &&
            "reduce fan-in barrier over-arrival");
 
-    if (arrived < entry->expected_children) {
+    if (b.arrived < entry->expected_children) {
         // Not all children in yet; fold this contribution (timing/bytes
         // only -- no payload arithmetic) and wait.
         pkt.free();
         return;
     }
 
-    // Last child: the barrier is satisfied. Clear it.
+    // Barrier satisfied: take the held charges and clear the barrier.
+    std::vector<std::pair<LosslessInputQueue*, mem_b>> charges =
+            std::move(b.charges);
     _reduce_barriers.erase(key);
-    bool lossless = (pkt.peek_ingress_queue() != nullptr);
+    bool lossless = !charges.empty();
 
     if (entry->root_port_idx_or_neg1 < 0 && pkt.reduce_root() >= 0) {
         // APEX, rooted Reduce: deliver the aggregate to the single root R as
@@ -314,14 +321,12 @@ void FatTreeSwitch::handle_reduce(UecReducePacket& pkt) {
         // R is carried on the packet (not per-group state), so concurrent
         // same-group reduces with different roots are fine. The packet is
         // marked descending so transit switches route it instead of
-        // re-aggregating; the same packet forwards all the way down (no
-        // per-hop allocation).
+        // re-aggregating; the same packet forwards all the way down.
         UecReducePacket* d = UecReducePacket::newpkt_downward(
                 pkt, pkt.reduce_root());
-        // Switch-originated first hop: under lossless the uplink/downlink
-        // egress queue needs a non-null prev; reuse the no-op sentinel.
-        if (lossless) d->set_ingress_queue(NoOpVirtualQueue::instance());
-        // Kick off this switch's regular ingress pipeline for d.
+        // One egress drain (the apex downlink) releases all held charges.
+        if (lossless)
+            d->set_ingress_queue(new ReduceFanInCredit(std::move(charges), 1));
         _packets[d] = true;
         const Route* nh = getNextHop(*d, NULL);
         d->set_route(*nh);
@@ -333,19 +338,33 @@ void FatTreeSwitch::handle_reduce(UecReducePacket& pkt) {
         // and discard the seed. payload size matches one contribution
         // (subtract the header overhead UecMcastPacket::newpkt re-adds).
         const std::bitset<128>& mask = entry->tree_port_mask;
+        size_t k = mask.count();
         size_t first = 0;
         while (first < 128 && !mask.test(first)) ++first;
-        const Route& seed_route =
-                (entry->leaf_route_for(static_cast<uint8_t>(first)))
-                    ? *entry->leaf_route_for(static_cast<uint8_t>(first))
-                    : *_port_egress_routes[first];
-        int payload = static_cast<int>(pkt.size()) - UecMcastPacket::acksize;
-        UecMcastPacket* seed = UecMcastPacket::newpkt(
-                pkt.flow(), seed_route, pkt.seqno(), payload,
-                pkt.group_id(), static_cast<uint32_t>(pkt.from),
-                pkt.op_seq_id());
-        fanout_replicas(entry, mask, *seed, /*ingress_iq=*/nullptr, lossless);
-        seed->free();
+        if (k == 0) {
+            // Degenerate apex with no downstream: release held charges now.
+            for (auto& c : charges) c.first->release_bytes(c.second);
+        } else {
+            const Route& seed_route =
+                    (entry->leaf_route_for(static_cast<uint8_t>(first)))
+                        ? *entry->leaf_route_for(static_cast<uint8_t>(first))
+                        : *_port_egress_routes[first];
+            int payload = static_cast<int>(pkt.size()) - UecMcastPacket::acksize;
+            UecMcastPacket* seed = UecMcastPacket::newpkt(
+                    pkt.flow(), seed_route, pkt.seqno(), payload,
+                    pkt.group_id(), static_cast<uint32_t>(pkt.from),
+                    pkt.op_seq_id());
+            // All k fan-out replicas share one credit; the held charges are
+            // released once the last replica has drained (the result is fully
+            // committed downward).
+            VirtualQueue* prev = lossless
+                    ? new ReduceFanInCredit(std::move(charges),
+                                            static_cast<int>(k))
+                    : nullptr;
+            fanout_replicas(entry, mask, *seed, /*ingress_iq=*/nullptr,
+                            lossless, /*prev_override=*/prev);
+            seed->free();
+        }
     } else {
         // Forward one combined packet toward the root via the toward-root
         // port: leaf route if the root host hangs off this switch, else the
@@ -355,13 +374,10 @@ void FatTreeSwitch::handle_reduce(UecReducePacket& pkt) {
         const Route& route = leaf ? *leaf : *_port_egress_routes[rp];
         UecReducePacket* c = UecReducePacket::newpkt_combined(pkt, route);
         c->set_direction(::NONE);
-        // Switch-originated: under lossless it still traverses the uplink's
-        // LosslessOutputQueue, which requires a non-null ingress queue to
-        // pair. No charge to release, so use the shared no-op sentinel (no
-        // allocation); the parent switch assigns a real ingress queue on
-        // arrival.
+        // One egress drain (the uplink) releases all held charges; while the
+        // uplink is paused the charges stay held and pause the children.
         if (lossless)
-            c->set_ingress_queue(NoOpVirtualQueue::instance());
+            c->set_ingress_queue(new ReduceFanInCredit(std::move(charges), 1));
         _packets[c] = true;
         _pipe->receivePacket(*c);
     }

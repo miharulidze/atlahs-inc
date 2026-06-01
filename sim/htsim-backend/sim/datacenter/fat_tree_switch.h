@@ -14,6 +14,7 @@ class UecMcastSink;
 class UecMcastPacket;
 class UecReducePacket;
 class VirtualQueue;
+class LosslessInputQueue;
 class Pipe;
 
 /*
@@ -178,7 +179,8 @@ public:
     void fanout_replicas(INCFibEntry* entry,
                          const std::bitset<128>& egress_mask,
                          UecMcastPacket& templ,
-                         VirtualQueue* ingress_iq, bool lossless);
+                         VirtualQueue* ingress_iq, bool lossless,
+                         VirtualQueue* prev_override = nullptr);
 
     uint32_t adaptive_route(vector<FibEntry*>* ecmp_set, int8_t (*cmp)(FibEntry*,FibEntry*));
     uint32_t replace_worst_choice(vector<FibEntry*>* ecmp_set, int8_t (*cmp)(FibEntry*,FibEntry*),uint32_t my_choice);
@@ -226,11 +228,18 @@ private:
 
     unordered_map<Packet*,bool> _packets;
 
-    // Phase-3 reduce fan-in barriers. Keyed by (group_id<<32 | op_seq_id);
-    // value is the count of contributions received so far. When it reaches
-    // the entry's expected_children, the switch emits/turns-around and the
-    // key is erased. Single-MTU: one barrier per operation.
-    unordered_map<uint64_t,int> _reduce_barriers;
+    // Phase-3 reduce fan-in barriers. Keyed by (flow_id<<32 | chunk seqno):
+    // `arrived` counts contributions received for that chunk; when it reaches
+    // the entry's expected_children the switch emits/turns-around and the key
+    // is erased. Under lossless, `charges` holds each arrived child's ingress
+    // queue + bytes so the credit can release them once the result drains
+    // (the children's charges are NOT released on arrival -- that is what
+    // backpressures them; see handle_reduce).
+    struct ReduceBarrier {
+        int arrived = 0;
+        std::vector<std::pair<LosslessInputQueue*, mem_b>> charges;
+    };
+    unordered_map<uint64_t, ReduceBarrier> _reduce_barriers;
 
     // Phase-2 INC state. _inc_fib holds per-group INCFibEntry
     // instances (multicast trees that traverse this switch).
