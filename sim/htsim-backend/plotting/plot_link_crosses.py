@@ -102,6 +102,15 @@ def main():
         help="Per-receiver directional traversals on a cross-pod "
              "path (6 hops -> 2h-1 = 11). Upper-bound slope.",
     )
+    p.add_argument(
+        "--theory-mcast",
+        action="store_true",
+        help="Overlay the occupancy model for the multicast "
+             "footprint, 2*(|G| + E[ToRs] + E[pods]) - 1, computed "
+             "per topology. Explains why a larger fat tree yields a "
+             "larger footprint at fixed |G|: the same group occupies "
+             "more distinct racks/pods, so the tree branches more.",
+    )
     args = p.parse_args()
 
     buckets = load(args.csv)
@@ -187,6 +196,41 @@ def main():
                 alpha=0.85, zorder=1,
                 label=fr"Upper bound: all cross-pod "
                       fr"(${args.theory_cross_pod:.0f}(|G|{{-}}1)$)")
+
+    # Occupancy model for the multicast footprint. The distribution
+    # tree's branching at each tier equals the number of distinct
+    # racks/pods the members occupy, so the footprint is
+    #   2*(|G| + E[ToRs] + E[pods]) - 1,
+    # where E[units occupied] = U*(1 - C(N-s,|G|)/C(N,|G|)) for U
+    # units of s host-slots each (balls-in-bins). A larger fat tree
+    # has more racks/pods, so the same |G| collides less and spreads
+    # over more distinct switches -> larger footprint at fixed |G|.
+    if args.theory_mcast:
+        topos_t = sorted({k[0] for k in buckets})
+        for idx, N in enumerate(topos_t):
+            K = int(round((4 * N) ** (1.0 / 3.0)))
+            n_tor, s_tor = K * K // 2, K // 2     # ToRs, hosts/ToR
+            n_pod, s_pod = K, N // K              # pods, hosts/pod
+            gs = sorted({k[1] for k in buckets if k[0] == N})
+
+            def e_occ(units, slots, G):
+                if N - slots < G:
+                    return float(units)
+                return units * (1.0 - math.comb(N - slots, G)
+                                / math.comb(N, G))
+
+            xs_m, ys_m = [], []
+            for G in gs:
+                if G > N:
+                    continue
+                e_tor, e_pod = e_occ(n_tor, s_tor, G), e_occ(n_pod, s_pod, G)
+                apex = e_pod if e_pod > 1.0001 else 1.0  # core vs agg apex
+                xs_m.append(G)
+                ys_m.append(2.0 * (G + e_tor + apex) - 1.0)
+            ax.plot(xs_m, ys_m, color="black", linestyle=":",
+                    linewidth=1.3, alpha=0.75, zorder=1,
+                    label=(r"model $2(|G|+E[\mathrm{ToR}]"
+                           r"+E[\mathrm{pod}])-1$") if idx == 0 else None)
 
     ax.set_xscale("log", base=2)
     ax.set_yscale("log")
