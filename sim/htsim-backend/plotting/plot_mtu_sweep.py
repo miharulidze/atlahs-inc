@@ -34,6 +34,11 @@ def load(path):
     return by
 
 
+def med(xs):
+    xs = sorted(xs)
+    return xs[len(xs) // 2]
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--csv", required=True)
@@ -49,11 +54,68 @@ def main():
              "or both). A single mode produces a standalone per-phase "
              "message-size figure; both produces the overlay.",
     )
+    p.add_argument(
+        "--group-size", type=int, default=None,
+        help="Restrict to a single |G| (required for "
+             "--overlay-topologies).",
+    )
+    p.add_argument(
+        "--overlay-topologies", action="store_true",
+        help="Single panel, one line per topology at the fixed "
+             "--group-size, to show topology-size invariance. Applies "
+             "a small geometric y-offset per topology so the otherwise "
+             "coincident lines are distinguishable.",
+    )
+    p.add_argument(
+        "--y-offset", type=float, default=1.15,
+        help="Geometric y-offset factor between adjacent topologies "
+             "in --overlay-topologies mode (purely cosmetic).",
+    )
     args = p.parse_args()
 
     buckets = load(args.csv)
     if not buckets:
         sys.exit(f"no rows in {args.csv}")
+
+    # Topology-invariance view: one |G|, one line per topology, with a
+    # geometric y-offset because the medians are identical and would
+    # otherwise sit exactly on top of one another.
+    if args.overlay_topologies:
+        g = args.group_size
+        if g is None:
+            sys.exit("--overlay-topologies requires --group-size")
+        nodes_set = sorted({k[0] for k in buckets if k[1] == g})
+        fig, ax = plt.subplots(figsize=(8, 5))
+        nt = len(nodes_set)
+        for i, nodes in enumerate(nodes_set):
+            off = args.y_offset ** (i - (nt - 1) / 2.0)
+            for mode in args.modes:
+                payloads = sorted({k[3] for k in buckets if k[0] == nodes
+                                   and k[1] == g and k[2] == mode})
+                if not payloads:
+                    continue
+                ys = [med(buckets[(nodes, g, mode, pl)]) * off
+                      for pl in payloads]
+                ls = "-" if mode == "baseline" else "--"
+                K = int(round((nodes * 4) ** (1.0 / 3.0)))
+                ax.plot(payloads, ys, marker="o", markersize=4,
+                        linewidth=1.4, linestyle=ls,
+                        label=f"{nodes}-host fat tree (K={K})")
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlabel("Message size (bytes)")
+        ax.set_ylabel("Completion time (ns)")
+        ax.set_title(args.title)
+        ax.grid(True, which="both", linestyle=":", linewidth=0.5,
+                alpha=0.6)
+        ax.legend(fontsize=8, loc="upper left")
+        fig.tight_layout()
+        os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+        for ext in ("pdf", "png"):
+            f = f"{args.out}.{ext}"
+            fig.savefig(f, dpi=150, bbox_inches="tight")
+            print(f"wrote {f}")
+        return
 
     # Organise by topology, then series (group, mode).
     nodes_set = sorted({k[0] for k in buckets})
