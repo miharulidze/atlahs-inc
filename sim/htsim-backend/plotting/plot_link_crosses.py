@@ -140,7 +140,7 @@ def main():
                     linewidth=1.4, linestyle=ls,
                     label=f"{nodes}-host fat-tree{suffix}")
 
-    ax.set_xscale("log")
+    ax.set_xscale("log", base=2)
     ax.set_yscale("log")
     ax.set_xlabel("Group size |G|")
     ax.set_ylabel("Total directional link traversals (count)")
