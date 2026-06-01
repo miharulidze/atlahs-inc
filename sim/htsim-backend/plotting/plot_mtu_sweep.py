@@ -63,12 +63,12 @@ def main():
         "--overlay-topologies", action="store_true",
         help="Single panel, one line per topology at the fixed "
              "--group-size, to show topology-size invariance. Applies "
-             "a small geometric y-offset per topology so the otherwise "
+             "a small geometric x-offset per topology so the otherwise "
              "coincident lines are distinguishable.",
     )
     p.add_argument(
-        "--y-offset", type=float, default=1.15,
-        help="Geometric y-offset factor between adjacent topologies "
+        "--x-offset", type=float, default=1.12,
+        help="Geometric x-offset factor between adjacent topologies "
              "in --overlay-topologies mode (purely cosmetic).",
     )
     args = p.parse_args()
@@ -88,17 +88,18 @@ def main():
         fig, ax = plt.subplots(figsize=(8, 5))
         nt = len(nodes_set)
         for i, nodes in enumerate(nodes_set):
-            off = args.y_offset ** (i - (nt - 1) / 2.0)
+            off = args.x_offset ** (i - (nt - 1) / 2.0)
             for mode in args.modes:
                 payloads = sorted({k[3] for k in buckets if k[0] == nodes
                                    and k[1] == g and k[2] == mode})
                 if not payloads:
                     continue
-                ys = [med(buckets[(nodes, g, mode, pl)]) * off
+                xs = [pl * off for pl in payloads]
+                ys = [med(buckets[(nodes, g, mode, pl)])
                       for pl in payloads]
                 ls = "-" if mode == "baseline" else "--"
                 K = int(round((nodes * 4) ** (1.0 / 3.0)))
-                ax.plot(payloads, ys, marker="o", markersize=4,
+                ax.plot(xs, ys, marker="o", markersize=4,
                         linewidth=1.4, linestyle=ls,
                         label=f"{nodes}-host fat tree (K={K})")
         ax.set_xscale("log")
