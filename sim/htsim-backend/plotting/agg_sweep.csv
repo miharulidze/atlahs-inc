@@ -215,3 +215,27 @@ M,524288,Allreduce (reduce+bcast),4,90631
 M,524288,Allreduce (reduce+bcast),5,90631
 M,524288,Allreduce (reduce+bcast),6,90631
 M,524288,Allreduce (reduce+bcast),7,90631
+M,2097152,Reduce,0,171022
+M,2097152,Reduce,1,171022
+M,2097152,Reduce,2,171022
+M,2097152,Reduce,3,171022
+M,2097152,Reduce,4,171022
+M,2097152,Reduce,5,171022
+M,2097152,Reduce,6,171022
+M,2097152,Reduce,7,171022
+M,2097152,Allreduce (apex),0,171022
+M,2097152,Allreduce (apex),1,171022
+M,2097152,Allreduce (apex),2,171022
+M,2097152,Allreduce (apex),3,171022
+M,2097152,Allreduce (apex),4,171022
+M,2097152,Allreduce (apex),5,171022
+M,2097152,Allreduce (apex),6,171022
+M,2097152,Allreduce (apex),7,171022
+M,2097152,Allreduce (reduce+bcast),0,344037
+M,2097152,Allreduce (reduce+bcast),1,344037
+M,2097152,Allreduce (reduce+bcast),2,344037
+M,2097152,Allreduce (reduce+bcast),3,344037
+M,2097152,Allreduce (reduce+bcast),4,344037
+M,2097152,Allreduce (reduce+bcast),5,344037
+M,2097152,Allreduce (reduce+bcast),6,344037
+M,2097152,Allreduce (reduce+bcast),7,344037

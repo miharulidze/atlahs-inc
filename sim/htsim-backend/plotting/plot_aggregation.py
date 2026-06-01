@@ -26,6 +26,7 @@ PODS = 4                       # k=4 fat tree: pods 0..3, hosts 4 per pod
 REPS = 8
 MSS = 2048
 SEED = 1
+WIRE_GBPS = 100.0              # -linkspeed 100000 Mbit/s = 100 Gbit/s
 COMPLETE_RE = re.compile(r"(ALLREDUCE_RB|ALLREDUCE|REDUCE)_COMPLETE\b.*?duration_ns=(\d+)")
 
 # (label, cm op token, extra htsim args, expected complete-prefix)
@@ -98,6 +99,35 @@ def errbars(xs, data, lab):
     return X, lo, mid, hi
 
 
+def plot_goodput(xs, data, fname):
+    """Reduction bandwidth (Gbit/s) = message_size*8 / completion_time vs
+    message size, with the wire-speed reference --- the SHARP metric."""
+    fig, ax = plt.subplots(figsize=(6.4, 4.0))
+    markers = {"Reduce": "o", "Allreduce (apex)": "s", "Allreduce (reduce+bcast)": "^"}
+    ax.axhline(WIRE_GBPS, color="grey", linestyle=":", linewidth=1.2,
+               label="wire speed (%g Gbit/s)" % WIRE_GBPS)
+    for lab, *_ in VARIANTS:
+        X, G = [], []
+        for x in xs:
+            ds = data[lab].get(x) or []
+            if not ds:
+                continue
+            med = statistics.median(ds)               # ns
+            X.append(x); G.append(x * 8.0 / med)      # bytes*8 / ns = Gbit/s
+        if X:
+            ax.plot(X, G, marker=markers[lab], label=lab, linewidth=1.4, markersize=5)
+    ax.set_xscale("log", base=2)
+    ax.set_xlabel("message size (bytes)")
+    ax.set_ylabel("reduction bandwidth (Gbit/s)")
+    ax.set_title("Aggregation bandwidth vs message size (|G|=8)")
+    ax.grid(True, alpha=0.3); ax.legend()
+    fig.tight_layout()
+    for ext in ("pdf", "png"):
+        fig.savefig(os.path.join(OUTDIR, fname + "." + ext))
+    plt.close(fig)
+    print("wrote", fname + ".pdf/.png")
+
+
 def plot(xs, data, xlabel, title, fname, logx=False):
     fig, ax = plt.subplots(figsize=(6.4, 4.0))
     markers = {"Reduce": "o", "Allreduce (apex)": "s", "Allreduce (reduce+bcast)": "^"}
@@ -126,10 +156,12 @@ def main():
          "Aggregation completion vs |G| (16-host fat tree, 16 KiB)",
          "agg_vs_groupsize", logx=True)
     # (b) vs message size, fixed |G|=8
-    mx, mdata = sweep([2048, 8192, 32768, 131072, 524288], 8, rows, "M")
+    mx, mdata = sweep([2048, 8192, 32768, 131072, 524288, 2097152], 8, rows, "M")
     plot(mx, mdata, "message size (bytes)",
          "Aggregation completion vs message size (|G|=8)",
          "agg_vs_msgsize", logx=True)
+    # (c) bandwidth view of the same data --- the SHARP metric.
+    plot_goodput(mx, mdata, "agg_bandwidth")
     with open(os.path.join(OUTDIR, "agg_sweep.csv"), "w", newline="") as f:
         csv.writer(f).writerows(rows)
     print("wrote agg_sweep.csv (%d rows)" % (len(rows) - 1))
