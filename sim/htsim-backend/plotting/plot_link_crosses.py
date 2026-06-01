@@ -18,6 +18,7 @@ import sys
 from collections import defaultdict
 
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 
 
 def load(path):
@@ -154,23 +155,39 @@ def main():
         for nodes in topos:
             offsets[nodes] = 1.0
 
+    # Stable colour per topology so the data markers and (when shown)
+    # the model line share a colour.
+    cyc = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    topo_color = {n: cyc[i % len(cyc)] for i, n in enumerate(topos)}
+    # Single-mode plots get solid connectors (the dashed style is only
+    # to tell baseline from mcast in the two-mode overlay). With the
+    # occupancy model overlaid, the data is markers-only and the model
+    # carries the line.
+    single_mode = len({m for _, m in by_topo}) == 1
+
     for (nodes, mode), series in sorted(by_topo.items()):
         xs = [g * offsets[nodes] for g, _ in series]
         medians = [sorted(d)[len(d) // 2] for _, d in series]
-        ls = mode_style.get(mode, "-")
+        ls = "-" if single_mode else mode_style.get(mode, "-")
         suffix = "" if mode == "baseline" else " [mcast]"
+        # Colour by topology only when one mode is shown; in the
+        # two-mode overlay let matplotlib colour by (topology, mode).
+        color = topo_color[nodes] if single_mode else None
         if args.mmm:
             mins = [min(d) for _, d in series]
             maxs = [max(d) for _, d in series]
             lower = [m - lo for m, lo in zip(medians, mins)]
             upper = [hi - m for m, hi in zip(medians, maxs)]
+            data_ls = "none" if args.theory_mcast else ls
+            lbl = None if args.theory_mcast \
+                else f"{nodes}-host fat-tree{suffix}"
             ax.errorbar(xs, medians, yerr=[lower, upper], marker="o",
-                        capsize=3, markersize=5, linestyle=ls,
-                        linewidth=1.3, alpha=0.85,
-                        label=f"{nodes}-host fat-tree{suffix}")
+                        capsize=3, markersize=5, linestyle=data_ls,
+                        linewidth=1.3, alpha=0.9, color=color,
+                        label=lbl, zorder=3)
         else:
             ax.plot(xs, medians, marker="o", markersize=5,
-                    linewidth=1.4, linestyle=ls,
+                    linewidth=1.4, linestyle=ls, color=color,
                     label=f"{nodes}-host fat-tree{suffix}")
 
     # First-principles unicast footprint bounds. The phase-1 total is
@@ -220,18 +237,21 @@ def main():
                 return units * (1.0 - math.comb(N - slots, G)
                                 / math.comb(N, G))
 
+            # Smooth line: sample |G| geometrically (integers, for the
+            # exact hypergeometric occupancy) from 2 to N.
+            kmax = math.log2(N)
+            gvals = sorted({max(2, min(N, int(round(2.0 ** k))))
+                            for k in [1 + i * (kmax - 1) / 49
+                                      for i in range(50)]})
             xs_m, ys_m = [], []
-            for G in gs:
-                if G > N:
-                    continue
+            for G in gvals:
                 e_tor, e_pod = e_occ(n_tor, s_tor, G), e_occ(n_pod, s_pod, G)
                 apex = e_pod if e_pod > 1.0001 else 1.0  # core vs agg apex
                 xs_m.append(G)
                 ys_m.append(G + e_tor + apex)
-            ax.plot(xs_m, ys_m, color="black", linestyle=":",
-                    linewidth=1.3, alpha=0.75, zorder=1,
-                    label=(r"model $|G|+E[\mathrm{ToR}]"
-                           r"+E[\mathrm{pod}]$") if idx == 0 else None)
+            ax.plot(xs_m, ys_m, color=topo_color[N], linestyle="-",
+                    linewidth=1.7, alpha=0.9, zorder=2,
+                    label=f"{N}-host fat-tree")
 
     ax.set_xscale("log", base=2)
     ax.set_yscale("log")
@@ -240,7 +260,17 @@ def main():
     ax.set_title(args.title)
     ax.grid(True, which="both", linestyle=":", linewidth=0.5,
             alpha=0.6)
-    ax.legend(fontsize=8, loc="upper left")
+    handles, labels = ax.get_legend_handles_labels()
+    if args.theory_mcast:
+        # Lines are the model; add one proxy so the marker meaning is
+        # explicit. Title clarifies which is which.
+        handles = handles + [Line2D([0], [0], color="0.4", marker="o",
+                                    linestyle="none", markersize=5,
+                                    label="measured (median, min/max)")]
+        ax.legend(handles=handles, fontsize=8, loc="upper left",
+                  title="lines: occupancy model")
+    else:
+        ax.legend(fontsize=8, loc="upper left")
     fig.tight_layout()
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
