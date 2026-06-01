@@ -35,6 +35,9 @@ VARIANTS = [
     ("Allreduce (apex)",       "start_allreduce", ["-allreduce_mode", "apex"],          "ALLREDUCE"),
     ("Allreduce (reduce+bcast)","start_allreduce","-allreduce_mode reduce_bcast".split(),"ALLREDUCE_RB"),
 ]
+# Swept (kept in the CSV) but not rendered: Reduce is plotted separately
+# later against a standard (non-INC) reduce, so it is excluded here.
+PLOT_EXCLUDE = {"Reduce"}
 
 
 def pod_of(h):
@@ -107,6 +110,8 @@ def plot_goodput(xs, data, fname):
     ax.axhline(WIRE_GBPS, color="grey", linestyle=":", linewidth=1.2,
                label="wire speed (%g Gbit/s)" % WIRE_GBPS)
     for lab, *_ in VARIANTS:
+        if lab in PLOT_EXCLUDE:
+            continue
         X, G = [], []
         for x in xs:
             ds = data[lab].get(x) or []
@@ -132,6 +137,8 @@ def plot(xs, data, xlabel, title, fname, logx=False):
     fig, ax = plt.subplots(figsize=(6.4, 4.0))
     markers = {"Reduce": "o", "Allreduce (apex)": "s", "Allreduce (reduce+bcast)": "^"}
     for lab, *_ in VARIANTS:
+        if lab in PLOT_EXCLUDE:
+            continue
         X, lo, mid, hi = errbars(xs, data, lab)
         if not X:
             continue
