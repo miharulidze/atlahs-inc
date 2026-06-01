@@ -294,32 +294,42 @@ void FatTreeSwitch::handle_reduce(UecReducePacket& pkt) {
     _reduce_barriers.erase(key);
     bool lossless = (pkt.peek_ingress_queue() != nullptr);
 
-    if (entry->root_port_idx_or_neg1 < 0) {
-        // APEX (Allreduce turn-around): fan the result back down the whole
-        // tree as a multicast. Synthesise a UecMcastPacket seed carrying the
-        // operation identity, fan it out, and discard the seed. payload size
-        // matches one contribution (subtract the header overhead that
-        // UecMcastPacket::newpkt re-adds). The descent uses the
-        // turn-around group: own group (Allreduce, fan to all members) or a
-        // synthetic single-member descent group (rooted Reduce, deliver to R).
-        uint32_t tg = (entry->turnaround_group_or_neg1 >= 0)
-                ? static_cast<uint32_t>(entry->turnaround_group_or_neg1)
-                : pkt.group_id();
-        INCFibEntry* dent =
-                (tg == pkt.group_id()) ? entry : _inc_fib->lookup(tg);
-        assert(dent && "reduce apex: turn-around (descent) group entry missing");
-        const std::bitset<128>& mask = dent->tree_port_mask;
+    if (entry->root_port_idx_or_neg1 < 0 && entry->reduce_root_or_neg1 >= 0) {
+        // APEX, rooted Reduce: deliver the aggregate to the single root R as
+        // an ordinary unicast down the regular FIB --- down-routing in a fat
+        // tree is a deterministic single path, so no descent tree is needed.
+        // The packet is marked descending so transit switches route it
+        // instead of re-aggregating. Same packet object forwards the whole
+        // way down (no per-hop allocation).
+        UecReducePacket* d = UecReducePacket::newpkt_downward(
+                pkt, entry->reduce_root_or_neg1);
+        // Switch-originated first hop: under lossless the uplink/downlink
+        // egress queue needs a non-null prev; reuse the no-op sentinel.
+        if (lossless) d->set_ingress_queue(NoOpVirtualQueue::instance());
+        // Kick off this switch's regular ingress pipeline for d.
+        _packets[d] = true;
+        const Route* nh = getNextHop(*d, NULL);
+        d->set_route(*nh);
+        _pipe->receivePacket(*d);
+    } else if (entry->root_port_idx_or_neg1 < 0) {
+        // APEX, Allreduce turn-around: fan the result back down the whole
+        // group tree as a multicast (deliver to all members). Synthesise a
+        // UecMcastPacket seed carrying the operation identity, fan it out,
+        // and discard the seed. payload size matches one contribution
+        // (subtract the header overhead UecMcastPacket::newpkt re-adds).
+        const std::bitset<128>& mask = entry->tree_port_mask;
         size_t first = 0;
         while (first < 128 && !mask.test(first)) ++first;
         const Route& seed_route =
-                (dent->leaf_route_for(static_cast<uint8_t>(first)))
-                    ? *dent->leaf_route_for(static_cast<uint8_t>(first))
+                (entry->leaf_route_for(static_cast<uint8_t>(first)))
+                    ? *entry->leaf_route_for(static_cast<uint8_t>(first))
                     : *_port_egress_routes[first];
         int payload = static_cast<int>(pkt.size()) - UecMcastPacket::acksize;
         UecMcastPacket* seed = UecMcastPacket::newpkt(
                 pkt.flow(), seed_route, pkt.seqno(), payload,
-                tg, static_cast<uint32_t>(pkt.from), pkt.op_seq_id());
-        fanout_replicas(dent, mask, *seed, /*ingress_iq=*/nullptr, lossless);
+                pkt.group_id(), static_cast<uint32_t>(pkt.from),
+                pkt.op_seq_id());
+        fanout_replicas(entry, mask, *seed, /*ingress_iq=*/nullptr, lossless);
         seed->free();
     } else {
         // Forward one combined packet toward the root via the toward-root
@@ -398,9 +408,12 @@ void FatTreeSwitch::receivePacket(Packet& pkt){
         return;
     }
 
-    // Phase-3 in-network aggregation: a UEC_REDUCE packet is routed via the
-    // INCFib fan-in barrier (handle_reduce), the dual of the mcast arm.
-    if (pkt.type() == UEC_REDUCE) {
+    // Phase-3 in-network aggregation: an ascending UEC_REDUCE packet is
+    // routed via the INCFib fan-in barrier (handle_reduce), the dual of the
+    // mcast arm. A *descending* one (rooted-Reduce result heading to R) is a
+    // plain unicast --- fall through to the regular FIB pipeline below.
+    if (pkt.type() == UEC_REDUCE &&
+        !static_cast<UecReducePacket&>(pkt).descending()) {
         handle_reduce(static_cast<UecReducePacket&>(pkt));
         return;
     }

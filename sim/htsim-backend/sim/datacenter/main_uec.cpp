@@ -995,8 +995,6 @@ int main(int argc, char **argv) {
                     exit(1);
                 }
                 int root = group[src];
-                int gdesc = top->reduce_descent_group(static_cast<uint32_t>(dest));
-                assert(gdesc >= 0 && "set_up_mcast did not install reduce descent");
 
                 flowid_t op_flow_id = crt->flowid
                         ? crt->flowid : ++next_bcast_leg_flow_id;
@@ -1013,12 +1011,16 @@ int main(int argc, char **argv) {
                     barrier->add_target(*new TriggerRelay(downstream));
                 }
 
-                // R's descent sink (synthetic descent group) fires completion.
-                UecMcastSink* rsink =
-                        top->get_mcast_sink(root, static_cast<uint32_t>(gdesc));
-                assert(rsink && "reduce descent sink missing");
+                // R's reduce sink: receives the result the apex unicasts down
+                // via the regular FIB. Registered as a host route at R's ToR
+                // (keyed by op_flow_id), so getHostRoute resolves the
+                // descending packet to it; register_op fires completion.
+                UecReduceSink* rsink = new UecReduceSink(root,
+                        static_cast<uint32_t>(dest));
                 rsink->register_op(op_flow_id,
                                    crt->size > 0 ? crt->size : 0, barrier);
+                top->switches_lp[top->HOST_POD_SWITCH(root)]
+                        ->addHostPort(root, op_flow_id, rsink);
 
                 // Every member contributes one UEC_REDUCE up the tree.
                 for (int32_t m : group) {

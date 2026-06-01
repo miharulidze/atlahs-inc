@@ -328,11 +328,19 @@ class UecReducePacket : public Packet {
     uint32_t _group_id;
     uint32_t _op_seq_id;
 
+    // The aggregate, on its way DOWN to the rooted-Reduce root R. A
+    // descending packet is unicast via the regular FIB (getNextHop by
+    // _dst); transit switches must NOT re-aggregate it, so receivePacket's
+    // UEC_REDUCE arm checks this flag and falls through to normal routing.
+    bool _descending = false;
+
     const static int acksize = 64;
     static constexpr uint32_t PATHID_SEED_MIX = 2654435761u;
     static constexpr uint32_t PATHID_HOP_MIX  = 31u;
 
     UecReducePacket() : Packet() {}
+
+    bool descending() const { return _descending; }
 
     // Source-side factory: one member's contribution heading toward the
     // root. Mirrors UecMcastPacket::newpkt.
@@ -377,6 +385,33 @@ class UecReducePacket : public Packet {
         p->from = any_child.from;
         p->to   = any_child.to;
         p->tag  = any_child.tag;
+        return p;
+    }
+
+    // Apex factory for rooted Reduce: the combined result heading DOWN to
+    // the root host R as a regular unicast. dst = R and flow_id (inherited
+    // from the op's flow) drive getNextHop / getHostRoute; no route is set
+    // here --- the originating switch fills it via getNextHop. Marked
+    // descending so transit switches route it normally instead of
+    // re-aggregating.
+    inline static UecReducePacket *newpkt_downward(UecReducePacket &combined,
+                                                   int dst_host) {
+        UecReducePacket *p = _packetdb.allocPacket();
+        p->set_attrs(combined.flow(), combined.size(), combined.id());
+        p->_type = UEC_REDUCE;
+        p->_is_header = false;
+        p->_bounced = false;
+        p->_seqno = combined._seqno;
+        p->_group_id = combined._group_id;
+        p->_op_seq_id = combined._op_seq_id;
+        p->_pathid = combined._pathid;
+        p->_direction = NONE;
+        p->_ingressqueue = NULL;
+        p->_dst = static_cast<uint32_t>(dst_host);
+        p->_descending = true;
+        p->from = combined.from;
+        p->to   = dst_host;
+        p->tag  = combined.tag;
         return p;
     }
 
