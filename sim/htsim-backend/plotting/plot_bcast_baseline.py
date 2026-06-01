@@ -267,8 +267,8 @@ def main():
     # bound uses cross-pod T_fabric (the longest). Both share the
     # same per-leg slope t_ser.
     if args.theory:
-        g_min = min(g for (_, g), _ in buckets.items())
-        g_max = max(g for (_, g), _ in buckets.items())
+        g_min = min(k[1] for k in buckets)
+        g_max = max(k[1] for k in buckets)
         if g_min < 1:
             g_min = 1
         log_lo = math.log2(g_min)
