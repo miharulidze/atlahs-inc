@@ -59,10 +59,24 @@ def main():
     p.add_argument(
         "--mmm",
         action="store_true",
-        help="Render min/max as a translucent band per series with "
-             "the median as a solid line on top, instead of a bare "
-             "median line. Use for standalone per-phase figures where "
-             "the footprint genuinely varies with the group layout.",
+        help="Render min/max as error bars (median marker with a "
+             "min/max whisker) per series, instead of a bare median "
+             "line. Use for standalone per-phase figures where the "
+             "footprint genuinely varies with the group layout.",
+    )
+    p.add_argument(
+        "--offset-topologies",
+        action="store_true",
+        default=True,
+        help="Apply a tiny multiplicative x-offset per topology so "
+             "that error bars sharing identical min/median/max (e.g. "
+             "at |G|=2) don't stack and occlude each other (default: "
+             "on).",
+    )
+    p.add_argument(
+        "--no-offset-topologies",
+        action="store_false",
+        dest="offset_topologies",
     )
     args = p.parse_args()
 
@@ -91,8 +105,24 @@ def main():
     for k in by_topo:
         by_topo[k].sort(key=lambda t: t[0])
 
+    # Spread the topologies apart by a tiny multiplicative x-offset so
+    # that when several share identical min/median/max (e.g. at
+    # |G|=2, where every topology yields 3/11/11) their error bars do
+    # not stack and occlude one another. Pure cosmetics on the log-x
+    # axis; the offset is a few percent, well below the gap between
+    # adjacent group sizes. Matches plot_bcast_baseline.py.
+    topos = sorted({nodes for nodes, _ in by_topo})
+    n_topos = len(topos)
+    offsets = {}
+    if args.offset_topologies and n_topos > 1:
+        for i, nodes in enumerate(topos):
+            offsets[nodes] = 1.0 + 0.04 * (i - (n_topos - 1) / 2)
+    else:
+        for nodes in topos:
+            offsets[nodes] = 1.0
+
     for (nodes, mode), series in sorted(by_topo.items()):
-        xs = [g for g, _ in series]
+        xs = [g * offsets[nodes] for g, _ in series]
         medians = [sorted(d)[len(d) // 2] for _, d in series]
         ls = mode_style.get(mode, "-")
         suffix = "" if mode == "baseline" else " [mcast]"
