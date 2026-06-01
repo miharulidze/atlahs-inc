@@ -834,16 +834,6 @@ int main(int argc, char **argv) {
         map<flowid_t, TriggerTarget *> flowmap;
         vector<connection *> *all_conns = conns->getAllConnections();
         top->groups = &(conns->groups);
-        // Rooted Reduce: tell the topology each reduce target's root host
-        // before set_up_mcast, so it installs R's descent branch.
-        for (connection *c : *all_conns) {
-            if (c->is_reduce &&
-                static_cast<size_t>(c->dst) < conns->groups.size() &&
-                static_cast<size_t>(c->src) < conns->groups[c->dst].size()) {
-                top->set_reduce_root(static_cast<uint32_t>(c->dst),
-                                     conns->groups[c->dst][c->src]);
-            }
-        }
         top->set_up_mcast(); // for real mcast switch routing, configure switch tables
         UecSrc *uecSrc;
         UecSink *uecSnk;
@@ -1030,6 +1020,7 @@ int main(int argc, char **argv) {
                     rs->setNumberEntropies(256);
                     rs->set_group_id(static_cast<uint32_t>(dest));
                     rs->set_flowid(op_flow_id);
+                    rs->set_reduce_root(root);  // rooted Reduce: deliver to R
                     if (crt->size > 0) rs->setFlowSize(crt->size);
                     if (crt->trigger) {
                         Trigger *trig = conns->getTrigger(crt->trigger, eventlist);

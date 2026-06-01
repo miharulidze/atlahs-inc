@@ -113,6 +113,7 @@ void UecReduceSrc::emit_once() {
                 /*seqno=*/_highest_sent + 1, /*size=*/_mss,
                 _group_id,
                 /*source_host_id=*/static_cast<uint32_t>(this->from),
+                /*reduce_root=*/_reduce_root,
                 /*op_seq_id=*/0);
         p->from = this->from;
         p->to   = this->to;

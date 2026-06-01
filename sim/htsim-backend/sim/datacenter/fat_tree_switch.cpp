@@ -278,10 +278,22 @@ void FatTreeSwitch::handle_reduce(UecReducePacket& pkt) {
     if (VirtualQueue* iq = pkt.peek_ingress_queue())
         static_cast<LosslessInputQueue*>(iq)->release_bytes(pkt.size());
 
-    // Record arrival against this operation's barrier.
+    // Record arrival against this operation's barrier. Key by the op's
+    // flow id (globally unique per collective operation), NOT op_seq_id
+    // (always 0 in this milestone): this keeps concurrent collectives on
+    // the SAME group in separate barriers --- op_seq_id keying would alias
+    // them and silently corrupt the fan-in count. group_id is folded into
+    // the high bits for readability. (Multi-MTU will extend the key with
+    // the per-chunk seqno.)
     uint64_t key = (static_cast<uint64_t>(pkt.group_id()) << 32)
-                   | pkt.op_seq_id();
+                   | pkt.flow_id();
     int arrived = ++_reduce_barriers[key];
+    // Single-MTU invariant: each child contributes exactly once, so a
+    // barrier never exceeds its expected size. A violation means a
+    // duplicate contribution or a key alias --- fail loudly rather than
+    // emit a wrong result.
+    assert(arrived <= entry->expected_children &&
+           "reduce fan-in barrier over-arrival");
 
     if (arrived < entry->expected_children) {
         // Not all children in yet; fold this contribution (timing/bytes
@@ -294,15 +306,17 @@ void FatTreeSwitch::handle_reduce(UecReducePacket& pkt) {
     _reduce_barriers.erase(key);
     bool lossless = (pkt.peek_ingress_queue() != nullptr);
 
-    if (entry->root_port_idx_or_neg1 < 0 && entry->reduce_root_or_neg1 >= 0) {
+    if (entry->root_port_idx_or_neg1 < 0 && pkt.reduce_root() >= 0) {
         // APEX, rooted Reduce: deliver the aggregate to the single root R as
         // an ordinary unicast down the regular FIB --- down-routing in a fat
         // tree is a deterministic single path, so no descent tree is needed.
-        // The packet is marked descending so transit switches route it
-        // instead of re-aggregating. Same packet object forwards the whole
-        // way down (no per-hop allocation).
+        // R is carried on the packet (not per-group state), so concurrent
+        // same-group reduces with different roots are fine. The packet is
+        // marked descending so transit switches route it instead of
+        // re-aggregating; the same packet forwards all the way down (no
+        // per-hop allocation).
         UecReducePacket* d = UecReducePacket::newpkt_downward(
-                pkt, entry->reduce_root_or_neg1);
+                pkt, pkt.reduce_root());
         // Switch-originated first hop: under lossless the uplink/downlink
         // egress queue needs a non-null prev; reuse the no-op sentinel.
         if (lossless) d->set_ingress_queue(NoOpVirtualQueue::instance());

@@ -334,6 +334,12 @@ class UecReducePacket : public Packet {
     // UEC_REDUCE arm checks this flag and falls through to normal routing.
     bool _descending = false;
 
+    // Operation kind, carried per packet so the apex needs no per-group
+    // state (and concurrent same-group ops with different roots work):
+    // -1 = Allreduce (apex fans the result down the whole tree); >= 0 =
+    // rooted Reduce, delivering to this root host via the regular FIB.
+    int _reduce_root = -1;
+
     const static int acksize = 64;
     static constexpr uint32_t PATHID_SEED_MIX = 2654435761u;
     static constexpr uint32_t PATHID_HOP_MIX  = 31u;
@@ -341,14 +347,17 @@ class UecReducePacket : public Packet {
     UecReducePacket() : Packet() {}
 
     bool descending() const { return _descending; }
+    int  reduce_root() const { return _reduce_root; }
 
     // Source-side factory: one member's contribution heading toward the
-    // root. Mirrors UecMcastPacket::newpkt.
+    // root. Mirrors UecMcastPacket::newpkt. reduce_root carries the op kind
+    // (-1 = Allreduce, >= 0 = Reduce to that host).
     inline static UecReducePacket *newpkt(PacketFlow &flow,
                                           const Route &route,
                                           seq_t seqno, int size,
                                           uint32_t group_id,
                                           uint32_t source_host_id,
+                                          int reduce_root = -1,
                                           uint32_t op_seq_id = 0) {
         UecReducePacket *p = _packetdb.allocPacket();
         p->set_route(flow, route, size + acksize, seqno + size - 1);
@@ -358,6 +367,7 @@ class UecReducePacket : public Packet {
         p->_seqno = seqno;
         p->_group_id = group_id;
         p->_op_seq_id = op_seq_id;
+        p->_reduce_root = reduce_root;
         p->_pathid = (group_id ^ source_host_id) * PATHID_SEED_MIX;
         p->_direction = NONE;
         p->_ingressqueue = NULL;
@@ -379,6 +389,7 @@ class UecReducePacket : public Packet {
         p->_seqno = any_child._seqno;
         p->_group_id = any_child._group_id;
         p->_op_seq_id = any_child._op_seq_id;
+        p->_reduce_root = any_child._reduce_root;
         p->_pathid = any_child._pathid * PATHID_HOP_MIX + 1u;
         p->_direction = NONE;
         p->_ingressqueue = NULL;
@@ -404,6 +415,7 @@ class UecReducePacket : public Packet {
         p->_seqno = combined._seqno;
         p->_group_id = combined._group_id;
         p->_op_seq_id = combined._op_seq_id;
+        p->_reduce_root = combined._reduce_root;
         p->_pathid = combined._pathid;
         p->_direction = NONE;
         p->_ingressqueue = NULL;

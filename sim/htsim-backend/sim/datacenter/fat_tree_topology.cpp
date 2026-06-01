@@ -867,23 +867,9 @@ void FatTreeTopology::set_up_mcast() {
             tor->addMcastPort(h, g, sink);
             _mcast_sinks[std::make_pair(h, g)] = sink;
         }
-
-        // Rooted Reduce: mark the apex so it delivers the aggregate to the
-        // single root R via the regular FIB (no descent tree needed --- see
-        // handle_reduce / newpkt_downward). The driver registers R's sink as
-        // a host route.
-        auto rr = _reduce_roots.find(g);
-        if (rr != _reduce_roots.end()) {
-            for (auto& node : tree) {
-                if (node.uplink_port_idx_or_neg1 < 0) {  // apex
-                    INCFibEntry* e = static_cast<FatTreeSwitch*>(node.switch_ptr)
-                                             ->inc_fib()->lookup(g);
-                    assert(e && "reduce: apex group entry missing");
-                    e->reduce_root_or_neg1 = rr->second;
-                    break;
-                }
-            }
-        }
+        // Rooted Reduce needs no per-group apex state: the op kind and root
+        // travel on each UecReducePacket (see handle_reduce). The driver
+        // registers R's sink as a host route for the descending unicast.
     }
 }
 

@@ -59,14 +59,6 @@ class INCFibEntry {
     // multicast-only entries. Set by set_up_reduce / set_up_allreduce.
     int expected_children = 0;
 
-    // PHASE 3 (apex only): how this switch delivers the aggregate when it
-    // is the apex (root_port == -1). -1 (default) = Allreduce: fan the
-    // result down the full group tree (tree_port_mask) to all members.
-    // >= 0 = rooted Reduce: the value is the root host R, and the aggregate
-    // is sent down to R as a single regular unicast via the standard FIB
-    // (getNextHop by dst) --- no descent tree needed. Ignored off-apex.
-    int reduce_root_or_neg1 = -1;
-
     // Look up the leaf-TOR member route for a given port index, or
     // nullptr if the port is interior at this switch. O(N) over a
     // sparse list; N ≤ K/2 for any leaf TOR. Negligible.

@@ -140,8 +140,15 @@ class UecReduceSrc : public UecCollectiveSrc {
             : UecCollectiveSrc(logger, pktLogger, eventList, rtt, bdp,
                                queueDrainTime, hops) {}
 
+    // Operation kind for this source's contributions: -1 = Allreduce
+    // (apex fans the result to all members), >= 0 = rooted Reduce to that
+    // host. Carried on every emitted packet so the apex needs no per-group
+    // state. Default -1 (Allreduce).
+    void set_reduce_root(int root) { _reduce_root = root; }
+
   protected:
     void emit_once() override;
+    int _reduce_root = -1;
 };
 
 // Phase-three reduce sink. For a rooted Reduce there is one instance,

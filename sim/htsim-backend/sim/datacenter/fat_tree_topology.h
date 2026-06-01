@@ -117,12 +117,6 @@ public:
         return it == _mcast_sinks.end() ? nullptr : it->second;
     }
 
-    // Rooted-Reduce wiring. The driver records (group -> root host) before
-    // set_up_mcast; set_up_mcast then marks each such group's apex entry so
-    // it delivers the aggregate to R via the regular FIB (no descent tree).
-    void set_reduce_root(uint32_t group_idx, int root_host) {
-        _reduce_roots[group_idx] = root_host;
-    }
 
     static void set_tiers(uint32_t tiers) {_tiers = tiers;}
     static uint32_t get_tiers() {return _tiers;}
@@ -242,8 +236,6 @@ private:
     // set_mcast_pin_assignment().
     static int _mcast_pin_assignment;
 
-    // Rooted-Reduce state (see set_reduce_root). group -> root host R.
-    std::unordered_map<uint32_t,int> _reduce_roots;
 
     // _link_latencies[0] is the ToR->host latency.
     static simtime_picosec _link_latencies[3];
