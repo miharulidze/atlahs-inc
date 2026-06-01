@@ -278,20 +278,21 @@ void FatTreeSwitch::handle_reduce(UecReducePacket& pkt) {
     if (VirtualQueue* iq = pkt.peek_ingress_queue())
         static_cast<LosslessInputQueue*>(iq)->release_bytes(pkt.size());
 
-    // Record arrival against this operation's barrier. Key by the op's
-    // flow id (globally unique per collective operation), NOT op_seq_id
-    // (always 0 in this milestone): this keeps concurrent collectives on
-    // the SAME group in separate barriers --- op_seq_id keying would alias
-    // them and silently corrupt the fan-in count. group_id is folded into
-    // the high bits for readability. (Multi-MTU will extend the key with
-    // the per-chunk seqno.)
-    uint64_t key = (static_cast<uint64_t>(pkt.group_id()) << 32)
-                   | pkt.flow_id();
+    // Record arrival against this operation's PER-CHUNK barrier. Key by the
+    // op's flow id (globally unique per collective op) and the chunk's seqno:
+    // contributions of the same chunk from all children aggregate
+    // independently and pipeline up the tree; concurrent collectives on the
+    // same group stay in separate barriers (op_seq_id is always 0 here, so
+    // it would alias them). All members emit the same seqno sequence, so a
+    // chunk's seqno is consistent across children. Packs into 64 bits
+    // (seqno < 2^32 for any simulated flow size).
+    uint64_t key = (static_cast<uint64_t>(pkt.flow_id()) << 32)
+                   | (static_cast<uint32_t>(pkt.seqno()) & 0xFFFFFFFFu);
     int arrived = ++_reduce_barriers[key];
-    // Single-MTU invariant: each child contributes exactly once, so a
-    // barrier never exceeds its expected size. A violation means a
-    // duplicate contribution or a key alias --- fail loudly rather than
-    // emit a wrong result.
+    // Each child contributes a given chunk exactly once, so a per-chunk
+    // barrier never exceeds its expected size. A violation means a duplicate
+    // contribution or a key alias --- fail loudly rather than emit a wrong
+    // result.
     assert(arrived <= entry->expected_children &&
            "reduce fan-in barrier over-arrival");
 

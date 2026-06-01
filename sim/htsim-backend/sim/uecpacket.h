@@ -368,6 +368,7 @@ class UecReducePacket : public Packet {
         p->_group_id = group_id;
         p->_op_seq_id = op_seq_id;
         p->_reduce_root = reduce_root;
+        p->_descending = false;  // PacketDB recycle: clear stale descending flag
         p->_pathid = (group_id ^ source_host_id) * PATHID_SEED_MIX;
         p->_direction = NONE;
         p->_ingressqueue = NULL;
@@ -390,6 +391,7 @@ class UecReducePacket : public Packet {
         p->_group_id = any_child._group_id;
         p->_op_seq_id = any_child._op_seq_id;
         p->_reduce_root = any_child._reduce_root;
+        p->_descending = false;  // combined packet ascends; clear stale flag
         p->_pathid = any_child._pathid * PATHID_HOP_MIX + 1u;
         p->_direction = NONE;
         p->_ingressqueue = NULL;
