@@ -112,19 +112,4 @@ private:
     int _pending;
 };
 
-// Zero-allocation no-op virtual queue for switch-originated lossless packets
-// that carry no ingress charge to release --- the Allreduce apex turn-around
-// fanout and the reduce combined-up packet. It exists only to give the egress
-// LosslessOutputQueue a non-null prev to pair with; completedService does
-// nothing. A single shared instance is reused for every such packet (no
-// per-packet allocation), which matters on the multi-MTU streaming path.
-class NoOpVirtualQueue : public VirtualQueue {
-public:
-    virtual void completedService(Packet& pkt) {}
-    static NoOpVirtualQueue* instance() {
-        static NoOpVirtualQueue inst;
-        return &inst;
-    }
-};
-
 #endif

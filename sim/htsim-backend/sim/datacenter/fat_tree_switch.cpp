@@ -203,10 +203,11 @@ void FatTreeSwitch::handle_mcast(UecMcastPacket& pkt) {
 // Shared fan-out used by handle_mcast and the Allreduce apex turn-around.
 // Spawns one UecMcastPacket replica per set bit of egress_mask. Under
 // lossless, a single McastFanoutCredit releases the ingress charge once the
-// last replica has drained; ingress_iq == nullptr means the traffic is
-// switch-originated (apex turn-around) and carries no ingress charge, so the
-// credit's release is a no-op but still gives each egress queue a non-null
-// prev to pair with.
+// last replica has drained. The Allreduce apex carries no per-packet
+// ingress_iq (its seed is switch-originated) and instead supplies its own
+// ReduceFanInCredit via prev_override. Every lossless caller must therefore
+// provide either a real ingress_iq or a prev_override; a lossless fan-out
+// with neither has no charge to account for and is treated as a bug.
 void FatTreeSwitch::fanout_replicas(INCFibEntry* entry,
                                     const std::bitset<128>& egress_mask,
                                     UecMcastPacket& templ,
@@ -218,21 +219,23 @@ void FatTreeSwitch::fanout_replicas(INCFibEntry* entry,
     //  - prev_override given (Allreduce apex fan-in credit): use it for all
     //    replicas --- it already counts k drains before releasing;
     //  - real ingress charge (hop-by-hop traffic): one refcounting credit
-    //    releases the charge after the last replica drains;
-    //  - switch-originated, no charge: reuse the shared zero-alloc sentinel.
+    //    releases the charge after the last replica drains.
     VirtualQueue* prev = prev_override;
     if (lossless && !prev) {
-        if (ingress_iq) {
-            LosslessInputQueue* liq =
-                    static_cast<LosslessInputQueue*>(ingress_iq);
-            if (k == 0)
-                liq->release_bytes(templ.size());  // nothing to carry it
-            else
-                prev = new McastFanoutCredit(liq, templ.size(),
-                                             static_cast<int>(k));
-        } else {
-            prev = NoOpVirtualQueue::instance();
-        }
+        // No override: the only valid lossless source here is hop-by-hop
+        // traffic that arrived carrying an ingress charge. A lossless fan-out
+        // with neither an override nor an ingress_iq has nothing to account
+        // for --- no current caller produces it, so fail loudly rather than
+        // silently fan out uncounted bytes.
+        assert(ingress_iq &&
+               "lossless fanout needs an ingress_iq or a prev_override");
+        LosslessInputQueue* liq =
+                static_cast<LosslessInputQueue*>(ingress_iq);
+        if (k == 0)
+            liq->release_bytes(templ.size());  // nothing to carry it
+        else
+            prev = new McastFanoutCredit(liq, templ.size(),
+                                         static_cast<int>(k));
     }
 
     for (size_t i = 0; i < 128; ++i) {
