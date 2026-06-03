@@ -841,14 +841,12 @@ void FatTreeTopology::set_up_mcast() {
             // Phase-3 reduce ascent (harmless for pure multicast; only
             // consulted by handle_reduce). Forward the aggregate up the
             // uplink (root_port), having waited for every other tree port
-            // (expected_children). At the apex (uplink == -1) root_port
-            // stays -1 and expected_children counts all tree ports, so
-            // handle_reduce turns the aggregate around into the descent.
-            // Allreduce's descent reuses this same entry's tree_port_mask.
+            // (entry->expected_children(), derived from tree_port_mask).
+            // At the apex (uplink == -1) root_port stays -1 and
+            // expected_children() counts all tree ports, so handle_reduce
+            // turns the aggregate around into the descent. Allreduce's
+            // descent reuses this same entry's tree_port_mask.
             entry->root_port_idx_or_neg1 = node.uplink_port_idx_or_neg1;
-            entry->expected_children =
-                    static_cast<int>(node.tree_port_indices.size())
-                    - (node.uplink_port_idx_or_neg1 >= 0 ? 1 : 0);
             static_cast<FatTreeSwitch*>(node.switch_ptr)
                     ->inc_fib()->install(g, entry);
         }

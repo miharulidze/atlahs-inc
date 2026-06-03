@@ -230,7 +230,7 @@ private:
 
     // Phase-3 reduce fan-in barriers. Keyed by (flow_id<<32 | chunk seqno):
     // `arrived` counts contributions received for that chunk; when it reaches
-    // the entry's expected_children the switch emits/turns-around and the key
+    // the entry's expected_children() the switch emits/turns-around and the key
     // is erased. Under lossless, `charges` holds each arrived child's ingress
     // queue + bytes so the credit can release them once the result drains
     // (the children's charges are NOT released on arrival -- that is what

@@ -301,10 +301,10 @@ void FatTreeSwitch::handle_reduce(UecReducePacket& pkt) {
     // barrier never exceeds its expected size. A violation means a duplicate
     // contribution or a key alias --- fail loudly rather than emit a wrong
     // result.
-    assert(b.arrived <= entry->expected_children &&
+    assert(b.arrived <= entry->expected_children() &&
            "reduce fan-in barrier over-arrival");
 
-    if (b.arrived < entry->expected_children) {
+    if (b.arrived < entry->expected_children()) {
         // Not all children in yet; fold this contribution (timing/bytes
         // only -- no payload arithmetic) and wait.
         pkt.free();

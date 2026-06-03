@@ -53,11 +53,16 @@ class INCFibEntry {
 
     // PHASE 3 (reduce/allreduce): how many downstream contributions
     // this switch must collect before it emits one combined packet
-    // toward the root (fan-in barrier size). For a leaf TOR this is the
-    // number of local member hosts; for an interior switch it is the
-    // count of downstream tree ports (child switches). Zero for phase-2
-    // multicast-only entries. Set by set_up_reduce / set_up_allreduce.
-    int expected_children = 0;
+    // toward the root (fan-in barrier size). Every tree port except the
+    // uplink is a child; at the apex (no uplink, root_port_idx == -1)
+    // all tree ports are children. Derived from tree_port_mask +
+    // root_port_idx_or_neg1 — no stored state to keep in sync. Only
+    // consulted on the reduce path (handle_reduce); harmless for pure
+    // multicast entries, which never read it.
+    int expected_children() const {
+        return static_cast<int>(tree_port_mask.count())
+               - (root_port_idx_or_neg1 >= 0 ? 1 : 0);
+    }
 
     // Look up the leaf-TOR member route for a given port index, or
     // nullptr if the port is interior at this switch. O(N) over a
