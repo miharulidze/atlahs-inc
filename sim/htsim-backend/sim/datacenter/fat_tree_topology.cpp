@@ -8,7 +8,7 @@
 #include "main.h"
 #include "queue.h"
 #include "fat_tree_switch.h"
-#include "uec_bcast.h"  // for UecMcastSink in set_up_mcast
+#include "uec_collectives.h"  // for UecMcastSink in set_up_mcast
 #include "compositequeue.h"
 #include "aeolusqueue.h"
 #include "prioqueue.h"

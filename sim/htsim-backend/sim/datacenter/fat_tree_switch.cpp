@@ -6,7 +6,7 @@
 #include "queue_lossless.h"
 #include "queue_lossless_output.h"
 #include "queue_lossless_input.h"
-#include "uec_bcast.h"
+#include "uec_collectives.h"
 
 #include <cassert>
 

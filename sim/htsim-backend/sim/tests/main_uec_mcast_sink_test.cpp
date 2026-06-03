@@ -4,7 +4,7 @@
 // Verifies: single-op completion, wrong-type drop, multi-op
 // concurrency on the same persistent (host, group) sink.
 
-#include "uec_bcast.h"
+#include "uec_collectives.h"
 #include "uecpacket.h"
 #include "route.h"
 

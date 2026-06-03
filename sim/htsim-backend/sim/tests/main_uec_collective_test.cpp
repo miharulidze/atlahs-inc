@@ -13,7 +13,7 @@
 
 #include "eventlist.h"
 #include "trigger.h"
-#include "uec_collective.h"
+#include "uec_collectives.h"
 #include "uecpacket.h"
 #include "route.h"
 
