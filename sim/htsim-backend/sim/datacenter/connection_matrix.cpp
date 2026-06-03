@@ -759,6 +759,7 @@ bool ConnectionMatrix::load(istream& file){
             c->is_bcast = false;
             c->is_reduce = false;
             c->is_allreduce = false;
+            c->is_reduce_scatter = false;
             for (size_t i = 1; i < tokens.size(); i++) {
                 if (tokens[i] == "start_bcast") {
                     c->is_bcast = true;
@@ -775,6 +776,17 @@ bool ConnectionMatrix::load(istream& file){
                     // phase-3 in-network Allreduce: GRP (root index ignored,
                     // symmetric); time follows.
                     c->is_allreduce = true;
+                    i++;
+                    c->start = stof(tokens[i]);
+                }
+                else if (tokens[i] == "start_reduce_scatter") {
+                    // phase-3 in-network Reduce-Scatter: GRP (root index
+                    // ignored, symmetric); time follows. The per-rank vector
+                    // (size bytes) is partitioned into |G| equal blocks;
+                    // block i is reduced across all members and delivered to
+                    // member i. Requires size divisible by |G| and the
+                    // resulting block size a multiple of the MTU.
+                    c->is_reduce_scatter = true;
                     i++;
                     c->start = stof(tokens[i]);
                 }

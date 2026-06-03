@@ -1085,6 +1085,101 @@ int main(int argc, char **argv) {
             }
 
             // --------------------------------------------------------------
+            // Reduce-Scatter (MPI_Reduce_scatter), in-network many->many.
+            //
+            // `reduce_scatter ROOT->GRP` (is_reduce_scatter). Symmetric: the
+            // per-rank vector (crt->size bytes) is partitioned into |G| equal
+            // blocks. Every member emits its whole vector up the tree; the
+            // switches aggregate each chunk (seqno) independently; at the apex
+            // each chunk is delivered DOWN to the member that owns its block
+            // (block i -> group[i]) as a regular unicast --- the rooted-Reduce
+            // apex path, but with a per-chunk root instead of one fixed root.
+            // Each member ends with its own block_bytes-sized slice. Completion
+            // = all |G| members receive their block. (Allreduce = Reduce-
+            // Scatter + Allgather.) The root index is ignored (symmetric op).
+            // --------------------------------------------------------------
+            if (crt->is_reduce_scatter) {
+                if (static_cast<size_t>(dest) >= conns->groups.size()) {
+                    cerr << "reduce_scatter connection refers to undefined group index "
+                         << dest << "\n";
+                    exit(1);
+                }
+                const vector<int32_t> &group = conns->groups[dest];
+                if (group.size() < 2) {
+                    cerr << "reduce_scatter group " << dest << " has size < 2\n";
+                    exit(1);
+                }
+                int root_label = (static_cast<size_t>(src) < group.size())
+                        ? group[src] : group[0];   // label only; symmetric op
+
+                flowid_t op_flow_id = crt->flowid
+                        ? crt->flowid : ++next_bcast_leg_flow_id;
+
+                // The vector splits into |G| equal blocks; block i -> group[i].
+                uint64_t block_bytes = crt->size > 0
+                        ? static_cast<uint64_t>(crt->size) / group.size() : 0;
+                vector<int> owners(group.begin(), group.end());
+
+                // Completion = every member receives its own block.
+                BarrierTrigger *barrier = new BarrierTrigger(
+                        eventlist, ++next_bcast_barrier_id, group.size());
+                barrier->add_target(*new ReduceCompletionRecorder(
+                        eventlist, "REDUCE_SCATTER", op_flow_id, root_label,
+                        dest, crt->size, group.size(), crt->start));
+                if (crt->recv_done_trigger) {
+                    Trigger *downstream = conns->getTrigger(
+                            crt->recv_done_trigger, eventlist);
+                    barrier->add_target(*new TriggerRelay(downstream));
+                }
+
+                // Each member is the root for its own block: a reduce sink
+                // expecting block_bytes, registered as a host route at the
+                // member's ToR (keyed by op_flow_id; addr distinguishes members
+                // that share a ToR). The apex's descending unicast for block i
+                // resolves to owner i's sink.
+                for (int32_t m : group) {
+                    UecReduceSink *rsink = new UecReduceSink(m,
+                            static_cast<uint32_t>(dest));
+                    rsink->register_op(op_flow_id, block_bytes, barrier);
+                    top->switches_lp[top->HOST_POD_SWITCH(m)]
+                            ->addHostPort(m, op_flow_id, rsink);
+                }
+
+                // Every member emits its whole vector up the tree, stamping
+                // each chunk with the owner host of the block it belongs to.
+                for (int32_t m : group) {
+                    UecReduceSrc *rs = new UecReduceSrc(
+                            NULL, NULL, eventlist,
+                            base_rtt_max_hops, bdp_local, 100, 6);
+                    rs->setNumberEntropies(256);
+                    rs->set_group_id(static_cast<uint32_t>(dest));
+                    rs->set_flowid(op_flow_id);
+                    rs->set_reduce_scatter(owners, block_bytes);
+                    if (crt->size > 0) rs->setFlowSize(crt->size);
+                    if (crt->trigger) {
+                        Trigger *trig = conns->getTrigger(crt->trigger, eventlist);
+                        trig->add_target(*rs);
+                    }
+                    rs->setName("uec_reduce_scatter_src_" + ntoa_uec(m)
+                                + "_g" + ntoa_uec(dest));
+                    logfile.writeName(*rs);
+
+                    Route *srctotor = new Route();
+                    uint32_t tor = top->HOST_POD_SWITCH(m);
+                    srctotor->push_back(top->queues_ns_nlp[m][tor][0]);
+                    srctotor->push_back(top->pipes_ns_nlp[m][tor][0]);
+                    srctotor->push_back(
+                            top->queues_ns_nlp[m][tor][0]->getRemoteEndpoint());
+
+                    rs->from = m;
+                    rs->to   = -1;
+                    rs->set_paths(number_entropies);
+                    rs->connect_collective(srctotor, crt->start);
+                }
+                continue;
+            }
+
+            // --------------------------------------------------------------
             // Reduce (MPI_Reduce), in-network many->one.
             //
             // `reduce ROOT->GRP` (is_reduce). Every member is a reduce source

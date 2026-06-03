@@ -1,0 +1,14 @@
+# reduce_scatter_samerack.cm
+#
+# Reduce-Scatter over a 4-member group placed WITHIN one pod: hosts 0,1 share
+# ToR0 and hosts 2,3 share ToR1 (K=4 fat tree). The aggregation apex is an
+# aggregation switch in pod 0. block i -> host i, so the apex's descending
+# unicasts for blocks 0 and 1 BOTH arrive at ToR0 and must resolve to the
+# correct per-host sink (host-route keyed by (addr, op_flow_id)). This
+# exercises multi-sink delivery when group members share a ToR.
+#
+# Vector 16384 = 4 blocks of 4096; each member ends with its own 4096 slice.
+Nodes 16
+Grp 0 1 2 3
+Connections 1
+0->0 id 1 start_reduce_scatter 0 size 16384

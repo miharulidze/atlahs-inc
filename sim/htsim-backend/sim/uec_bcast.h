@@ -6,6 +6,9 @@
 #include "uec.h"
 #include "uec_collective.h"
 
+#include <cstdint>
+#include <vector>
+
 // ACK-less broadcast leg source.
 //
 // One UecBcastSrc object models a single (root -> member) unicast leg of a
@@ -146,9 +149,29 @@ class UecReduceSrc : public UecCollectiveSrc {
     // state. Default -1 (Allreduce).
     void set_reduce_root(int root) { _reduce_root = root; }
 
+    // Reduce-Scatter: per-packet (per-block) root assignment. The per-rank
+    // vector is partitioned into equal blocks; block_owner_hosts[i] is the
+    // host that owns block i, and block_bytes is the per-block size. Once
+    // configured, emit_once stamps every packet's reduce_root with the owner
+    // of the block its byte-offset falls in, overriding _reduce_root. Every
+    // member runs the identical mapping, so all contributions to a given
+    // chunk (seqno) agree on its root and the apex needs no per-group state.
+    // block_bytes must be a multiple of the MTU so no packet straddles a
+    // block boundary.
+    void set_reduce_scatter(const std::vector<int> &block_owner_hosts,
+                            uint64_t block_bytes) {
+        _rs_owners = block_owner_hosts;
+        _rs_block_bytes = block_bytes;
+        _is_reduce_scatter = true;
+    }
+
   protected:
     void emit_once() override;
     int _reduce_root = -1;
+
+    bool _is_reduce_scatter = false;
+    std::vector<int> _rs_owners;   // block index -> owner host id
+    uint64_t _rs_block_bytes = 0;  // per-block size in bytes
 };
 
 // Phase-three reduce sink. For a rooted Reduce there is one instance,

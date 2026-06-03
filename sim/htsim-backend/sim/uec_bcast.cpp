@@ -108,12 +108,21 @@ void UecReduceSrc::emit_once() {
     if (_sent_once) return;
     mark_sent();
     while (_highest_sent < _flow_size) {
+        // Reduce/Allreduce use the fixed _reduce_root for every chunk;
+        // Reduce-Scatter stamps each chunk with the root that owns the block
+        // its byte-offset falls in (block_bytes is a multiple of the MTU, so
+        // a chunk never straddles two blocks).
+        int reduce_root = _reduce_root;
+        if (_is_reduce_scatter) {
+            uint64_t blk = _highest_sent / _rs_block_bytes;
+            reduce_root = _rs_owners[blk];
+        }
         UecReducePacket *p = UecReducePacket::newpkt(
                 _flow, *_route,
                 /*seqno=*/_highest_sent + 1, /*size=*/_mss,
                 _group_id,
                 /*source_host_id=*/static_cast<uint32_t>(this->from),
-                /*reduce_root=*/_reduce_root,
+                /*reduce_root=*/reduce_root,
                 /*op_seq_id=*/0);
         p->from = this->from;
         p->to   = this->to;
