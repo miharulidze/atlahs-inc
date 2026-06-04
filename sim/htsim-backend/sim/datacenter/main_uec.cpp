@@ -983,9 +983,10 @@ int main(int argc, char **argv) {
                     // Bcast recipients (every member except R) fire finalBarrier.
                     for (int32_t m : group) {
                         if (m == R) continue;
-                        UecMcastSink* sink = top->get_mcast_sink(m, dest);
+                        UecCollectiveSink* sink =
+                                top->get_collective_sink(m, dest);
                         assert(sink && "set_up_mcast did not create sink");
-                        sink->register_op(bcast_flow,
+                        sink->register_mcast_op(bcast_flow,
                                           crt->size > 0 ? crt->size : 0,
                                           finalBarrier);
                     }
@@ -994,9 +995,10 @@ int main(int argc, char **argv) {
                     SingleShotTrigger *reduceDone = new SingleShotTrigger(
                             eventlist, ++next_bcast_barrier_id);
                     reduceDone->add_target(*bs);
-                    UecReduceSink *rsink = new UecReduceSink(R,
-                            static_cast<uint32_t>(dest));
-                    rsink->register_op(reduce_flow,
+                    UecCollectiveSink *rsink = top->get_collective_sink(
+                            R, static_cast<uint32_t>(dest));
+                    assert(rsink && "set_up_mcast did not create sink");
+                    rsink->register_reduce_op(reduce_flow,
                                        crt->size > 0 ? crt->size : 0, reduceDone);
                     top->switches_lp[top->HOST_POD_SWITCH(R)]
                             ->addHostPort(R, reduce_flow, rsink);
@@ -1046,10 +1048,10 @@ int main(int argc, char **argv) {
 
                 for (int32_t m : group) {
                     // Descent sink: receives the result the apex multicasts
-                    // back down (the persistent (host,group) UecMcastSink).
-                    UecMcastSink* sink = top->get_mcast_sink(m, dest);
+                    // back down (the persistent (host, group) collective sink).
+                    UecCollectiveSink* sink = top->get_collective_sink(m, dest);
                     assert(sink && "set_up_mcast did not create sink");
-                    sink->register_op(op_flow_id,
+                    sink->register_mcast_op(op_flow_id,
                                       crt->size > 0 ? crt->size : 0, barrier);
 
                     // Ascent source: emit one UEC_REDUCE contribution up the
@@ -1132,15 +1134,17 @@ int main(int argc, char **argv) {
                     barrier->add_target(*new TriggerRelay(downstream));
                 }
 
-                // Each member is the root for its own block: a reduce sink
-                // expecting block_bytes, registered as a host route at the
-                // member's ToR (keyed by op_flow_id; addr distinguishes members
-                // that share a ToR). The apex's descending unicast for block i
-                // resolves to owner i's sink.
+                // Each member is the root for its own block: its persistent
+                // (host, group) sink expects block_bytes under the op's flow
+                // id, and a host route at the member's ToR (keyed by
+                // op_flow_id; addr distinguishes members that share a ToR)
+                // resolves the apex's descending unicast for block i to
+                // owner i's sink.
                 for (int32_t m : group) {
-                    UecReduceSink *rsink = new UecReduceSink(m,
-                            static_cast<uint32_t>(dest));
-                    rsink->register_op(op_flow_id, block_bytes, barrier);
+                    UecCollectiveSink *rsink = top->get_collective_sink(
+                            m, static_cast<uint32_t>(dest));
+                    assert(rsink && "set_up_mcast did not create sink");
+                    rsink->register_reduce_op(op_flow_id, block_bytes, barrier);
                     top->switches_lp[top->HOST_POD_SWITCH(m)]
                             ->addHostPort(m, op_flow_id, rsink);
                 }
@@ -1195,6 +1199,13 @@ int main(int argc, char **argv) {
                     exit(1);
                 }
                 const vector<int32_t> &group = conns->groups[dest];
+                if (group.size() < 2) {
+                    // Matches the allreduce/reduce_scatter guard; also keeps
+                    // the persistent-sink fetch below well-defined
+                    // (set_up_mcast skips groups smaller than 2).
+                    cerr << "reduce group " << dest << " has size < 2\n";
+                    exit(1);
+                }
                 if (static_cast<size_t>(src) >= group.size()) {
                     cerr << "reduce root-index " << src
                          << " out of range for group " << dest << "\n";
@@ -1217,13 +1228,14 @@ int main(int argc, char **argv) {
                     barrier->add_target(*new TriggerRelay(downstream));
                 }
 
-                // R's reduce sink: receives the result the apex unicasts down
-                // via the regular FIB. Registered as a host route at R's ToR
-                // (keyed by op_flow_id), so getHostRoute resolves the
-                // descending packet to it; register_op fires completion.
-                UecReduceSink* rsink = new UecReduceSink(root,
+                // R's persistent collective sink receives the result the apex
+                // unicasts down via the regular FIB. A host route at R's ToR
+                // (keyed by op_flow_id) resolves the descending packet to it;
+                // register_reduce_op fires completion.
+                UecCollectiveSink* rsink = top->get_collective_sink(root,
                         static_cast<uint32_t>(dest));
-                rsink->register_op(op_flow_id,
+                assert(rsink && "set_up_mcast did not create sink");
+                rsink->register_reduce_op(op_flow_id,
                                    crt->size > 0 ? crt->size : 0, barrier);
                 top->switches_lp[top->HOST_POD_SWITCH(root)]
                         ->addHostPort(root, op_flow_id, rsink);
@@ -1301,7 +1313,7 @@ int main(int argc, char **argv) {
 
                 // -----------------------------------------------------
                 // Phase-2 mcast branch: one UecBcastSrcMcast emits one
-                // UecMcastPacket; persistent UecMcastSinks (created by
+                // UecMcastPacket; persistent UecCollectiveSinks (created by
                 // FatTreeTopology::set_up_mcast) absorb deliveries.
                 // The baseline branch below is preserved byte-identical.
                 // -----------------------------------------------------
@@ -1313,11 +1325,11 @@ int main(int argc, char **argv) {
                     // persistent (host, group) sink.
                     for (int32_t m : group) {
                         if (m == root) continue;
-                        UecMcastSink* sink =
-                                top->get_mcast_sink(m, dest);
+                        UecCollectiveSink* sink =
+                                top->get_collective_sink(m, dest);
                         assert(sink &&
                                "set_up_mcast did not create sink");
-                        sink->register_op(op_flow_id,
+                        sink->register_mcast_op(op_flow_id,
                                           crt->size > 0 ? crt->size : 0,
                                           barrier);
                     }

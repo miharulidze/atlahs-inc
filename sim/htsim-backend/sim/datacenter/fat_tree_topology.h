@@ -108,13 +108,16 @@ public:
     std::vector<McastTreeNode> build_mcast_tree(uint32_t group_idx,
                                                 uint32_t assignment_idx);
 
-    // Per-(host, group) UecMcastSink registry, populated by
+    // Per-(host, group) collective-endpoint registry, populated by
     // set_up_mcast and consumed by the driver. Key = (host, group).
-    std::map<std::pair<int, uint32_t>, class UecMcastSink*>
-            _mcast_sinks;
-    class UecMcastSink* get_mcast_sink(int host, uint32_t group_id) {
-        auto it = _mcast_sinks.find({host, group_id});
-        return it == _mcast_sinks.end() ? nullptr : it->second;
+    // One persistent UecCollectiveSink serves every mcast/reduce op on
+    // its group; per-op state lives in the sink's two op-state maps.
+    std::map<std::pair<int, uint32_t>, class UecCollectiveSink*>
+            _collective_sinks;
+    class UecCollectiveSink* get_collective_sink(int host,
+                                                 uint32_t group_id) {
+        auto it = _collective_sinks.find({host, group_id});
+        return it == _collective_sinks.end() ? nullptr : it->second;
     }
 
 

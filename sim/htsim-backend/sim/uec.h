@@ -503,8 +503,7 @@ class UecSrc : public PacketSink, public EventSource, public TriggerTarget {
 class UecSink : public PacketSink, public DataReceiver {
     friend class UecSrc;
     friend class UecBcastSink;
-    friend class UecMcastSink;
-    friend class UecReduceSink;
+    friend class UecCollectiveSink;
 
   public:
     UecSink();

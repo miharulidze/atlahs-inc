@@ -10,7 +10,7 @@
 #include <vector>
 
 class FatTreeTopology;
-class UecMcastSink;
+class UecCollectiveSink;
 class UecMcastPacket;
 class UecReducePacket;
 class VirtualQueue;
@@ -137,7 +137,7 @@ public:
     // INCFibEntry.leaf_routes. The bit for the host downlink port
     // must already be set in tree_port_mask (asserts on mismatch).
     void addMcastPort(int host_addr, uint32_t group_id,
-                      UecMcastSink* sink);
+                      UecCollectiveSink* sink);
 
     INCFib* inc_fib() const { return _inc_fib; }
     const std::vector<Route*>& port_egress_routes() const {

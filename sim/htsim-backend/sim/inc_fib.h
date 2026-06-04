@@ -34,7 +34,7 @@ class INCFibEntry {
     std::bitset<128> tree_port_mask;
 
     // For leaf-TOR member ports: pre-baked route ending at the
-    // (host, group)'s UecMcastSink. Sparse — typically one entry
+    // (host, group)'s UecCollectiveSink. Sparse — typically one entry
     // per local member host. Empty at interior switches (where
     // FatTreeSwitch::_port_egress_routes provides the route
     // instead).

@@ -1,8 +1,9 @@
 // -*- c-basic-offset: 4; indent-tabs-mode: nil -*-
 //
-// Unit tests for UecMcastSink (phase-two leaf-TOR sink).
-// Verifies: single-op completion, wrong-type drop, multi-op
-// concurrency on the same persistent (host, group) sink.
+// Unit tests for the mcast path of the merged UecCollectiveSink (the
+// leaf-TOR delivery endpoint). Verifies: single-op completion,
+// wrong-type drop, multi-op concurrency on the same persistent
+// (host, group) sink.
 
 #include "uec_collectives.h"
 #include "uecpacket.h"
@@ -12,22 +13,22 @@
 
 namespace {
 
-// Test-friendly accessor on top of UecMcastSink: peek at per-op
-// state via friend access. We declare a thin subclass that exposes
-// the relevant fields rather than reaching into the protected
-// UecCollectiveSink::_per_op directly from main().
-class TestableMcastSink : public UecMcastSink {
+// Test-friendly accessor on top of UecCollectiveSink: peek at the
+// mcast op-state map via protected access. We declare a thin subclass
+// that exposes the relevant fields rather than reaching into the
+// protected map directly from main().
+class TestableSink : public UecCollectiveSink {
   public:
-    TestableMcastSink(int host, uint32_t group)
-            : UecMcastSink(host, group) {}
+    TestableSink(int host, uint32_t group)
+            : UecCollectiveSink(host, group) {}
 
     bool completed_for(uint32_t op_id) const {
-        auto it = _per_op.find(op_id);
-        return it != _per_op.end() && it->second.completed;
+        auto it = _op_state_mcast.find(op_id);
+        return it != _op_state_mcast.end() && it->second.completed;
     }
     uint64_t bytes_for(uint32_t op_id) const {
-        auto it = _per_op.find(op_id);
-        return it != _per_op.end() ? it->second.bytes_received : 0;
+        auto it = _op_state_mcast.find(op_id);
+        return it != _op_state_mcast.end() ? it->second.bytes_received : 0;
     }
 };
 
@@ -53,10 +54,10 @@ PacketFlow &flow_for_op(uint32_t op_id) {
 
 // 1. Single op completes when expected bytes arrive.
 int test_single_op_completion() {
-    TestableMcastSink sink(/*host=*/0, /*group=*/7);
-    sink.register_op(/*op_id=*/100,
-                     /*expected=*/4096 + UecMcastPacket::acksize,
-                     /*end_trigger=*/nullptr);
+    TestableSink sink(/*host=*/0, /*group=*/7);
+    sink.register_mcast_op(/*op_id=*/100,
+                           /*expected=*/4096 + UecMcastPacket::acksize,
+                           /*end_trigger=*/nullptr);
 
     UecMcastPacket *p = UecMcastPacket::newpkt(flow_for_op(100),
                                                empty_route(),
@@ -67,12 +68,12 @@ int test_single_op_completion() {
     return 0;
 }
 
-// 2. Wrong packet type (UEC, not UEC_MCAST) is dropped without
-//    affecting the per-op state.
+// 2. Wrong packet type (UEC, not UEC_MCAST/UEC_REDUCE) is dropped
+//    without affecting the per-op state.
 int test_wrong_packet_type_dropped() {
-    TestableMcastSink sink(/*host=*/0, /*group=*/7);
-    sink.register_op(/*op_id=*/100, /*expected=*/4160,
-                     /*end_trigger=*/nullptr);
+    TestableSink sink(/*host=*/0, /*group=*/7);
+    sink.register_mcast_op(/*op_id=*/100, /*expected=*/4160,
+                           /*end_trigger=*/nullptr);
 
     UecPacket *p = UecPacket::newpkt(flow_for_op(100), empty_route(),
                                      1, 0, 4096, false, 0);
@@ -87,9 +88,9 @@ int test_wrong_packet_type_dropped() {
 // 3. Two concurrent ops on the same (host, group) sink with
 //    distinct op_flow_ids do not contaminate each other.
 int test_multi_op_concurrent() {
-    TestableMcastSink sink(/*host=*/0, /*group=*/7);
-    sink.register_op(7, 4160, nullptr);
-    sink.register_op(9, 4160, nullptr);
+    TestableSink sink(/*host=*/0, /*group=*/7);
+    sink.register_mcast_op(7, 4160, nullptr);
+    sink.register_mcast_op(9, 4160, nullptr);
 
     UecMcastPacket *p7 = UecMcastPacket::newpkt(flow_for_op(7),
                                                 empty_route(),

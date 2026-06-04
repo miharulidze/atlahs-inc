@@ -154,8 +154,8 @@ uint8_t FatTreeSwitch::identify_ingress_port_idx(Packet& pkt) const {
 //   2. On the first call (ingress phase), identify the ingress
 //      port idx, compute egress_mask = tree_port_mask &
 //      ~(1 << ingress), and for each set bit spawn a replica:
-//        - leaf-TOR member port: route ends at UecMcastSink
-//          via leaf_route_for(port_idx).
+//        - leaf-TOR member port: route ends at the (host, group)
+//          UecCollectiveSink via leaf_route_for(port_idx).
 //        - interior tree port: route is the cached
 //          {queue, pipe, remote} for that port.
 //      Each replica is registered in _packets before being
@@ -388,7 +388,7 @@ void FatTreeSwitch::handle_reduce(UecReducePacket& pkt) {
 }
 
 void FatTreeSwitch::addMcastPort(int host_addr, uint32_t group_id,
-                                 UecMcastSink* sink) {
+                                 UecCollectiveSink* sink) {
     INCFibEntry* entry = _inc_fib->lookup(group_id);
     assert(entry &&
            "INCFib entry must be installed before addMcastPort");

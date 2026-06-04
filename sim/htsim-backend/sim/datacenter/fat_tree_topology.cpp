@@ -8,7 +8,7 @@
 #include "main.h"
 #include "queue.h"
 #include "fat_tree_switch.h"
-#include "uec_collectives.h"  // for UecMcastSink in set_up_mcast
+#include "uec_collectives.h"  // for UecCollectiveSink in set_up_mcast
 #include "compositequeue.h"
 #include "aeolusqueue.h"
 #include "prioqueue.h"
@@ -851,19 +851,18 @@ void FatTreeTopology::set_up_mcast() {
                     ->inc_fib()->install(g, entry);
         }
 
-        // Step 3: per-member sink creation + leaf-TOR
-        // registration. Imports UecMcastSink lazily to avoid
-        // circular header dependency between fat_tree_topology
-        // and uec_bcast.
-        // (Forward-declared as `class UecMcastSink;` in the
-        // topology header.)
+        // Step 3: per-member collective-endpoint creation + leaf-TOR
+        // registration. One persistent UecCollectiveSink per (host,
+        // group) serves every mcast/reduce op on the group.
+        // (Forward-declared as `class UecCollectiveSink;` in the
+        // topology header to avoid a circular header dependency.)
         for (int h : members) {
-            UecMcastSink* sink = new UecMcastSink(h, g);
+            UecCollectiveSink* sink = new UecCollectiveSink(h, g);
             int tor_id = static_cast<int>(HOST_POD_SWITCH(h));
             FatTreeSwitch* tor =
                     static_cast<FatTreeSwitch*>(switches_lp[tor_id]);
             tor->addMcastPort(h, g, sink);
-            _mcast_sinks[std::make_pair(h, g)] = sink;
+            _collective_sinks[std::make_pair(h, g)] = sink;
         }
         // Rooted Reduce needs no per-group apex state: the op kind and root
         // travel on each UecReducePacket (see handle_reduce). The driver

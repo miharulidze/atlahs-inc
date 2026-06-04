@@ -2,12 +2,14 @@
 #ifndef UEC_COLLECTIVES_H
 #define UEC_COLLECTIVES_H
 
-// UEC collective endpoints. The operation-agnostic base classes
-// (UecCollectiveSrc / UecCollectiveSink --- ACK-less single-shot emission,
-// per-operation state map, completion-trigger plumbing) plus the concrete
-// per-operation sources, sinks, and completion recorders for Broadcast
-// (unicast-leg emulation + switch multicast), Reduce, Allreduce, and
-// Reduce-Scatter. Formerly split across uec_collective.h + uec_bcast.{h,cpp}.
+// UEC collective endpoints. UecCollectiveSrc is the operation-agnostic
+// source base (ACK-less single-shot emission); UecCollectiveSink is THE
+// collective endpoint object --- one persistent sink per (host, group),
+// holding per-operation state for both packet kinds (mcast / reduce).
+// Below them: the concrete per-operation sources and the completion
+// recorders for Broadcast (unicast-leg emulation + switch multicast),
+// Reduce, Allreduce, and Reduce-Scatter. Formerly split across
+// uec_collective.h + uec_bcast.{h,cpp}.
 
 #include "trigger.h"
 #include "uec.h"
@@ -17,9 +19,9 @@
 #include <vector>
 
 // ===========================================================================
-// Operation-agnostic base classes. Concrete sub-classes below override only
-// the packet-type-specific bits (emit_once / accepts_packet_type /
-// process_body).
+// Operation-agnostic shared machinery: the source base class (concrete
+// sources below override emit_once) and the per-(host, group) collective
+// sink endpoint.
 // ===========================================================================
 
 // One source per collective operation. Single-MTU emission, no CWND
@@ -78,16 +80,30 @@ class UecCollectiveSrc : public UecSrc {
     bool     _sent_once = false;
 };
 
-// One sink per (host, group). Persistent for the simulation lifetime
-// (created at set_up_mcast time). Per-operation expectations are
-// registered incrementally via register_op(); the receivePacket
-// shell type-checks, looks up per-op state, delegates to the
-// subclass for body interpretation, and fires the end trigger when
-// the byte count reaches the expected size.
+// THE collective endpoint: one persistent sink per (host, group) member,
+// created by FatTreeTopology::set_up_mcast for every member of every
+// group and baked into the member ToR's leaf_routes. It serves every
+// operation on its group for the simulation lifetime.
+//
+// Per-operation expectations are registered incrementally, keyed by the
+// op's flow id, into one of two kind-specific maps: mcast ops (bcast
+// descents, Allreduce turn-around descents; UEC_MCAST) and reduce ops
+// (rooted-Reduce results, Reduce-Scatter blocks; UEC_REDUCE). Two maps
+// rather than one preserve the former two-class semantics exactly: a
+// packet can only ever count against a registration of its own kind.
+// Within a map, flow ids isolate concurrent operations on the same
+// group.
+//
+// Collective sinks are ACK-less, so no per-flow protocol state exists
+// and one object per (host, group) suffices; the former per-op
+// UecReduceSink allocation was an inheritance from the ACK-based
+// unicast transport (see AA-plan-CollectiveSinkMerge/plan.md).
 class UecCollectiveSink : public UecSink {
   public:
     UecCollectiveSink(int host_addr, uint32_t group_id)
-            : UecSink(), _host_addr(host_addr), _group_id(group_id) {}
+            : UecSink(), _host_addr(host_addr), _group_id(group_id) {
+        _nodename = "uec_collective_sink";
+    }
 
     struct OpState {
         uint64_t bytes_received = 0;
@@ -96,29 +112,37 @@ class UecCollectiveSink : public UecSink {
         bool     completed      = false;
     };
 
-    // Driver registration. Idempotent: a second call with the same
-    // op_flow_id overwrites the prior state, useful when re-running
-    // .cm files in a single binary invocation.
-    void register_op(uint32_t op_flow_id, uint64_t expected_bytes,
-                     Trigger *end_trigger) {
-        OpState s;
-        s.bytes_received = 0;
-        s.expected_bytes = expected_bytes;
-        s.end_trigger    = end_trigger;
-        s.completed      = false;
-        _per_op[op_flow_id] = s;
+    // Driver registration, one call per (operation, member). Idempotent:
+    // a second call with the same op_flow_id overwrites the prior state,
+    // useful when re-running .cm files in a single binary invocation.
+    void register_mcast_op(uint32_t op_flow_id, uint64_t expected_bytes,
+                           Trigger *end_trigger) {
+        register_op_in(_op_state_mcast, op_flow_id, expected_bytes,
+                       end_trigger);
+    }
+    void register_reduce_op(uint32_t op_flow_id, uint64_t expected_bytes,
+                            Trigger *end_trigger) {
+        register_op_in(_op_state_reduce, op_flow_id, expected_bytes,
+                       end_trigger);
     }
 
     void receivePacket(Packet &pkt) override {
-        if (!accepts_packet_type(pkt))     { pkt.free(); return; }
-        if (pkt.header_only())             { pkt.free(); return; }
+        // Kind dispatch: a packet can only count against a registration
+        // of its own kind. Anything else (ACKs, stray unicast) is freed.
+        std::unordered_map<uint32_t, OpState> *ops;
+        switch (pkt.type()) {
+        case UEC_MCAST:  ops = &_op_state_mcast;  break;
+        case UEC_REDUCE: ops = &_op_state_reduce; break;
+        default:         pkt.free(); return;
+        }
+        if (pkt.header_only())     { pkt.free(); return; }
 
-        auto it = _per_op.find(pkt.flow_id());
-        if (it == _per_op.end())           { pkt.free(); return; }
+        auto it = ops->find(pkt.flow_id());
+        if (it == ops->end())      { pkt.free(); return; }
         OpState &s = it->second;
 
-        // Subclass updates s.bytes_received and frees pkt.
-        process_body(pkt, s);
+        s.bytes_received += pkt.size();
+        pkt.free();
 
         if (!s.completed && s.bytes_received >= s.expected_bytes) {
             s.completed = true;
@@ -130,16 +154,19 @@ class UecCollectiveSink : public UecSink {
     uint32_t group_id()  const { return _group_id; }
 
   protected:
-    // Subclass: which packet type does this sink accept?
-    virtual bool accepts_packet_type(const Packet &pkt) const = 0;
-
-    // Subclass: update s.bytes_received from the packet body and
-    // call pkt.free().
-    virtual void process_body(Packet &pkt, OpState &s) = 0;
+    static void register_op_in(std::unordered_map<uint32_t, OpState> &ops,
+                               uint32_t op_flow_id, uint64_t expected_bytes,
+                               Trigger *end_trigger) {
+        OpState s;
+        s.expected_bytes = expected_bytes;
+        s.end_trigger    = end_trigger;
+        ops[op_flow_id] = s;
+    }
 
     int      _host_addr;
     uint32_t _group_id;
-    std::unordered_map<uint32_t, OpState> _per_op;
+    std::unordered_map<uint32_t, OpState> _op_state_mcast;
+    std::unordered_map<uint32_t, OpState> _op_state_reduce;
 };
 
 // ===========================================================================
@@ -244,28 +271,6 @@ class UecBcastSrcMcast : public UecCollectiveSrc {
     void emit_once() override;
 };
 
-// Phase-two multicast sink. One persistent instance per (host,
-// group), created by FatTreeTopology::set_up_mcast. Per-operation
-// expectations are added incrementally via register_op() from
-// the driver. Accepts UEC_MCAST packets only; counts bytes via
-// Packet::size() (the on-wire packet size).
-class UecMcastSink : public UecCollectiveSink {
-  public:
-    UecMcastSink(int host, uint32_t group)
-            : UecCollectiveSink(host, group) {
-        _nodename = "uec_mcast_sink";
-    }
-
-  protected:
-    bool accepts_packet_type(const Packet &pkt) const override {
-        return pkt.type() == UEC_MCAST;
-    }
-    void process_body(Packet &pkt, OpState &s) override {
-        s.bytes_received += pkt.size();
-        pkt.free();
-    }
-};
-
 // Phase-three reduce source. One per group member; emits exactly one
 // UecReducePacket per operation, addressed by group_id and routed UP
 // the tree by the per-switch INCFib. The fan-in barrier and combine
@@ -309,27 +314,6 @@ class UecReduceSrc : public UecCollectiveSrc {
     bool _is_reduce_scatter = false;
     std::vector<int> _rs_owners;   // block index -> owner host id
     uint64_t _rs_block_bytes = 0;  // per-block size in bytes
-};
-
-// Phase-three reduce sink. For a rooted Reduce there is one instance,
-// at the root host; it receives the single combined packet that the
-// fan-in tree produces and fires the completion trigger. Accepts
-// UEC_REDUCE only; counts bytes via Packet::size().
-class UecReduceSink : public UecCollectiveSink {
-  public:
-    UecReduceSink(int host, uint32_t group)
-            : UecCollectiveSink(host, group) {
-        _nodename = "uec_reduce_sink";
-    }
-
-  protected:
-    bool accepts_packet_type(const Packet &pkt) const override {
-        return pkt.type() == UEC_REDUCE;
-    }
-    void process_body(Packet &pkt, OpState &s) override {
-        s.bytes_received += pkt.size();
-        pkt.free();
-    }
 };
 
 // Records reduce/allreduce completion. Peer of BcastCompletionRecorder;
