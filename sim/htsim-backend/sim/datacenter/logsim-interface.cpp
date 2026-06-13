@@ -2,6 +2,7 @@
 
 #include "logsim-interface.h"
 #include "lgs/LogGOPSim.hpp"
+#include "uec_collectives.h"
 //#include "lgs/Network.hpp"
 #include "lgs/Noise.hpp"
 #include "lgs/Parser.hpp"
@@ -175,6 +176,115 @@ void LogSimInterface::flow_over(const EventOver &event) {
   _latest_recv->nic = event.node->nic;
 
   aq.push(*_latest_recv);
+}
+
+// Phase 4 ATLAHS bridge: bridges a collective op's BarrierTrigger fire back into
+// the GOAL scheduler. Added as a target of the per-op barrier alongside the stdout
+// recorder; on fire it asks the interface to release the op's recorded rank nodes.
+class CollectiveCompletionAdapter : public TriggerTarget {
+  public:
+    CollectiveCompletionAdapter(LogSimInterface *lgs, uint32_t op_flow_id)
+        : _lgs(lgs), _op_flow_id(op_flow_id) {}
+    void activate() override { _lgs->collective_complete(_op_flow_id); }
+  private:
+    LogSimInterface *_lgs;
+    uint32_t _op_flow_id;
+};
+
+void LogSimInterface::launch_collective(graph_node_properties &elem) {
+  // Encoding (see Goal::Collective / Parser GetExecutableNodes): target = group id,
+  // tag = instance id (= op_flow_id, identical across the |G| ranks of one op),
+  // size = total bytes. One GOAL node per participating rank; the switch fan-in
+  // aggregates by (group, op_flow_id) so all ranks' contributions combine.
+  uint32_t op_flow_id = elem.tag;
+  uint32_t group_id = elem.target;
+  uint64_t size = elem.size;
+  int host = htsim_api->getHtsimNodeNumber(elem.host, elem.nic);
+
+  bool first = (_pending_collectives.count(op_flow_id) == 0);
+  CollOpState &st = _pending_collectives[op_flow_id];
+
+  if (first) {
+    // group_id indexes top->groups (host ids per group), supplied via the .groups
+    // sidecar and installed by set_up_mcast -- same convention as the .cm path's
+    // get_collective_sink(m, dest).
+    std::vector<int32_t> &members = (*_topo->groups)[group_id];
+    st.expected_members = members.size();
+
+    // Allreduce(apex): completion = every member receives the turned-around result.
+    // One BarrierTrigger over the |G| member descent-sinks.
+    BarrierTrigger *barrier = new BarrierTrigger(
+        *_eventlist, ++_next_coll_barrier_id, members.size());
+    barrier->add_target(*new CollectiveCompletionAdapter(this, op_flow_id));
+    barrier->add_target(*new ReduceCompletionRecorder(
+        *_eventlist, "ALLREDUCE", static_cast<flowid_t>(op_flow_id), -1,
+        static_cast<int>(group_id), static_cast<int>(size), members.size(),
+        _eventlist->now()));
+
+    for (int32_t m : members) {
+      UecCollectiveSink *sink = _topo->get_collective_sink(m, group_id);
+      assert(sink && "set_up_mcast did not create sink (group <2 members?)");
+      sink->register_mcast_op(op_flow_id, size, barrier);
+    }
+  }
+
+  // Every arrival: this rank emits one UEC_REDUCE contribution up the tree now
+  // (models the rank reaching the collective in its own schedule). The apex
+  // multicasts the combined result back down to all members' descent sinks.
+  UecReduceSrc *rs = new UecReduceSrc(NULL, NULL, *_eventlist,
+                                      htsim_api->getSenderRtt(),
+                                      htsim_api->getSenderBdp(), 100, 6);
+  rs->setNumberEntropies(256);
+  rs->set_group_id(group_id);
+  rs->set_flowid(op_flow_id);
+  if (size > 0) rs->setFlowSize(size);
+  rs->setName("uec_goal_allreduce_src_" + std::to_string(host) + "_g" +
+              std::to_string(group_id));
+
+  Route *srctotor = new Route();
+  uint32_t tor = _topo->HOST_POD_SWITCH(host);
+  srctotor->push_back(_topo->queues_ns_nlp[host][tor][0]);
+  srctotor->push_back(_topo->pipes_ns_nlp[host][tor][0]);
+  srctotor->push_back(_topo->queues_ns_nlp[host][tor][0]->getRemoteEndpoint());
+
+  rs->from = host;
+  rs->to = -1;
+  rs->set_paths(256);
+  rs->connect_collective(srctotor, _eventlist->now());
+
+  // Record this rank's GOAL node so completion can release its dependents.
+  st.rank_nodes.emplace_back(elem.host, elem.offset);
+}
+
+void LogSimInterface::collective_complete(uint32_t op_flow_id) {
+  auto it = _pending_collectives.find(op_flow_id);
+  if (it == _pending_collectives.end()) return;
+  CollOpState &st = it->second;
+  simtime_picosec now_ns = htsim_api->getGlobalTimeNs();
+
+  for (auto &rn : st.rank_nodes) {
+    graph_node_properties done;
+    done.type = OP_COLL_DONE;
+    done.host = rn.first;
+    done.offset = rn.second;
+    done.target = 0;
+    done.tag = 0;
+    done.size = 0;
+    done.proc = 0;
+    done.nic = 0;
+    done.starttime = 0;
+    done.time = now_ns;
+    done.updated = false;
+    aq.push(done);
+    sends_active--;  // balances the ++ at OP_ALLREDUCE dispatch, one per rank
+  }
+
+  // Break htsim_simulate_until (mirrors flow_over) so the dispatch loop runs the
+  // OP_COLL_DONE markers and replenishes each rank's now-eligible dependents.
+  _latest_recv = new graph_node_properties();
+  _latest_recv->updated = true;
+
+  _pending_collectives.erase(it);
 }
 
 void LogSimInterface::compute_over(int i) {
@@ -602,6 +712,22 @@ int start_lgs(std::string filename_goal, LogSimInterface &lgs) {
               uint64_t cpu_time = elem.time;
               //nexto[elem.host][elem.proc] = cpu_time;  
               parser.schedules[elem.host].MarkNodeAsDone(elem.offset, cpu_time);
+              check_hosts.insert(elem.host);
+            } break;
+
+            case OP_ALLREDUCE: {
+              // First-class in-network allreduce op for this rank. Mark started,
+              // count it as one outstanding completion, and launch/extend the op.
+              parser.schedules[elem.host].MarkNodeAsStarted(elem.offset);
+              check_hosts.insert(elem.host);
+              lgs_interface->sends_active++;
+              lgs_interface->launch_collective(elem);
+            } break;
+
+            case OP_COLL_DONE: {
+              // The op's BarrierTrigger fired; release this rank's node so its
+              // dependents become eligible via the check_hosts replenish pass.
+              parser.schedules[elem.host].MarkNodeAsDone(elem.offset, elem.time);
               check_hosts.insert(elem.host);
             } break;
             

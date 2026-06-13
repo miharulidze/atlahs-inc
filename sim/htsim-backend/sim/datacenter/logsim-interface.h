@@ -22,6 +22,7 @@ class Topology;
 class UecRtxTimerScanner;
 class SwiftTrimmingRtxTimerScanner;
 class UecRtxTimerScanner;
+class BarrierTrigger;
 
 enum ProtocolName {
     NDP_PROTOCOL,
@@ -88,6 +89,24 @@ class LogSimInterface {
     void flow_over(const EventOver &);
     void compute_over(int);
     void null_over(int);
+
+    // Phase 4 ATLAHS bridge: first-class collective ops driven from GOAL traces.
+    // launch_collective is called per participating rank as its collective op is
+    // dispatched; the |G| ranks of one instance share op_flow_id (= elem.tag).
+    // On first arrival it installs the BarrierTrigger + per-member sink
+    // registrations; every arrival creates that rank's source and records its
+    // (host, offset) for release.
+    void launch_collective(graph_node_properties &elem);
+    // Fired by the per-op BarrierTrigger (via CollectiveCompletionAdapter) when the
+    // in-network op completes: pushes one OP_COLL_DONE marker per recorded rank node
+    // onto aq so the dispatch loop MarkNodeAsDone's it and releases its dependents.
+    void collective_complete(uint32_t op_flow_id);
+    struct CollOpState {
+        size_t expected_members = 0;
+        std::vector<std::pair<uint32_t, uint32_t>> rank_nodes; // (host, offset)
+    };
+    std::unordered_map<uint32_t, CollOpState> _pending_collectives;
+    uint32_t _next_coll_barrier_id = 1u << 28;  // high base; avoid trigger-id collision
     void htsim_simulate_until(int64_t until);
     void update_latest_receive(graph_node_properties *recv_op);
     void reset_latest_receive();

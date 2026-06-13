@@ -95,6 +95,8 @@ static const int OP_BCAST = 10;
 static const int OP_REDUCE = 11;
 static const int OP_ALLREDUCE = 12;
 static const int OP_REDUCE_SCATTER = 13;
+// Internal marker (never on disk): collective op finished, release the rank node.
+static const int OP_COLL_DONE = 14;
 
 static const uint32_t ANY_SOURCE = ~0;
 static const uint32_t ANY_TAG = ~0;
