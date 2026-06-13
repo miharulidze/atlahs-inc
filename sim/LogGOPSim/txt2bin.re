@@ -42,6 +42,9 @@ typedef struct Scanner {
 
 typedef struct Item {
 	char type;
+	uint32_t coll_group;     // Phase 4: collective group id
+	uint32_t coll_instance;  // Phase 4: shared op id across the group's ranks
+	int coll_root;           // Phase 4: root host, -1 = rootless
 	char *label1;
 	char *label2;
 	uint64_t size;
@@ -57,7 +60,11 @@ enum OpTypes {
 	RecvOp,
 	LoclOp,
 	StartDependency,
-	Dependency
+	Dependency,
+	BcastOp,
+	ReduceOp,
+	AllreduceOp,
+	ReduceScatterOp
 };
 
 inline uint64_t add_number(unsigned char *s, unsigned char *e) {
@@ -139,6 +146,22 @@ void process_item(Scanner *s, Item *item) {
 			assert(op != NULL);
 			assert(op2 != NULL);
 			s->schedule->Dependency(op, op2);
+			break;
+		case BcastOp:
+			op = s->schedule->Collective(OPTYPE_BCAST, item->coll_group, item->size, item->coll_instance, item->coll_root, item->cpu, item->nic);
+			if (item->label1 != NULL) insert_id(s, item->label1, op);
+			break;
+		case ReduceOp:
+			op = s->schedule->Collective(OPTYPE_REDUCE, item->coll_group, item->size, item->coll_instance, item->coll_root, item->cpu, item->nic);
+			if (item->label1 != NULL) insert_id(s, item->label1, op);
+			break;
+		case AllreduceOp:
+			op = s->schedule->Collective(OPTYPE_ALLREDUCE, item->coll_group, item->size, item->coll_instance, item->coll_root, item->cpu, item->nic);
+			if (item->label1 != NULL) insert_id(s, item->label1, op);
+			break;
+		case ReduceScatterOp:
+			op = s->schedule->Collective(OPTYPE_REDUCE_SCATTER, item->coll_group, item->size, item->coll_instance, item->coll_root, item->cpu, item->nic);
+			if (item->label1 != NULL) insert_id(s, item->label1, op);
 			break;
 		default:
 			break;
@@ -248,6 +271,9 @@ s_0:
 	item.cpu = 0;
 	item.nic = 0;
 	item.tag = 0;
+	item.coll_group = 0;
+	item.coll_instance = 0;
+	item.coll_root = -1;
 
 /*!re2c
 	re2c:indent:top = 2;
@@ -283,6 +309,7 @@ s_0:
 	SEND		{ item.type = SendOp;  goto s_2; }
 	RECV		{ item.type = RecvOp;  goto s_2; }
 	CALC		{ item.type = LoclOp;  goto s_3; }
+	"coll"		{ goto s_30; }
 	RANK        { goto s_20; }
 	NUMRANKS	{ goto s_22; }
 	IDENT		{ item.label1 = add_label(s->tok, cursor); goto s_1; }
@@ -344,6 +371,7 @@ s_4:
 /*!re2c
 	WS			{ goto s_4; }
 	CALC		{ item.type = LoclOp; goto s_3; }
+	"coll"		{ goto s_30; }
 	SEND		{ item.type = SendOp; goto s_2; }
 	RECV		{ item.type = RecvOp; goto s_2; }
 	ANY			{ goto s_err; }
@@ -467,6 +495,69 @@ s_13:
 	ANY			{ goto s_err; }
 */
 
+	assert(0==1); //We should never reach this line
+
+s_30:
+	state = 30;
+	// coll: collective kind keyword
+/*!re2c
+	WS				{ goto s_30; }
+	"allreduce"		{ item.type = AllreduceOp;     goto s_31; }
+	"bcast"			{ item.type = BcastOp;         goto s_31; }
+	"reduce_scatter"	{ item.type = ReduceScatterOp; goto s_31; }
+	"reduce"		{ item.type = ReduceOp;        goto s_31; }
+	ANY				{ goto s_err; }
+*/
+	assert(0==1); //We should never reach this line
+
+s_31:
+	state = 31;
+	s->tok = cursor;
+/*!re2c
+	WS				{ goto s_31; }
+	INT				{ item.size = add_number(s->tok, cursor); goto s_32; }
+	ANY				{ goto s_err; }
+*/
+	assert(0==1); //We should never reach this line
+
+s_32:
+	state = 32;
+/*!re2c
+	WS				{ goto s_32; }
+	BYTE			{ goto s_33; }
+	ANY				{ goto s_err; }
+*/
+	assert(0==1); //We should never reach this line
+
+s_33:
+	state = 33;
+	s->tok = cursor;
+/*!re2c
+	WS				{ goto s_33; }
+	INT				{ item.coll_group = add_number(s->tok, cursor); goto s_34; }
+	ANY				{ goto s_err; }
+*/
+	assert(0==1); //We should never reach this line
+
+s_34:
+	state = 34;
+	s->tok = cursor;
+/*!re2c
+	WS				{ goto s_34; }
+	INT				{ item.coll_instance = add_number(s->tok, cursor); goto s_35; }
+	ANY				{ goto s_err; }
+*/
+	assert(0==1); //We should never reach this line
+
+s_35:
+	state = 35;
+	s->tok = cursor;
+/*!re2c
+	WS				{ goto s_35; }
+	ANYSOURCE		{ item.coll_root = -1; goto s_13; }
+	INT				{ item.coll_root = (int) add_number(s->tok, cursor); goto s_13; }
+	ANY				{ goto s_err; }
+*/
 	assert(0==1); //We should never reach this line
 
 s_14:
