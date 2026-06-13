@@ -101,9 +101,14 @@ class LogSimInterface {
     // in-network op completes: pushes one OP_COLL_DONE marker per recorded rank node
     // onto aq so the dispatch loop MarkNodeAsDone's it and releases its dependents.
     void collective_complete(uint32_t op_flow_id);
+    // Helpers: build a host->TOR forward route; release one rank node via OP_COLL_DONE.
+    Route *make_coll_route(int host);
+    void push_coll_done(uint32_t host, uint32_t offset);
     struct CollOpState {
         size_t expected_members = 0;
-        std::vector<std::pair<uint32_t, uint32_t>> rank_nodes; // (host, offset)
+        size_t arrived_count = 0;
+        bool completed = false;
+        std::vector<std::pair<uint32_t, uint32_t>> rank_nodes; // (host, offset) pending release
     };
     std::unordered_map<uint32_t, CollOpState> _pending_collectives;
     uint32_t _next_coll_barrier_id = 1u << 28;  // high base; avoid trigger-id collision

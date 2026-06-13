@@ -81,12 +81,17 @@ class Goal {
 		// In-network collective op (Phase 4 bridge). One node per participating rank;
 		// the |G| nodes of one instance share the same `instance` id so htsim aggregates
 		// them as a single collective. optype = OPTYPE_BCAST/REDUCE/ALLREDUCE/REDUCE_SCATTER.
-		goalop_t Collective(char optype, uint32_t group, uint64_t size, uint32_t instance, uint8_t cpu, uint8_t nic) {
+		goalop_t Collective(char optype, uint32_t group, uint64_t size, uint32_t instance, int root, uint8_t cpu, uint8_t nic) {
 
 			Node* n = graph.addNode();
 
 			n->Type = optype;
-			n->Peer = group;        // group id -> INC FIB / collective-sink lookup
+			// Peer packs group id (low 16 bits) + root host (high 16 bits). A root field
+			// of 0xFFFF marks a rootless op (Allreduce / Reduce-Scatter). The fixed 39-byte
+			// record has only Peer + Tag free after the Type byte, so group + root share
+			// Peer and the instance id lives in Tag.
+			uint32_t root_field = (root < 0) ? 0xFFFFu : (static_cast<uint32_t>(root) & 0xFFFFu);
+			n->Peer = (group & 0xFFFFu) | (root_field << 16);
 			n->Tag  = instance;     // shared-across-ranks unique op id -> htsim op_flow_id
 			n->Proc = cpu;
 			n->Nic  = nic;

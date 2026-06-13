@@ -191,100 +191,179 @@ class CollectiveCompletionAdapter : public TriggerTarget {
     uint32_t _op_flow_id;
 };
 
+// Build the standard 3-element host->TOR forward route used by every collective source.
+Route *LogSimInterface::make_coll_route(int host) {
+  Route *r = new Route();
+  uint32_t tor = _topo->HOST_POD_SWITCH(host);
+  r->push_back(_topo->queues_ns_nlp[host][tor][0]);
+  r->push_back(_topo->pipes_ns_nlp[host][tor][0]);
+  r->push_back(_topo->queues_ns_nlp[host][tor][0]->getRemoteEndpoint());
+  return r;
+}
+
+// Release one rank's collective GOAL node: push an OP_COLL_DONE marker the dispatch
+// loop MarkNodeAsDone's, and balance the sends_active++ done at op dispatch.
+void LogSimInterface::push_coll_done(uint32_t host, uint32_t offset) {
+  graph_node_properties done;
+  done.type = OP_COLL_DONE;
+  done.host = host;
+  done.offset = offset;
+  done.target = 0;
+  done.tag = 0;
+  done.size = 0;
+  done.proc = 0;
+  done.nic = 0;
+  done.starttime = 0;
+  done.time = htsim_api->getGlobalTimeNs();
+  done.updated = false;
+  aq.push(done);
+  sends_active--;
+}
+
 void LogSimInterface::launch_collective(graph_node_properties &elem) {
-  // Encoding (see Goal::Collective / Parser GetExecutableNodes): target = group id,
-  // tag = instance id (= op_flow_id, identical across the |G| ranks of one op),
-  // size = total bytes. One GOAL node per participating rank; the switch fan-in
-  // aggregates by (group, op_flow_id) so all ranks' contributions combine.
+  // Encoding (Goal::Collective): tag = instance id (= op_flow_id, shared across the
+  // |G| ranks of one op); target = Peer = group id (low 16 bits) | root host (high 16
+  // bits, 0xFFFF = rootless); size = total bytes. One GOAL node per participating rank;
+  // the switch fan-in aggregates by (group, op_flow_id) so contributions combine.
   uint32_t op_flow_id = elem.tag;
-  uint32_t group_id = elem.target;
+  uint32_t group_id = elem.target & 0xFFFFu;
+  uint32_t root_field = elem.target >> 16;
+  int root = (root_field == 0xFFFFu) ? -1 : static_cast<int>(root_field);
   uint64_t size = elem.size;
+  int kind = elem.type;  // OP_ALLREDUCE / OP_BCAST / OP_REDUCE / OP_REDUCE_SCATTER
   int host = htsim_api->getHtsimNodeNumber(elem.host, elem.nic);
 
   bool first = (_pending_collectives.count(op_flow_id) == 0);
   CollOpState &st = _pending_collectives[op_flow_id];
 
   if (first) {
-    // group_id indexes top->groups (host ids per group), supplied via the .groups
-    // sidecar and installed by set_up_mcast -- same convention as the .cm path's
-    // get_collective_sink(m, dest).
+    // group_id indexes top->groups (host ids per group), installed by set_up_mcast.
     std::vector<int32_t> &members = (*_topo->groups)[group_id];
     st.expected_members = members.size();
 
-    // Allreduce(apex): completion = every member receives the turned-around result.
-    // One BarrierTrigger over the |G| member descent-sinks.
-    BarrierTrigger *barrier = new BarrierTrigger(
-        *_eventlist, ++_next_coll_barrier_id, members.size());
-    barrier->add_target(*new CollectiveCompletionAdapter(this, op_flow_id));
-    barrier->add_target(*new ReduceCompletionRecorder(
-        *_eventlist, "ALLREDUCE", static_cast<flowid_t>(op_flow_id), -1,
-        static_cast<int>(group_id), static_cast<int>(size), members.size(),
-        _eventlist->now()));
+    // Completion barrier count = number of descent/result deliveries that mark done:
+    //   allreduce -> |G|, bcast -> |G|-1, reduce -> 1, reduce_scatter -> |G|.
+    size_t barrier_count;
+    TriggerTarget *recorder;
+    if (kind == OP_BCAST) {
+      barrier_count = members.size() - 1;
+      recorder = new BcastCompletionRecorder(
+          *_eventlist, static_cast<flowid_t>(op_flow_id), root,
+          static_cast<int>(group_id), static_cast<int>(size),
+          members.size() - 1, _eventlist->now());
+    } else {
+      const char *label = (kind == OP_REDUCE)            ? "REDUCE"
+                          : (kind == OP_REDUCE_SCATTER)  ? "REDUCE_SCATTER"
+                                                         : "ALLREDUCE";
+      barrier_count = (kind == OP_REDUCE) ? 1 : members.size();
+      recorder = new ReduceCompletionRecorder(
+          *_eventlist, label, static_cast<flowid_t>(op_flow_id), root,
+          static_cast<int>(group_id), static_cast<int>(size), members.size(),
+          _eventlist->now());
+    }
 
+    BarrierTrigger *barrier = new BarrierTrigger(
+        *_eventlist, ++_next_coll_barrier_id, barrier_count);
+    barrier->add_target(*new CollectiveCompletionAdapter(this, op_flow_id));
+    barrier->add_target(*recorder);
+
+    // Register descent/result sinks. Sink kind dispatch is strict: UEC_MCAST ->
+    // register_mcast_op, UEC_REDUCE -> register_reduce_op; rooted unicast descents
+    // (reduce / reduce_scatter) also need an addHostPort route to resolve the result.
+    uint64_t block_bytes =
+        (kind == OP_REDUCE_SCATTER && !members.empty()) ? size / members.size() : 0;
     for (int32_t m : members) {
       UecCollectiveSink *sink = _topo->get_collective_sink(m, group_id);
       assert(sink && "set_up_mcast did not create sink (group <2 members?)");
-      sink->register_mcast_op(op_flow_id, size, barrier);
+      if (kind == OP_ALLREDUCE) {
+        sink->register_mcast_op(op_flow_id, size, barrier);
+      } else if (kind == OP_BCAST) {
+        if (m != root) sink->register_mcast_op(op_flow_id, size, barrier);
+      } else if (kind == OP_REDUCE) {
+        if (m == root) {
+          sink->register_reduce_op(op_flow_id, size, barrier);
+          _topo->switches_lp[_topo->HOST_POD_SWITCH(m)]->addHostPort(m, op_flow_id, sink);
+        }
+      } else {  // OP_REDUCE_SCATTER
+        sink->register_reduce_op(op_flow_id, block_bytes, barrier);
+        _topo->switches_lp[_topo->HOST_POD_SWITCH(m)]->addHostPort(m, op_flow_id, sink);
+      }
     }
   }
 
-  // Every arrival: this rank emits one UEC_REDUCE contribution up the tree now
-  // (models the rank reaching the collective in its own schedule). The apex
-  // multicasts the combined result back down to all members' descent sinks.
-  UecReduceSrc *rs = new UecReduceSrc(NULL, NULL, *_eventlist,
-                                      htsim_api->getSenderRtt(),
-                                      htsim_api->getSenderBdp(), 100, 6);
-  rs->setNumberEntropies(256);
-  rs->set_group_id(group_id);
-  rs->set_flowid(op_flow_id);
-  if (size > 0) rs->setFlowSize(size);
-  rs->setName("uec_goal_allreduce_src_" + std::to_string(host) + "_g" +
-              std::to_string(group_id));
+  // Per-arrival source creation (this rank reaching the op in its own schedule).
+  if (kind == OP_BCAST) {
+    if (host == root) {  // only the root emits the broadcast; receivers are passive
+      UecBcastSrcMcast *bs = new UecBcastSrcMcast(
+          NULL, NULL, *_eventlist, htsim_api->getSenderRtt(),
+          htsim_api->getSenderBdp(), 100, 6);
+      bs->setNumberEntropies(256);
+      bs->set_group_id(group_id);
+      bs->set_flowid(op_flow_id);
+      if (size > 0) bs->setFlowSize(size);
+      bs->setName("uec_goal_bcast_src_" + std::to_string(host) + "_g" +
+                  std::to_string(group_id));
+      bs->from = host;
+      bs->to = -1;
+      bs->set_paths(256);
+      bs->connect_collective(make_coll_route(host), _eventlist->now());
+    }
+  } else {  // allreduce / reduce / reduce_scatter: every member emits up the tree
+    UecReduceSrc *rs = new UecReduceSrc(NULL, NULL, *_eventlist,
+                                        htsim_api->getSenderRtt(),
+                                        htsim_api->getSenderBdp(), 100, 6);
+    rs->setNumberEntropies(256);
+    rs->set_group_id(group_id);
+    rs->set_flowid(op_flow_id);
+    if (size > 0) rs->setFlowSize(size);
+    if (kind == OP_REDUCE) {
+      rs->set_reduce_root(root);
+    } else if (kind == OP_REDUCE_SCATTER) {
+      std::vector<int32_t> &members = (*_topo->groups)[group_id];
+      std::vector<int> owners(members.begin(), members.end());
+      uint64_t block_bytes = members.empty() ? 0 : size / members.size();
+      rs->set_reduce_scatter(owners, block_bytes);
+    }
+    rs->setName("uec_goal_coll_src_" + std::to_string(host) + "_g" +
+                std::to_string(group_id));
+    rs->from = host;
+    rs->to = -1;
+    rs->set_paths(256);
+    rs->connect_collective(make_coll_route(host), _eventlist->now());
+  }
 
-  Route *srctotor = new Route();
-  uint32_t tor = _topo->HOST_POD_SWITCH(host);
-  srctotor->push_back(_topo->queues_ns_nlp[host][tor][0]);
-  srctotor->push_back(_topo->pipes_ns_nlp[host][tor][0]);
-  srctotor->push_back(_topo->queues_ns_nlp[host][tor][0]->getRemoteEndpoint());
-
-  rs->from = host;
-  rs->to = -1;
-  rs->set_paths(256);
-  rs->connect_collective(srctotor, _eventlist->now());
-
-  // Record this rank's GOAL node so completion can release its dependents.
-  st.rank_nodes.emplace_back(elem.host, elem.offset);
+  // Record / release this rank's GOAL node. Symmetric collectives (allreduce, reduce,
+  // reduce_scatter) have every member emit, so the op cannot complete until all have
+  // arrived -> the late branch is never taken. A bcast receiver, however, may arrive
+  // AFTER the broadcast already landed (op completed); release it at once so it never
+  // waits on a barrier that has already fired.
+  st.arrived_count++;
+  if (st.completed) {
+    push_coll_done(elem.host, elem.offset);
+  } else {
+    st.rank_nodes.emplace_back(elem.host, elem.offset);
+  }
+  if (st.arrived_count == st.expected_members && st.completed) {
+    _pending_collectives.erase(op_flow_id);
+  }
 }
 
 void LogSimInterface::collective_complete(uint32_t op_flow_id) {
   auto it = _pending_collectives.find(op_flow_id);
   if (it == _pending_collectives.end()) return;
   CollOpState &st = it->second;
-  simtime_picosec now_ns = htsim_api->getGlobalTimeNs();
-
-  for (auto &rn : st.rank_nodes) {
-    graph_node_properties done;
-    done.type = OP_COLL_DONE;
-    done.host = rn.first;
-    done.offset = rn.second;
-    done.target = 0;
-    done.tag = 0;
-    done.size = 0;
-    done.proc = 0;
-    done.nic = 0;
-    done.starttime = 0;
-    done.time = now_ns;
-    done.updated = false;
-    aq.push(done);
-    sends_active--;  // balances the ++ at OP_ALLREDUCE dispatch, one per rank
-  }
+  st.completed = true;
+  for (auto &rn : st.rank_nodes) push_coll_done(rn.first, rn.second);
+  st.rank_nodes.clear();
 
   // Break htsim_simulate_until (mirrors flow_over) so the dispatch loop runs the
   // OP_COLL_DONE markers and replenishes each rank's now-eligible dependents.
   _latest_recv = new graph_node_properties();
   _latest_recv->updated = true;
 
-  _pending_collectives.erase(it);
+  // Keep the op until every rank has arrived (a bcast receiver may still be coming);
+  // late arrivals self-release via the st.completed branch in launch_collective.
+  if (st.arrived_count == st.expected_members) _pending_collectives.erase(it);
 }
 
 void LogSimInterface::compute_over(int i) {
@@ -715,8 +794,11 @@ int start_lgs(std::string filename_goal, LogSimInterface &lgs) {
               check_hosts.insert(elem.host);
             } break;
 
-            case OP_ALLREDUCE: {
-              // First-class in-network allreduce op for this rank. Mark started,
+            case OP_BCAST:
+            case OP_REDUCE:
+            case OP_ALLREDUCE:
+            case OP_REDUCE_SCATTER: {
+              // First-class in-network collective op for this rank. Mark started,
               // count it as one outstanding completion, and launch/extend the op.
               parser.schedules[elem.host].MarkNodeAsStarted(elem.offset);
               check_hosts.insert(elem.host);
