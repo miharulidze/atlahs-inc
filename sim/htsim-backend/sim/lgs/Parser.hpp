@@ -20,6 +20,14 @@
 #define OPTYPE_SEND 1
 #define OPTYPE_RECV 2
 #define OPTYPE_CALC 3
+// In-network collective ops (Phase 4 ATLAHS bridge). These reuse the fixed 39-byte
+// node record with NO width change: Type=kind, Size=total bytes, Tag=instance id
+// (-> htsim op_flow_id), Peer=group id. Values are disjoint from the OP_* runtime
+// family (OP_MSG=5, OP_TIME=6) so no collision.
+#define OPTYPE_BCAST 10
+#define OPTYPE_REDUCE 11
+#define OPTYPE_ALLREDUCE 12
+#define OPTYPE_REDUCE_SCATTER 13
 
 typedef uint64_t base_t;
 
@@ -663,6 +671,10 @@ class SerializedGraph {
 			if (executableNodes[cnt].Type == OPTYPE_SEND) gp.type = OP_SEND;
 			else if (executableNodes[cnt].Type == OPTYPE_RECV) gp.type = OP_RECV;
 			else if (executableNodes[cnt].Type == OPTYPE_CALC) gp.type = OP_LOCOP;
+			else if (executableNodes[cnt].Type == OPTYPE_BCAST) gp.type = OP_BCAST;
+			else if (executableNodes[cnt].Type == OPTYPE_REDUCE) gp.type = OP_REDUCE;
+			else if (executableNodes[cnt].Type == OPTYPE_ALLREDUCE) gp.type = OP_ALLREDUCE;
+			else if (executableNodes[cnt].Type == OPTYPE_REDUCE_SCATTER) gp.type = OP_REDUCE_SCATTER;
 			gp.offset = executableNodes[cnt].offset;
 			ret.push_back(gp);
 		}

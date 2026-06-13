@@ -78,6 +78,26 @@ class Goal {
 			return n;
 		}
 
+		// In-network collective op (Phase 4 bridge). One node per participating rank;
+		// the |G| nodes of one instance share the same `instance` id so htsim aggregates
+		// them as a single collective. optype = OPTYPE_BCAST/REDUCE/ALLREDUCE/REDUCE_SCATTER.
+		goalop_t Collective(char optype, uint32_t group, uint64_t size, uint32_t instance, uint8_t cpu, uint8_t nic) {
+
+			Node* n = graph.addNode();
+
+			n->Type = optype;
+			n->Peer = group;        // group id -> INC FIB / collective-sink lookup
+			n->Tag  = instance;     // shared-across-ranks unique op id -> htsim op_flow_id
+			n->Proc = cpu;
+			n->Nic  = nic;
+			n->Size = size;         // total collective bytes (CollInfo.data_size)
+
+			MaxCPU(cpu);
+			MaxNIC(nic);
+
+			return n;
+		}
+
 		void StartDependency(goalop_t src, goalop_t dest) {
 			// a can not be executed before b is started	
 			graph.addStartDependency(src, dest);

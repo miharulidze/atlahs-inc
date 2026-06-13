@@ -68,6 +68,11 @@ static const int OP_RECV = 2;
 static const int OP_LOCOP = 3;
 static const int OP_LOCOP_IN_PROGRESS = 4;
 static const int OP_MSG = 5;
+// In-network collective ops (Phase 4 ATLAHS bridge). Mirror these in lgs/logsim.h.
+static const int OP_BCAST = 10;
+static const int OP_REDUCE = 11;
+static const int OP_ALLREDUCE = 12;
+static const int OP_REDUCE_SCATTER = 13;
 		
 static const uint32_t ANY_SOURCE = ~0;
 static const uint32_t ANY_TAG = ~0;

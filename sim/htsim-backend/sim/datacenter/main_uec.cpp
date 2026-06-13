@@ -96,6 +96,7 @@ int main(int argc, char **argv) {
     stringstream filename(ios_base::out);
     RouteStrategy route_strategy = NOT_SET;
     std::string goal_filename;
+    std::string groups_filename;  // Phase 4 ATLAHS bridge: sidecar collective-group membership (.groups)
     linkspeed_bps linkspeed = speedFromMbps((double)HOST_NIC);
     simtime_picosec hop_latency = timeFromNs((uint32_t)RTT);
     simtime_picosec switch_latency = timeFromNs((uint32_t)0);
@@ -503,6 +504,9 @@ int main(int argc, char **argv) {
             i++;
         } else if (!strcmp(argv[i], "-goal")) {
             goal_filename = argv[i + 1];
+            i++;
+        } else if (!strcmp(argv[i], "-groups")) {
+            groups_filename = argv[i + 1];
             i++;
         } else if (!strcmp(argv[i], "-use_phantom")) {
             use_phantom = atoi(argv[i + 1]);
@@ -1601,6 +1605,37 @@ int main(int argc, char **argv) {
         lgs->htsim_api->setSenderCwnd(bdp_local);
         lgs->htsim_api->setSenderBdp(bdp_local);
         lgs->htsim_api->setSenderRtt(base_rtt_max_hops);
+
+        // Phase 4 ATLAHS bridge: one-time INC group bring-up (GOAL-path equivalent of
+        // the .cm path's `top->groups = &conns->groups; top->set_up_mcast();`). Load the
+        // sidecar .groups file (host ids per collective group), hand it to the topology,
+        // and install the per-switch INC FIB + persistent collective sinks. Must run
+        // before start_lgs dispatches any collective op. goal_groups must outlive the run
+        // since top->groups holds a pointer to it (this block scopes through return 0).
+        std::vector<std::vector<int32_t>> goal_groups;
+        if (groups_filename.size() > 0) {
+            // INC collective sources (UecBcastSrcMcast/UecReduceSrc) subclass UecSrc -> UEC only.
+            assert(lgs->get_protocol() == SENDER_PROTOCOL);
+            std::ifstream gfile(groups_filename.c_str());
+            assert(gfile);
+            std::string gline;
+            while (std::getline(gfile, gline)) {
+                if (gline.empty() || gline[0] == '#') continue;
+                std::istringstream iss(gline);
+                std::string tok;
+                std::vector<int32_t> group;
+                while (iss >> tok) {
+                    if (tok == "Grp") continue;  // optional 'Grp' prefix, matching .cm syntax
+                    group.push_back(static_cast<int32_t>(std::stoi(tok)));
+                }
+                if (!group.empty()) goal_groups.push_back(group);
+            }
+            top->groups = &goal_groups;
+            top->set_up_mcast();
+            printf("INC: installed %zu collective group(s) from %s\n",
+                   goal_groups.size(), groups_filename.c_str());
+        }
+
         lgs->htsim_api->Setup();
         printf("Started LGS\n");
         
