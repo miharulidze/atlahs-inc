@@ -143,6 +143,17 @@ void AtlahsHtsimApi::Send(const SendEvent &event, graph_node_properties elem) {
         uecSrc->set_dst(to);
         uecSink->set_src(from);
 
+        // Path/entropy setup MUST precede connect() (this matches the .cm regular-UEC
+        // path at main_uec.cpp:1469-1533 and the collective launcher). Without
+        // setNumberEntropies the round-robin entropy array is unsized, so the source
+        // selects a garbage path -> packets are misrouted/lost; with the RtxTimerScanner
+        // disabled there is no retransmit, so the flow never ACKs/completes, UecSrc never
+        // fires EventFinished, and the GOAL scheduler spins forever (sends_active never
+        // drains). This was the GOAL-path send/recv hang.
+        uecSrc->setNumberEntropies(256);
+        uecSrc->set_paths(256);
+        uecSink->set_paths(256);
+
         Route* srctotor = new Route();
         srctotor->push_back(_topo->queues_ns_nlp[from][_topo->HOST_POD_SWITCH(from)][0]);
         srctotor->push_back(_topo->pipes_ns_nlp[from][_topo->HOST_POD_SWITCH(from)][0]);
@@ -157,10 +168,7 @@ void AtlahsHtsimApi::Send(const SendEvent &event, graph_node_properties elem) {
         uecSrc->lgs_node = node_copy;
         uecSrc->connect(srctotor, dsttotor, *uecSink, _eventlist->now());
 
-        uecSrc->set_paths(128);
-        uecSink->set_paths(128);
-
-        //register src and snk to receive packets from their respective TORs. 
+        //register src and snk to receive packets from their respective TORs.
         assert(_topo->switches_lp[_topo->HOST_POD_SWITCH(from)]);
         assert(_topo->switches_lp[_topo->HOST_POD_SWITCH(from)]);
         _topo->switches_lp[_topo->HOST_POD_SWITCH(from)]->addHostPort(from,uecSrc->flow_id(),uecSrc);
