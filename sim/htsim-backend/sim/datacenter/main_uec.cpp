@@ -952,9 +952,9 @@ int main(int argc, char **argv) {
                     // the broadcast (R already has the result by then).
                     BarrierTrigger *finalBarrier = new BarrierTrigger(
                             eventlist, ++next_bcast_barrier_id, leg_count);
-                    finalBarrier->add_target(*new ReduceCompletionRecorder(
-                            eventlist, "ALLREDUCE_RB", op_flow_id, R, dest,
-                            crt->size, group.size(), crt->start));
+                    finalBarrier->add_target(*new CollectiveCompletionRecorder(
+                            eventlist, "ALLREDUCE_RB", "members", op_flow_id, R,
+                            dest, crt->size, group.size(), crt->start));
                     if (crt->recv_done_trigger) {
                         Trigger *downstream = conns->getTrigger(
                                 crt->recv_done_trigger, eventlist);
@@ -1041,9 +1041,9 @@ int main(int argc, char **argv) {
                 // Completion = every member receives the turned-around result.
                 BarrierTrigger *barrier = new BarrierTrigger(
                         eventlist, ++next_bcast_barrier_id, group.size());
-                barrier->add_target(*new ReduceCompletionRecorder(
-                        eventlist, "ALLREDUCE", op_flow_id, root_label, dest,
-                        crt->size, group.size(), crt->start));
+                barrier->add_target(*new CollectiveCompletionRecorder(
+                        eventlist, "ALLREDUCE", "members", op_flow_id,
+                        root_label, dest, crt->size, group.size(), crt->start));
                 if (crt->recv_done_trigger) {
                     Trigger *downstream = conns->getTrigger(
                             crt->recv_done_trigger, eventlist);
@@ -1129,9 +1129,9 @@ int main(int argc, char **argv) {
                 // Completion = every member receives its own block.
                 BarrierTrigger *barrier = new BarrierTrigger(
                         eventlist, ++next_bcast_barrier_id, group.size());
-                barrier->add_target(*new ReduceCompletionRecorder(
-                        eventlist, "REDUCE_SCATTER", op_flow_id, root_label,
-                        dest, crt->size, group.size(), crt->start));
+                barrier->add_target(*new CollectiveCompletionRecorder(
+                        eventlist, "REDUCE_SCATTER", "members", op_flow_id,
+                        root_label, dest, crt->size, group.size(), crt->start));
                 if (crt->recv_done_trigger) {
                     Trigger *downstream = conns->getTrigger(
                             crt->recv_done_trigger, eventlist);
@@ -1234,9 +1234,9 @@ int main(int argc, char **argv) {
                 // Completion = every member has received all |G|-1 peer blocks.
                 BarrierTrigger *barrier = new BarrierTrigger(
                         eventlist, ++next_bcast_barrier_id, group.size());
-                barrier->add_target(*new ReduceCompletionRecorder(
-                        eventlist, "ALLGATHER", op_flow_id, root_label,
-                        dest, crt->size, group.size(), crt->start));
+                barrier->add_target(*new CollectiveCompletionRecorder(
+                        eventlist, "ALLGATHER", "members", op_flow_id,
+                        root_label, dest, crt->size, group.size(), crt->start));
                 if (crt->recv_done_trigger) {
                     Trigger *downstream = conns->getTrigger(
                             crt->recv_done_trigger, eventlist);
@@ -1301,8 +1301,9 @@ int main(int argc, char **argv) {
             // `reduce ROOT->GRP` (is_reduce). Every member is a reduce source
             // (emits one UEC_REDUCE up the tree); the aggregate turns around
             // at the apex and is delivered down R's single branch to the one
-            // root host R. Completion = R receives. set_up_mcast installed R's
-            // descent under a synthetic group id (reduce_descent_group).
+            // root host R. Completion = R receives. The descent reuses the regular
+            // FIB: the driver registers R's sink as a host route (addHostPort) for
+            // the apex's descending unicast -- no synthetic descent group.
             // --------------------------------------------------------------
             if (crt->is_reduce) {
                 if (static_cast<size_t>(dest) >= conns->groups.size()) {
@@ -1331,8 +1332,8 @@ int main(int argc, char **argv) {
                 // Completion = the single root receives the combined result.
                 BarrierTrigger *barrier = new BarrierTrigger(
                         eventlist, ++next_bcast_barrier_id, 1);
-                barrier->add_target(*new ReduceCompletionRecorder(
-                        eventlist, "REDUCE", op_flow_id, root, dest,
+                barrier->add_target(*new CollectiveCompletionRecorder(
+                        eventlist, "REDUCE", "members", op_flow_id, root, dest,
                         crt->size, group.size(), crt->start));
                 if (crt->recv_done_trigger) {
                     Trigger *downstream = conns->getTrigger(
@@ -1414,8 +1415,8 @@ int main(int argc, char **argv) {
                 // and also satisfies BarrierTrigger's targets>0 fire
                 // assertion. Chain to the user-specified downstream
                 // trigger if present.
-                barrier->add_target(*new BcastCompletionRecorder(
-                        eventlist, crt->flowid, root, dest,
+                barrier->add_target(*new CollectiveCompletionRecorder(
+                        eventlist, "BCAST", "legs", crt->flowid, root, dest,
                         crt->size, leg_count, crt->start));
                 if (crt->recv_done_trigger) {
                     Trigger *downstream = conns->getTrigger(

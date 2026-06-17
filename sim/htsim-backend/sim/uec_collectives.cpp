@@ -136,7 +136,7 @@ void UecReduceSrc::emit_once() {
     }
 }
 
-void ReduceCompletionRecorder::activate() {
+void CollectiveCompletionRecorder::activate() {
     simtime_picosec now = _eventlist.now();
     simtime_picosec dt = (now > _start) ? (now - _start) : 0;
     std::cout << _label << "_COMPLETE"
@@ -144,22 +144,7 @@ void ReduceCompletionRecorder::activate() {
               << " root=" << _root
               << " group=" << _group_idx
               << " size=" << _size
-              << " members=" << _member_count
-              << " start_ns=" << (_start / 1000)
-              << " complete_ns=" << (now / 1000)
-              << " duration_ns=" << (dt / 1000)
-              << std::endl;
-}
-
-void BcastCompletionRecorder::activate() {
-    simtime_picosec now = _eventlist.now();
-    simtime_picosec dt = (now > _start) ? (now - _start) : 0;
-    std::cout << "BCAST_COMPLETE"
-              << " op_id=" << _op_id
-              << " root=" << _root
-              << " group=" << _group_idx
-              << " size=" << _size
-              << " legs=" << _leg_count
+              << " " << _count_field << "=" << _count
               << " start_ns=" << (_start / 1000)
               << " complete_ns=" << (now / 1000)
               << " duration_ns=" << (dt / 1000)

@@ -230,7 +230,7 @@ void LogSimInterface::launch_collective(graph_node_properties &elem) {
   uint32_t root_field = elem.target >> 16;
   int root = (root_field == 0xFFFFu) ? -1 : static_cast<int>(root_field);
   uint64_t size = elem.size;
-  int kind = elem.type;  // OP_ALLREDUCE / OP_BCAST / OP_REDUCE / OP_REDUCE_SCATTER
+  int kind = elem.type;  // OP_ALLREDUCE / OP_BCAST / OP_REDUCE / OP_REDUCE_SCATTER / OP_ALLGATHER
   // The collective endpoint is keyed by the raw lgs host id: root (elem.target>>16),
   // the group members, get_collective_sink(m,..), HOST_POD_SWITCH(m) and make_coll_route
   // all live in lgs-host space. getHtsimNodeNumber maps into per-NIC htsim-node space
@@ -262,14 +262,14 @@ void LogSimInterface::launch_collective(graph_node_properties &elem) {
     st.expected_members = members.size();
 
     // Completion barrier count = number of descent/result deliveries that mark done:
-    //   allreduce -> |G|, bcast -> |G|-1, reduce -> 1, reduce_scatter -> |G|.
+    //   allreduce -> |G|, bcast -> |G|-1, reduce -> 1, reduce_scatter -> |G|, allgather -> |G|.
     size_t barrier_count;
     TriggerTarget *recorder;
     if (kind == OP_BCAST) {
       barrier_count = members.size() - 1;
-      recorder = new BcastCompletionRecorder(
-          *_eventlist, static_cast<flowid_t>(op_flow_id), root,
-          static_cast<int>(group_id), static_cast<int>(size),
+      recorder = new CollectiveCompletionRecorder(
+          *_eventlist, "BCAST", "legs", static_cast<flowid_t>(op_flow_id),
+          root, static_cast<int>(group_id), static_cast<int>(size),
           members.size() - 1, _eventlist->now());
     } else {
       const char *label = (kind == OP_REDUCE)            ? "REDUCE"
@@ -277,10 +277,10 @@ void LogSimInterface::launch_collective(graph_node_properties &elem) {
                           : (kind == OP_ALLGATHER)       ? "ALLGATHER"
                                                          : "ALLREDUCE";
       barrier_count = (kind == OP_REDUCE) ? 1 : members.size();
-      recorder = new ReduceCompletionRecorder(
-          *_eventlist, label, static_cast<flowid_t>(op_flow_id), root,
-          static_cast<int>(group_id), static_cast<int>(size), members.size(),
-          _eventlist->now());
+      recorder = new CollectiveCompletionRecorder(
+          *_eventlist, label, "members", static_cast<flowid_t>(op_flow_id),
+          root, static_cast<int>(group_id), static_cast<int>(size),
+          members.size(), _eventlist->now());
     }
 
     BarrierTrigger *barrier = new BarrierTrigger(

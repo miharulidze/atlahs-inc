@@ -326,66 +326,55 @@ class UecReduceSrc : public UecCollectiveSrc {
     uint64_t _rs_block_bytes = 0;  // per-block size in bytes
 };
 
-// Records reduce/allreduce completion. Peer of BcastCompletionRecorder;
-// emits one machine-parseable line. `label` is REDUCE or ALLREDUCE so a
-// single recorder class serves both. For Reduce, fired by the root
-// sink's trigger; for Allreduce, fired by the BarrierTrigger over all
-// member mcast-sinks (every rank receives the turned-around result).
-class ReduceCompletionRecorder : public TriggerTarget {
+// Records collective-completion timestamps for a single collective
+// operation (broadcast, reduce, allreduce, reduce-scatter, allgather).
+// Attached as a TriggerTarget to the operation's BarrierTrigger so it
+// fires exactly once when the barrier saturates -- i.e. the last leg /
+// member / root result is delivered. Emits one machine-parseable line to
+// stdout that downstream plotting and test scripts grep for.
+//
+// Output format (single line, space-separated key=value):
+//   <label>_COMPLETE op_id=<id> root=<node> group=<idx> size=<bytes>
+//   <count_field>=<n> start_ns=<t0> complete_ns=<t1> duration_ns=<dt>
+//
+// `label` is the collective name in upper case: BCAST, REDUCE, ALLREDUCE,
+// REDUCE_SCATTER, ALLGATHER (or ALLREDUCE_RB for the reduce+bcast .cm
+// path). `count_field` names the reported cardinality: "legs" for
+// broadcast (the |G|-1 receiving legs; the root does not receive) or
+// "members" for the aggregation / gather family (the full group |G|).
+// Both `label` and `count_field` must be string literals -- they are
+// stored by pointer, never copied.
+//
+// Who fires the barrier varies by collective: bcast on the last of |G|-1
+// legs (fan-out); rooted reduce on the single root sink's trigger
+// (fan-in); allreduce / reduce-scatter / allgather on all |G| members
+// receiving their result. This class only formats the resulting line;
+// the BarrierTrigger count is set by the caller.
+//
+// Times are in nanoseconds; sim time is internally picoseconds so we
+// divide by 1000. start_ns is the scheduled start time for the operation;
+// complete_ns is the sim time at which the barrier fired.
+class CollectiveCompletionRecorder : public TriggerTarget {
   public:
-    ReduceCompletionRecorder(EventList &eventlist, const char *label,
-                             flowid_t op_id, int root, int group_idx,
-                             int payload_bytes, size_t member_count,
-                             simtime_picosec scheduled_start)
-            : _eventlist(eventlist), _label(label), _op_id(op_id),
-              _root(root), _group_idx(group_idx), _size(payload_bytes),
-              _member_count(member_count), _start(scheduled_start) {}
+    CollectiveCompletionRecorder(EventList &eventlist, const char *label,
+                                 const char *count_field, flowid_t op_id,
+                                 int root, int group_idx, int payload_bytes,
+                                 size_t count, simtime_picosec scheduled_start)
+            : _eventlist(eventlist), _label(label), _count_field(count_field),
+              _op_id(op_id), _root(root), _group_idx(group_idx),
+              _size(payload_bytes), _count(count), _start(scheduled_start) {}
 
     void activate() override;
 
   private:
     EventList &_eventlist;
     const char *_label;
+    const char *_count_field;
     flowid_t _op_id;
     int _root;
     int _group_idx;
     int _size;
-    size_t _member_count;
-    simtime_picosec _start;
-};
-
-// Records collective-completion timestamps for a single broadcast
-// operation. Attached as a TriggerTarget to the operation's
-// BarrierTrigger so it fires exactly once when the last leg reports
-// last-byte-received. Emits one machine-parseable line to stdout that
-// a downstream plotting script can grep for.
-//
-// Output format (single line, space-separated key=value):
-//   BCAST_COMPLETE op_id=<id> root=<node> group=<idx> size=<bytes>
-//   legs=<|G|-1> start_ns=<t0> complete_ns=<t1> duration_ns=<dt>
-//
-// Times are in nanoseconds; sim time is internally picoseconds so we
-// divide by 1000. start_ns is the .cm-scheduled start time for the
-// operation (crt->start); complete_ns is the sim time at which the
-// last sink's byte was received.
-class BcastCompletionRecorder : public TriggerTarget {
-  public:
-    BcastCompletionRecorder(EventList &eventlist, flowid_t op_id, int root,
-                            int group_idx, int payload_bytes,
-                            size_t leg_count, simtime_picosec scheduled_start)
-            : _eventlist(eventlist), _op_id(op_id), _root(root),
-              _group_idx(group_idx), _size(payload_bytes),
-              _leg_count(leg_count), _start(scheduled_start) {}
-
-    void activate() override;
-
-  private:
-    EventList &_eventlist;
-    flowid_t _op_id;
-    int _root;
-    int _group_idx;
-    int _size;
-    size_t _leg_count;
+    size_t _count;
     simtime_picosec _start;
 };
 
