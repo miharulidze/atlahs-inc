@@ -35,6 +35,22 @@ BCAST_RE = re.compile(
     r"duration_ns=(?P<duration_ns>\d+)"
 )
 
+# Correctness oracle. This build does not emit a New/Rtx/ACK summary line;
+# loss instead surfaces as per-queue drop messages on stdout/stderr. Under
+# the ACK-less lossless broadcast model a *correct* run drops nothing, so
+# "drops == 0 == clean / drops > 0 == suspect" is the analogue of the
+# Rtx:0-vs-Rtx>useful health check used in the host-centric INC literature.
+# Match the actual drop-EVENT strings (NOT the "FastDrop:" config echo).
+DROP_RE = re.compile(
+    r"drop arriving|drop last from queue|RTS dropped|Data dropped|"
+    r"Ack dropped|dropped packet|Random Drop|Buffer Drop|"
+    r"Dropping packet|^Dropped\b|LOSSLESS not working",
+    re.IGNORECASE | re.MULTILINE,
+)
+# A lossless queue that should have dropped is a hard correctness failure,
+# not mere congestion loss -- flag it separately.
+LOSSLESS_VIOLATION_RE = re.compile(r"LOSSLESS not working", re.IGNORECASE)
+
 
 def read_manifest(path):
     """Return list of (nodes, group_size, rep, payload_bytes, cm_path).
@@ -68,12 +84,16 @@ def read_manifest(path):
 
 def run_one(htsim, cm_path, nodes, seed, linkspeed, timeout_s, mode,
             capture_link_crosses=False):
-    """Run htsim_uec once and return (matches, link_crosses_total).
+    """Run htsim_uec once and return (matches, link_crosses_total, diag).
 
     matches  = list of BCAST_COMPLETE field-dicts.
     link_crosses_total = total directional pipe traversals reported
         by the simulator's PT6 instrumentation, or None if not
         captured.
+    diag = correctness-oracle dict {status, drops, lossless_violation}:
+        status in {"ok","fail","timeout"}; drops = count of drop-event
+        lines on stdout+stderr; lossless_violation = a lossless queue
+        reported it should have dropped (hard correctness failure).
     """
     import tempfile
     lc_path = None
@@ -104,7 +124,9 @@ def run_one(htsim, cm_path, nodes, seed, linkspeed, timeout_s, mode,
         if lc_path:
             try: os.unlink(lc_path)
             except OSError: pass
-        return ([], None)
+        return ([], None,
+                {"status": "timeout", "drops": 0,
+                 "lossless_violation": False})
 
     if proc.returncode != 0:
         sys.stderr.write(
@@ -114,7 +136,23 @@ def run_one(htsim, cm_path, nodes, seed, linkspeed, timeout_s, mode,
         if lc_path:
             try: os.unlink(lc_path)
             except OSError: pass
-        return ([], None)
+        return ([], None,
+                {"status": "fail", "drops": 0,
+                 "lossless_violation": False})
+
+    # Correctness oracle: scan the combined output for drop events.
+    combined = proc.stdout + "\n" + proc.stderr
+    drops = len(DROP_RE.findall(combined))
+    diag = {
+        "status": "ok",
+        "drops": drops,
+        "lossless_violation": bool(LOSSLESS_VIOLATION_RE.search(combined)),
+    }
+    if drops:
+        sys.stderr.write(
+            f"[drops={drops}{' LOSSLESS!' if diag['lossless_violation'] else ''}]"
+            f" {cm_path} seed={seed} mode={mode}\n"
+        )
 
     matches = [m.groupdict() for m in BCAST_RE.finditer(proc.stdout)]
     if not matches:
@@ -134,7 +172,7 @@ def run_one(htsim, cm_path, nodes, seed, linkspeed, timeout_s, mode,
         try: os.unlink(lc_path)
         except OSError: pass
 
-    return (matches, lc_total)
+    return (matches, lc_total, diag)
 
 
 def main():
@@ -187,9 +225,14 @@ def main():
     modes = (["baseline", "mcast"] if args.mode == "both"
              else [args.mode])
     rows = []
+    # Correctness-oracle tally (broadcast analogue of a New/Rtx/ACK health
+    # check): every run should complete with zero drops.
+    health = {"runs": 0, "clean": 0, "with_drops": 0,
+              "lossless_violations": 0, "no_completion": 0,
+              "failed_or_timeout": 0}
     for (nodes, group_size, rep, payload_bytes, cm_path) in entries:
         for mode in modes:
-            hits, lc_total = run_one(
+            hits, lc_total, diag = run_one(
                 args.htsim, cm_path, nodes, args.seed,
                 args.linkspeed, args.timeout, mode,
                 capture_link_crosses=args.link_crosses,
@@ -209,16 +252,51 @@ def main():
                     "start_ns": int(h["start_ns"]),
                     "complete_ns": int(h["complete_ns"]),
                     "duration_ns": int(h["duration_ns"]),
+                    "drops": diag["drops"],
                     "matrix_path": cm_path,
                 }
                 if args.link_crosses:
                     row["link_crosses"] = lc_total if lc_total is not None else ""
                 rows.append(row)
+
+            # Tally run health.
+            health["runs"] += 1
+            if diag["status"] in ("fail", "timeout"):
+                health["failed_or_timeout"] += 1
+                flag = f"[{diag['status'].upper()}]"
+            elif not hits:
+                health["no_completion"] += 1
+                flag = "[NO-COMPLETE]"
+            elif diag["drops"] == 0:
+                health["clean"] += 1
+                flag = "[OK]"
+            else:
+                health["with_drops"] += 1
+                flag = f"[WARN drops={diag['drops']}]"
+            if diag["lossless_violation"]:
+                health["lossless_violations"] += 1
+                flag += " [LOSSLESS-VIOLATION]"
+
             print(
                 f"n={nodes} g={group_size} rep={rep} mode={mode}  "
-                f"-> {len(hits)} op(s)"
+                f"-> {len(hits)} op(s)  {flag}"
                 + (f"  [lc={lc_total}]" if args.link_crosses else "")
             )
+
+    # One-glance correctness oracle: are the timings from loss-free runs?
+    print("\n=== correctness oracle (drops == 0 == clean) ===")
+    print(f"  runs:                {health['runs']}")
+    print(f"  clean (0 drops):     {health['clean']}")
+    print(f"  with drops:          {health['with_drops']}")
+    print(f"  lossless violations: {health['lossless_violations']}")
+    print(f"  no BCAST_COMPLETE:   {health['no_completion']}")
+    print(f"  failed/timeout:      {health['failed_or_timeout']}")
+    unclean = (health["with_drops"] + health["lossless_violations"]
+               + health["no_completion"] + health["failed_or_timeout"])
+    print("  STATUS: "
+          + ("OK -- all runs clean and complete"
+             if unclean == 0 else
+             "NOT CLEAN -- investigate before trusting timings"))
 
     if not rows:
         sys.exit("no results collected")

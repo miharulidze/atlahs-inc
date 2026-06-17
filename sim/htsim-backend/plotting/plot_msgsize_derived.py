@@ -11,7 +11,11 @@ topology-size invariant, so the largest fat tree is representative).
 --metric goodput : effective broadcast goodput (payload*8 / completion,
     in Gbps) vs payload, one line per (|G|, mode). Multicast saturates
     the link (~link rate) independent of |G|; the unicast emulation is
-    throttled to link_rate/(|G|-1).
+    throttled to link_rate/(|G|-1). Two theoretical-ceiling overlays make
+    the "fraction of wire realised" explicit (cf. the host-centric
+    all-reduce ceilings of Patarasuk & Yuan, JPDC 2009): the full link
+    rate as the multicast (100%) ceiling, and a per-|G| dashed asymptote
+    at link_rate/(|G|-1) as the host-baseline broadcast ceiling.
 
 CSV columns: nodes, group_size, rep, mode, payload_bytes, ...,
     duration_ns  (produced by run_bcast_sweep.py on the MTU manifest)
@@ -83,8 +87,20 @@ def main():
         else:  # goodput: one baseline line per |G| (mcast drawn once)
             ys = [(s * 8.0) / med(by[(N, g, "baseline", s)])
                   for s in payloads]
-            ax.plot(xs, ys, marker="o", markersize=4, linewidth=1.4,
-                    linestyle="-", label=f"|G|={g} baseline")
+            line, = ax.plot(xs, ys, marker="o", markersize=4,
+                            linewidth=1.4, linestyle="-",
+                            label=f"|G|={g} baseline")
+            # Host-baseline goodput ceiling: the root serialises |G|-1
+            # unicast copies, so it can realise at most link_rate/(|G|-1)
+            # of the wire. Draw it as a per-|G| dashed asymptote -- the
+            # broadcast analogue of the recursive-doubling / RS+AG ceilings
+            # in the host-centric all-reduce literature (Patarasuk & Yuan).
+            ceil = args.linkspeed_gbps / (g - 1)
+            ax.axhline(ceil, color=line.get_color(), linestyle=":",
+                       linewidth=1.0, alpha=0.7)
+            ax.text(xs[0], ceil * 1.03,
+                    f"link/$(|G|-1)$ = {ceil:.0f} Gbps",
+                    color=line.get_color(), fontsize=7, va="bottom")
 
     if args.metric == "goodput":
         # Multicast goodput is independent of |G|, so draw it once.
@@ -107,7 +123,8 @@ def main():
     else:
         ax.axhline(args.linkspeed_gbps, color="black", linestyle="--",
                    linewidth=1.2, alpha=0.7,
-                   label=f"link rate ({args.linkspeed_gbps:.0f} Gbps)")
+                   label=(f"link rate = 100% multicast ceiling "
+                          f"({args.linkspeed_gbps:.0f} Gbps)"))
         ax.set_ylabel("Effective broadcast goodput (Gbps)")
         default_title = ("Effective broadcast goodput vs message size "
                          f"({N}-host fat tree)")
