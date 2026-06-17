@@ -2,9 +2,9 @@
 //
 // Builds an N-rank schedule where every rank performs ONE in-network collective on
 // group 0, instance 1, followed by a dependent compute that may only run after the
-// collective completes (exercises the completion -> DAG release path). The text lexer
-// for the `coll` verb is Stage-2 work, so we build the binary directly via the Goal
-// API, mirroring txt2bin's per-rank SerializeSchedule loop (txt2bin.cpp:2944-2967).
+// collective completes (exercises the completion -> DAG release path). This builds the
+// binary directly via the Goal API (txt2bin also has a `coll` text lexer as of Stage 2),
+// mirroring txt2bin's per-rank SerializeSchedule loop (txt2bin.cpp:3672-3681).
 //
 // Build:  g++ -std=c++17 -I.. -I. make_coll_test.cpp -o make_coll_test
 // Run:    ./make_coll_test <out.bin> [num_ranks=16] [size=4096] [kind=allreduce] [root=-1]

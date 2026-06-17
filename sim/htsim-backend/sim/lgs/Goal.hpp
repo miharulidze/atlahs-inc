@@ -80,16 +80,22 @@ class Goal {
 
 		// In-network collective op (Phase 4 bridge). One node per participating rank;
 		// the |G| nodes of one instance share the same `instance` id so htsim aggregates
-		// them as a single collective. optype = OPTYPE_BCAST/REDUCE/ALLREDUCE/REDUCE_SCATTER.
+		// them as a single collective. optype = OPTYPE_BCAST/REDUCE/ALLREDUCE/REDUCE_SCATTER/ALLGATHER.
 		goalop_t Collective(char optype, uint32_t group, uint64_t size, uint32_t instance, int root, uint8_t cpu, uint8_t nic) {
 
 			Node* n = graph.addNode();
 
 			n->Type = optype;
 			// Peer packs group id (low 16 bits) + root host (high 16 bits). A root field
-			// of 0xFFFF marks a rootless op (Allreduce / Reduce-Scatter). The fixed 39-byte
+			// of 0xFFFF marks a rootless op (Allreduce / Reduce-Scatter / Allgather). The fixed 39-byte
 			// record has only Peer + Tag free after the Type byte, so group + root share
-			// Peer and the instance id lives in Tag.
+			// Peer and the instance id lives in Tag. Both halves must fit their 16 bits or
+			// the record is silently corrupted, and a rooted op's root must stay below the
+			// 0xFFFF rootless sentinel -- assert rather than truncate into a wrong collective.
+			assert(group <= 0xFFFFu &&
+			       "Collective: group id exceeds 16-bit Peer field");
+			assert(root < 0xFFFF &&
+			       "Collective: root host id must be < 0xFFFF (reserved as rootless sentinel)");
 			uint32_t root_field = (root < 0) ? 0xFFFFu : (static_cast<uint32_t>(root) & 0xFFFFu);
 			n->Peer = (group & 0xFFFFu) | (root_field << 16);
 			n->Tag  = instance;     // shared-across-ranks unique op id -> htsim op_flow_id

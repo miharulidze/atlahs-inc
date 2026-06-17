@@ -2,16 +2,16 @@
 #ifndef INC_FIB_H
 #define INC_FIB_H
 
-// Per-switch INC FIB and FIB-entry shapes for phase-two multicast
-// (and forward-compatible with phase-three aggregation).
+// Per-switch INC FIB and FIB-entry shapes for multicast and
+// in-network aggregation (reduce).
 //
 //   INCFib       --- per-switch hash map keyed by group_id;
 //                    holds one INCFibEntry per multicast group
 //                    that traverses this switch.
 //   INCFibEntry  --- bitmap of tree-member ports + sparse list
 //                    of pre-baked routes for leaf-TOR member
-//                    ports + (phase-3 only) optional toward-root
-//                    port index for reduce-direction ops.
+//                    ports + optional toward-root port index
+//                    for reduce-direction ops.
 //
 // See AA-plan-Phase2/v4.md §3.3 for the design rationale and
 // §10 for the phase-3 forward-compatibility argument.
@@ -40,11 +40,10 @@ class INCFibEntry {
     // instead).
     std::vector<std::pair<uint8_t, Route *>> leaf_routes;
 
-    // PHASE 3 ONLY: which port leads "toward root" for a reduce-
-    // direction op. nullopt at the root switch and at switches
-    // that don't participate in reduce ops. Phase-2 install leaves
-    // this nullopt unconditionally; phase-three set_up_inc will
-    // populate it per (group, reduction-root) pair.
+    // Which port leads "toward root" for a reduce-direction op;
+    // -1 at the apex (root) switch. set_up_mcast sets it from the
+    // tree's single uplink port for every group; the reduction
+    // root R is carried per-packet (reduce_root()), not stored here.
     //
     // We don't pull in <optional> here to keep the header lean;
     // a plain int with -1 sentinel works the same and avoids
