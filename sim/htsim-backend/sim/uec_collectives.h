@@ -130,9 +130,10 @@ class UecCollectiveSink : public UecSink {
         // Kind dispatch: a packet can only count against a registration
         // of its own kind. Anything else (ACKs, stray unicast) is freed.
         std::unordered_map<uint32_t, OpState> *ops;
+        int header_bytes;
         switch (pkt.type()) {
-        case UEC_MCAST:  ops = &_op_state_mcast;  break;
-        case UEC_REDUCE: ops = &_op_state_reduce; break;
+        case UEC_MCAST:  ops = &_op_state_mcast;  header_bytes = UecMcastPacket::acksize;  break;
+        case UEC_REDUCE: ops = &_op_state_reduce; header_bytes = UecReducePacket::acksize; break;
         default:         pkt.free(); return;
         }
         if (pkt.header_only())     { pkt.free(); return; }
@@ -141,7 +142,16 @@ class UecCollectiveSink : public UecSink {
         if (it == ops->end())      { pkt.free(); return; }
         OpState &s = it->second;
 
-        s.bytes_received += pkt.size();
+        // Count PAYLOAD, not wire size. pkt.size() is payload + header
+        // (acksize); every caller registers expected_bytes in payload units,
+        // so counting wire bytes over-counts by acksize per packet. For
+        // single-stream collectives (bcast/allreduce/reduce) that only shifts
+        // completion within a sub-packet, but AllGather sums |G|-1 INDEPENDENT
+        // peer streams into one counter, where the accumulated per-packet
+        // surplus can fire the barrier before the last peer's block arrives
+        // (triggers once (|G|-2)*acksize >= MTU). Subtracting the header makes
+        // the byte count match payload-unit expected exactly.
+        s.bytes_received += pkt.size() - header_bytes;
         pkt.free();
 
         if (!s.completed && s.bytes_received >= s.expected_bytes) {

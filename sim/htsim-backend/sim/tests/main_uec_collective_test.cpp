@@ -84,7 +84,7 @@ PacketFlow &flow_for_op(uint32_t op_id) {
 int test_register_op_then_complete() {
     TestableSink sink(/*host=*/0, /*group=*/7);
     sink.register_mcast_op(/*op_flow_id=*/100,
-                           /*expected_bytes=*/4096 + 64,
+                           /*expected_bytes=*/4096,  // payload units (sink subtracts acksize)
                            /*end_trigger=*/nullptr);
 
     UecMcastPacket *p = UecMcastPacket::newpkt(flow_for_op(100),
@@ -101,8 +101,8 @@ int test_register_op_then_complete() {
 // 2. Register two ops; complete one. The other must not complete.
 int test_multi_op_isolation() {
     TestableSink sink(/*host=*/0, /*group=*/7);
-    sink.register_mcast_op(100, 4160, nullptr);
-    sink.register_mcast_op(200, 4160, nullptr);
+    sink.register_mcast_op(100, 4096, nullptr);
+    sink.register_mcast_op(200, 4096, nullptr);
 
     UecMcastPacket *p = UecMcastPacket::newpkt(flow_for_op(100),
                                                empty_route(),
@@ -119,7 +119,7 @@ int test_multi_op_isolation() {
 //    crash; the packet is freed.
 int test_unknown_op_drop() {
     TestableSink sink(/*host=*/0, /*group=*/7);
-    sink.register_mcast_op(100, 4160, nullptr);
+    sink.register_mcast_op(100, 4096, nullptr);
 
     UecMcastPacket *p = UecMcastPacket::newpkt(flow_for_op(999),
                                                empty_route(),
@@ -137,8 +137,8 @@ int test_unknown_op_drop() {
 //    maps exist to preserve from the former two-class design.
 int test_kind_isolation() {
     TestableSink sink(/*host=*/0, /*group=*/7);
-    sink.register_reduce_op(100, 4160, nullptr);
-    sink.register_mcast_op(200, 4160, nullptr);
+    sink.register_reduce_op(100, 4096, nullptr);
+    sink.register_mcast_op(200, 4096, nullptr);
 
     // MCAST packet carrying the reduce op's flow id: dropped.
     UecMcastPacket *m = UecMcastPacket::newpkt(flow_for_op(100),
@@ -172,6 +172,50 @@ int test_kind_isolation() {
     return 0;
 }
 
+// 5. AllGather accumulation: a member's sink must accumulate the |G|-1
+//    OTHER members' blocks (distinct source hosts, one shared op flow id)
+//    and complete ONLY after the last peer block arrives. This is the core
+//    AllGather sink-side property: each member receives (|G|-1)*block_bytes
+//    over the fabric (its own block stays local -- handle_mcast's RPF
+//    excludes self-delivery), all summed into one byte counter keyed by the
+//    shared op flow id regardless of which peer sent each slice.
+int test_allgather_accumulates_peer_blocks() {
+    // kG=6, kBlock=256 is chosen so the accumulated per-packet header surplus
+    // would, under the old wire-byte counting, cross expected after only
+    // |G|-2 peers ((kG-2)*acksize = 4*64 = 256 >= kBlock): a regression to
+    // wire counting would fire the barrier one peer early and trip the
+    // mid-loop assert below. With payload counting it requires all |G|-1.
+    const int kG = 6;
+    const int kBlock = 256;
+    TestableSink sink(/*host=*/0, /*group=*/7);
+    // Member 0 expects the |G|-1 OTHER members' blocks under the shared op id.
+    // expected_bytes is payload units: the sink subtracts the per-packet
+    // header, so a kBlock-payload packet counts exactly kBlock.
+    sink.register_mcast_op(/*op_flow_id=*/100,
+                           /*expected_bytes=*/(kG - 1) * kBlock,
+                           /*end_trigger=*/nullptr);
+
+    // The |G|-1 peers each multicast their block under the shared op id.
+    const int peers[] = {1, 2, 3, 4, 5};
+    for (int i = 0; i < kG - 1; ++i) {
+        UecMcastPacket *p = UecMcastPacket::newpkt(flow_for_op(100),
+                                                   empty_route(),
+                                                   /*seqno=*/1, /*size=*/kBlock,
+                                                   /*group_id=*/7,
+                                                   /*source_host=*/peers[i]);
+        sink.receivePacket(*p);
+        if (i < kG - 2) {
+            ASSERT(!sink.mcast_completed_for(100),
+                   "allgather incomplete until all peer blocks arrive");
+        }
+    }
+    ASSERT(sink.mcast_completed_for(100),
+           "allgather completes after |G|-1 peer blocks");
+    ASSERT(sink.mcast_bytes_for(100) == static_cast<uint64_t>(kG - 1) * kBlock,
+           "allgather accumulated exactly (|G|-1)*block bytes");
+    return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -184,6 +228,8 @@ int main() {
             {"multi_op_isolation",        test_multi_op_isolation},
             {"unknown_op_drop",           test_unknown_op_drop},
             {"kind_isolation",            test_kind_isolation},
+            {"allgather_accumulates_peer_blocks",
+                                          test_allgather_accumulates_peer_blocks},
     };
     for (auto &t : tests) {
         if (t.fn() == 0) {

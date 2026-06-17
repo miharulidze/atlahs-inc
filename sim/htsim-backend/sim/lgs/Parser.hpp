@@ -28,6 +28,7 @@
 #define OPTYPE_REDUCE 11
 #define OPTYPE_ALLREDUCE 12
 #define OPTYPE_REDUCE_SCATTER 13
+#define OPTYPE_ALLGATHER 14
 
 typedef uint64_t base_t;
 
@@ -675,6 +676,7 @@ class SerializedGraph {
 			else if (executableNodes[cnt].Type == OPTYPE_REDUCE) gp.type = OP_REDUCE;
 			else if (executableNodes[cnt].Type == OPTYPE_ALLREDUCE) gp.type = OP_ALLREDUCE;
 			else if (executableNodes[cnt].Type == OPTYPE_REDUCE_SCATTER) gp.type = OP_REDUCE_SCATTER;
+			else if (executableNodes[cnt].Type == OPTYPE_ALLGATHER) gp.type = OP_ALLGATHER;
 			gp.offset = executableNodes[cnt].offset;
 			ret.push_back(gp);
 		}

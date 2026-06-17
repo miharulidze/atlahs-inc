@@ -64,7 +64,8 @@ enum OpTypes {
 	BcastOp,
 	ReduceOp,
 	AllreduceOp,
-	ReduceScatterOp
+	ReduceScatterOp,
+	AllgatherOp
 };
 
 inline uint64_t add_number(unsigned char *s, unsigned char *e) {
@@ -161,6 +162,10 @@ void process_item(Scanner *s, Item *item) {
 			break;
 		case ReduceScatterOp:
 			op = s->schedule->Collective(OPTYPE_REDUCE_SCATTER, item->coll_group, item->size, item->coll_instance, item->coll_root, item->cpu, item->nic);
+			if (item->label1 != NULL) insert_id(s, item->label1, op);
+			break;
+		case AllgatherOp:
+			op = s->schedule->Collective(OPTYPE_ALLGATHER, item->coll_group, item->size, item->coll_instance, item->coll_root, item->cpu, item->nic);
 			if (item->label1 != NULL) insert_id(s, item->label1, op);
 			break;
 		default:
@@ -503,6 +508,7 @@ s_30:
 /*!re2c
 	WS				{ goto s_30; }
 	"allreduce"		{ item.type = AllreduceOp;     goto s_31; }
+	"allgather"		{ item.type = AllgatherOp;     goto s_31; }
 	"bcast"			{ item.type = BcastOp;         goto s_31; }
 	"reduce_scatter"	{ item.type = ReduceScatterOp; goto s_31; }
 	"reduce"		{ item.type = ReduceOp;        goto s_31; }

@@ -231,7 +231,27 @@ void LogSimInterface::launch_collective(graph_node_properties &elem) {
   int root = (root_field == 0xFFFFu) ? -1 : static_cast<int>(root_field);
   uint64_t size = elem.size;
   int kind = elem.type;  // OP_ALLREDUCE / OP_BCAST / OP_REDUCE / OP_REDUCE_SCATTER
-  int host = htsim_api->getHtsimNodeNumber(elem.host, elem.nic);
+  // The collective endpoint is keyed by the raw lgs host id: root (elem.target>>16),
+  // the group members, get_collective_sink(m,..), HOST_POD_SWITCH(m) and make_coll_route
+  // all live in lgs-host space. getHtsimNodeNumber maps into per-NIC htsim-node space
+  // (host*number_nics + nic) and must NOT be used here -- with number_nics>1 it would
+  // desync the emit gate / source route from the sink keying and hang the collective.
+  // It stays reserved for the per-NIC p2p send path.
+  int host = static_cast<int>(elem.host);
+
+  // Fail fast (rather than null-deref (*_topo->groups) below) when a GOAL trace
+  // dispatches an in-network collective but the INC group bring-up never ran --
+  // i.e. -groups <file> was omitted, so set_up_mcast() was skipped and top->groups
+  // is still null. Without this guard the omission is a silent segfault.
+  if (_topo->groups == nullptr) {
+    fprintf(stderr,
+            "[FATAL] GOAL trace dispatched an in-network collective op (group %u, "
+            "op_flow_id %u) but no collective groups are installed. Pass "
+            "-groups <file> so the topology can build the INC FIB and collective "
+            "sinks before the run.\n",
+            group_id, op_flow_id);
+    exit(EXIT_FAILURE);
+  }
 
   bool first = (_pending_collectives.count(op_flow_id) == 0);
   CollOpState &st = _pending_collectives[op_flow_id];
@@ -254,6 +274,7 @@ void LogSimInterface::launch_collective(graph_node_properties &elem) {
     } else {
       const char *label = (kind == OP_REDUCE)            ? "REDUCE"
                           : (kind == OP_REDUCE_SCATTER)  ? "REDUCE_SCATTER"
+                          : (kind == OP_ALLGATHER)       ? "ALLGATHER"
                                                          : "ALLREDUCE";
       barrier_count = (kind == OP_REDUCE) ? 1 : members.size();
       recorder = new ReduceCompletionRecorder(
@@ -271,12 +292,18 @@ void LogSimInterface::launch_collective(graph_node_properties &elem) {
     // register_mcast_op, UEC_REDUCE -> register_reduce_op; rooted unicast descents
     // (reduce / reduce_scatter) also need an addHostPort route to resolve the result.
     uint64_t block_bytes =
-        (kind == OP_REDUCE_SCATTER && !members.empty()) ? size / members.size() : 0;
+        ((kind == OP_REDUCE_SCATTER || kind == OP_ALLGATHER) && !members.empty())
+            ? size / members.size() : 0;
     for (int32_t m : members) {
       UecCollectiveSink *sink = _topo->get_collective_sink(m, group_id);
       assert(sink && "set_up_mcast did not create sink (group <2 members?)");
       if (kind == OP_ALLREDUCE) {
         sink->register_mcast_op(op_flow_id, size, barrier);
+      } else if (kind == OP_ALLGATHER) {
+        // Every member receives the |G|-1 OTHER blocks (its own block stays
+        // local; handle_mcast's RPF excludes self-delivery). UEC_MCAST kind,
+        // byte-count completion -- no addHostPort (mcast leaf routes deliver).
+        sink->register_mcast_op(op_flow_id, block_bytes * (members.size() - 1), barrier);
       } else if (kind == OP_BCAST) {
         if (m != root) sink->register_mcast_op(op_flow_id, size, barrier);
       } else if (kind == OP_REDUCE) {
@@ -308,6 +335,29 @@ void LogSimInterface::launch_collective(graph_node_properties &elem) {
       bs->set_paths(256);
       bs->connect_collective(make_coll_route(host), _eventlist->now());
     }
+  } else if (kind == OP_ALLGATHER) {
+    // Every member multicasts its own block (size/|G| bytes) into the group;
+    // all sources share group_id + op_flow_id. AllGather = |G| concurrent
+    // broadcasts (the dual of Reduce-Scatter), so it reuses the broadcast
+    // multicast emitter rather than the reduce ascent.
+    std::vector<int32_t> &members = (*_topo->groups)[group_id];
+    uint64_t block_bytes = members.empty() ? 0 : size / members.size();
+    UecBcastSrcMcast *bs = new UecBcastSrcMcast(
+        NULL, NULL, *_eventlist, htsim_api->getSenderRtt(),
+        htsim_api->getSenderBdp(), 100, 6);
+    bs->setNumberEntropies(256);
+    bs->set_group_id(group_id);
+    bs->set_flowid(op_flow_id);
+    // Set unconditionally: a degenerate size < |G| yields block_bytes == 0,
+    // and leaving the source's default flow size in place would flood the
+    // fabric. setFlowSize(0) makes emit_once send nothing.
+    bs->setFlowSize(block_bytes);
+    bs->setName("uec_goal_allgather_src_" + std::to_string(host) + "_g" +
+                std::to_string(group_id));
+    bs->from = host;
+    bs->to = -1;
+    bs->set_paths(256);
+    bs->connect_collective(make_coll_route(host), _eventlist->now());
   } else {  // allreduce / reduce / reduce_scatter: every member emits up the tree
     UecReduceSrc *rs = new UecReduceSrc(NULL, NULL, *_eventlist,
                                         htsim_api->getSenderRtt(),
@@ -797,7 +847,8 @@ int start_lgs(std::string filename_goal, LogSimInterface &lgs) {
             case OP_BCAST:
             case OP_REDUCE:
             case OP_ALLREDUCE:
-            case OP_REDUCE_SCATTER: {
+            case OP_REDUCE_SCATTER:
+            case OP_ALLGATHER: {
               // First-class in-network collective op for this rank. Mark started,
               // count it as one outstanding completion, and launch/extend the op.
               parser.schedules[elem.host].MarkNodeAsStarted(elem.offset);

@@ -760,6 +760,7 @@ bool ConnectionMatrix::load(istream& file){
             c->is_reduce = false;
             c->is_allreduce = false;
             c->is_reduce_scatter = false;
+            c->is_allgather = false;
             for (size_t i = 1; i < tokens.size(); i++) {
                 if (tokens[i] == "start_bcast") {
                     c->is_bcast = true;
@@ -787,6 +788,18 @@ bool ConnectionMatrix::load(istream& file){
                     // member i. Requires size divisible by |G| and the
                     // resulting block size a multiple of the MTU.
                     c->is_reduce_scatter = true;
+                    i++;
+                    c->start = stof(tokens[i]);
+                }
+                else if (tokens[i] == "start_allgather") {
+                    // phase-4 in-network AllGather: GRP (root index ignored,
+                    // symmetric); time follows. The gathered vector (size
+                    // bytes) is partitioned into |G| equal blocks; member i
+                    // contributes block i (size/|G| bytes) and every member
+                    // receives the |G|-1 OTHER blocks. Dual of Reduce-Scatter.
+                    // Requires size divisible by |G| and the resulting block
+                    // size a multiple of the MTU.
+                    c->is_allgather = true;
                     i++;
                     c->start = stof(tokens[i]);
                 }

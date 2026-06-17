@@ -19,6 +19,7 @@ struct connection{
     bool is_reduce;     // phase-3: in-network Reduce (many->one root)
     bool is_allreduce;  // phase-3: in-network Allreduce (apex turn-around)
     bool is_reduce_scatter; // phase-3: in-network Reduce-Scatter (per-block roots)
+    bool is_allgather;  // phase-4: in-network AllGather (|G| concurrent mcasts)
     flowid_t flowid;
     triggerid_t send_done_trigger;
     triggerid_t recv_done_trigger;

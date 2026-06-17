@@ -1188,6 +1188,114 @@ int main(int argc, char **argv) {
             }
 
             // --------------------------------------------------------------
+            // AllGather (MPI_Allgather), in-network as |G| concurrent
+            // broadcasts.
+            //
+            // `allgather ROOT->GRP` (is_allgather). Symmetric, rootless: every
+            // member multicasts its own block (size/|G| bytes) into the group
+            // and receives the |G|-1 OTHER members' blocks. A member never
+            // receives its own block back: handle_mcast's RPF fanout excludes
+            // the ingress port, so the slice injected at member m's ToR is not
+            // returned down m's host downlink. AllGather is the dual of
+            // Reduce-Scatter and rides the SAME multicast datapath as Broadcast
+            // with no switch/FIB changes -- the only difference from a single
+            // Bcast is that |G| sources (one per member) inject concurrently
+            // under one shared group_id + op_flow_id. Completion = all |G|
+            // members have received (|G|-1)*block_bytes. The root index is
+            // ignored.
+            // --------------------------------------------------------------
+            if (crt->is_allgather) {
+                if (static_cast<size_t>(dest) >= conns->groups.size()) {
+                    cerr << "allgather connection refers to undefined group index "
+                         << dest << "\n";
+                    exit(1);
+                }
+                const vector<int32_t> &group = conns->groups[dest];
+                if (group.size() < 2) {
+                    cerr << "allgather group " << dest << " has size < 2\n";
+                    exit(1);
+                }
+                int root_label = (static_cast<size_t>(src) < group.size())
+                        ? group[src] : group[0];   // label only; symmetric op
+
+                flowid_t op_flow_id = crt->flowid
+                        ? crt->flowid : ++next_bcast_leg_flow_id;
+
+                // The gathered vector splits into |G| equal blocks; member i
+                // contributes block i (size/|G| bytes). block_bytes must be a
+                // multiple of the MTU (same constraint as Reduce-Scatter) so
+                // the per-sink byte-count completion is exact.
+                uint64_t block_bytes = crt->size > 0
+                        ? static_cast<uint64_t>(crt->size) / group.size() : 0;
+                // Each member receives the |G|-1 OTHER members' blocks over the
+                // fabric (its own block stays local; RPF excludes self-delivery).
+                uint64_t recv_bytes = block_bytes * (group.size() - 1);
+
+                // Completion = every member has received all |G|-1 peer blocks.
+                BarrierTrigger *barrier = new BarrierTrigger(
+                        eventlist, ++next_bcast_barrier_id, group.size());
+                barrier->add_target(*new ReduceCompletionRecorder(
+                        eventlist, "ALLGATHER", op_flow_id, root_label,
+                        dest, crt->size, group.size(), crt->start));
+                if (crt->recv_done_trigger) {
+                    Trigger *downstream = conns->getTrigger(
+                            crt->recv_done_trigger, eventlist);
+                    barrier->add_target(*new TriggerRelay(downstream));
+                }
+
+                // Every member's persistent (host, group) sink expects the
+                // |G|-1 peer blocks under the shared op flow id. The slices
+                // arrive as UEC_MCAST packets (register_mcast_op), summed by
+                // the byte counter regardless of which peer sent them. No
+                // addHostPort: the multicast tree's baked INCFib leaf routes
+                // deliver each replica to the sink.
+                for (int32_t m : group) {
+                    UecCollectiveSink *sink = top->get_collective_sink(
+                            m, static_cast<uint32_t>(dest));
+                    assert(sink && "set_up_mcast did not create sink");
+                    sink->register_mcast_op(op_flow_id, recv_bytes, barrier);
+                }
+
+                // Each member multicasts its own block into the group. All |G|
+                // sources share one group_id + op_flow_id; the distinct `from`
+                // seeds a distinct path hash per source. handle_mcast RPF-fans
+                // each source's block to every member except itself.
+                for (int32_t m : group) {
+                    UecBcastSrcMcast *bs = new UecBcastSrcMcast(
+                            NULL, NULL, eventlist,
+                            base_rtt_max_hops, bdp_local, 100, 6);
+                    bs->setNumberEntropies(256);
+                    bs->set_group_id(static_cast<uint32_t>(dest));
+                    bs->set_flowid(op_flow_id);
+                    // Set unconditionally: a degenerate size < |G| yields
+                    // block_bytes == 0, and leaving the source's default flow
+                    // size in place would flood the fabric. setFlowSize(0)
+                    // makes emit_once send nothing.
+                    bs->setFlowSize(block_bytes);
+                    if (crt->trigger) {
+                        Trigger *trig = conns->getTrigger(crt->trigger, eventlist);
+                        trig->add_target(*bs);
+                    }
+                    bs->setName("uec_allgather_src_" + ntoa_uec(m)
+                                + "_g" + ntoa_uec(dest));
+                    logfile.writeName(*bs);
+
+                    Route *srctotor = new Route();
+                    uint32_t tor = top->HOST_POD_SWITCH(m);
+                    srctotor->push_back(top->queues_ns_nlp[m][tor][0]);
+                    srctotor->push_back(top->pipes_ns_nlp[m][tor][0]);
+                    srctotor->push_back(
+                            top->queues_ns_nlp[m][tor][0]->getRemoteEndpoint());
+
+                    bs->from = m;
+                    bs->to   = -1;
+                    bs->set_paths(number_entropies);
+                    bs->connect_collective(srctotor, crt->start);
+                }
+                continue;
+            }
+
+            // --------------------------------------------------------------
             // Reduce (MPI_Reduce), in-network many->one.
             //
             // `reduce ROOT->GRP` (is_reduce). Every member is a reduce source
