@@ -7,11 +7,11 @@ from typing import Optional
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
-OUTPUT_DIR = "/workspace/data/validation_zhiyi/"
+OUTPUT_DIR = "/workspace/data/validation/"
 
 PCM_APP_HTSIM_ATLAHS_EXEC_PATH = "/workspace/sim/pcm-sdk_zhiyi/pcm/build/bin/htsim_flow_app_atlahs"
 
-TOPO_FILES_PATH        = "/workspace/scripts/topo_files_zhiyi"
+TOPO_FILES_PATH        = "/workspace/scripts/topo_files"
 PCM_CC_CONFIG_FILES_PATH = "/workspace/scripts/pcm_cc_configs"
 
 NETWORK_TOPO    = "tree1024_bw200Gbps.topo"
