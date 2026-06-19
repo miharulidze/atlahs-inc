@@ -18,6 +18,7 @@ if [ "$#" -eq 0 ]; then
   echo "  run: run the benchmarks with the specified arguments, options are:"
   echo "    -q: perform a quick run to show that the artifact is functional"
   echo "    -f: perform the full run to reproduce the results"
+  echo "    -g: run HTSim ATLAHS experiments for all .bin files in data/goal_workloads dir"
   exit 1
 fi
 
@@ -65,6 +66,9 @@ case $option in
         ;;
       "-f")
         python3 /workspace/scripts/run.py -v -f -d $DATA_DIR
+        ;;
+      "-g")
+        python3 /workspace/scripts/run_goal_workloads_exp.py -g ${2:-/workspace/data/goal_workloads}
         ;;
       *)
         echo "Error: Invalid run argument. Must be -v, -q, or -f"

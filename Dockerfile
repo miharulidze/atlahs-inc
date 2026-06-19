@@ -21,6 +21,8 @@ RUN apt-get update && apt-get install -y --allow-downgrades --allow-change-held-
         libopenblas-dev \
         libfftw3-dev \
         protobuf-compiler \
+        gdb \
+        valgrind \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # DLRM & Chakra related
@@ -39,6 +41,12 @@ RUN pip install setuptools==69.5.1 datasets accelerate evaluate tokenizers sente
     tqdm protobuf tensorboard tiktoken wandb drawsvg gurobipy pulp scipy pyarrow regex
 
 RUN wget https://ftp.gnu.org/gnu/autoconf/autoconf-2.71.tar.xz && tar -xf autoconf-2.71.tar.xz && cd autoconf-2.71 && ./configure && make && make install && cd .. && rm autoconf-2.71.tar.xz
+
+# install uv
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:${PATH}"
+RUN uv --version
+RUN which uv
 
 # Copy the entrypoint script
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
