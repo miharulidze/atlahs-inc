@@ -90,7 +90,8 @@ def main():
     axS.set_xticklabels([hb(s) for s in sizes], rotation=45, fontsize=7)
 
     fig.suptitle("In-network vs point-to-point ring AllReduce — scale-up tier "
-                 "(NVLink-class tree16 @ 3600 Gbps, 500 ns/hop)", fontsize=11)
+                 "(NVLink-class tree16 @ 3600 Gbps; 500 ns link + 300 ns switch / hop)",
+                 fontsize=10.5)
     fig.tight_layout(rect=[0, 0, 1, 0.96])
     for ext in ("png", "pdf"):
         fig.savefig(f"{args.out}.{ext}", dpi=140, bbox_inches="tight")
