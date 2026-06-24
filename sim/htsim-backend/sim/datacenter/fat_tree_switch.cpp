@@ -11,11 +11,15 @@
 #include <cassert>
 
 unordered_map<BaseQueue*,uint32_t> FatTreeSwitch::_port_flow_counts;
+simtime_picosec FatTreeSwitch::_reduce_compute_latency = 0;
 
 FatTreeSwitch::FatTreeSwitch(EventList& eventlist, string s, switch_type t, uint32_t id,simtime_picosec delay, FatTreeTopology* ft): Switch(eventlist, s) {
     _id = id;
     _type = t;
     _pipe = new CallbackPipe(delay,eventlist, this);
+    // Reduce-path pipe: the aggregation result pays switch latency + the
+    // opt-in in-switch compute cost. Equal to _pipe when the latter is 0.
+    _reduce_pipe = new CallbackPipe(delay + _reduce_compute_latency, eventlist, this);
     _uproutes = NULL;
     _ft = ft;
     _crt_route = 0;
@@ -26,6 +30,7 @@ FatTreeSwitch::FatTreeSwitch(EventList& eventlist, string s, switch_type t, uint
 }
 
 FatTreeSwitch::~FatTreeSwitch() {
+    delete _reduce_pipe;
     delete _fib;
     delete _inc_fib;
     // _port_egress_routes own their Route* contents; release them.
@@ -212,7 +217,8 @@ void FatTreeSwitch::fanout_replicas(INCFibEntry* entry,
                                     const std::bitset<128>& egress_mask,
                                     UecMcastPacket& templ,
                                     VirtualQueue* ingress_iq, bool lossless,
-                                    VirtualQueue* prev_override) {
+                                    VirtualQueue* prev_override,
+                                    bool charge_reduce_compute) {
     size_t k = egress_mask.count();
     // Under lossless, every replica needs a non-null prev for the egress
     // queue to pair. Cases:
@@ -252,7 +258,9 @@ void FatTreeSwitch::fanout_replicas(INCFibEntry* entry,
         r->set_direction(::NONE);
         if (prev) r->set_ingress_queue(prev);
         _packets[r] = true;
-        _pipe->receivePacket(*r);
+        // Apex Allreduce turn-around charges the aggregation compute once (the
+        // k replicas leave concurrently); pure multicast uses _pipe (no compute).
+        (charge_reduce_compute ? _reduce_pipe : _pipe)->receivePacket(*r);
     }
 }
 
@@ -333,7 +341,8 @@ void FatTreeSwitch::handle_reduce(UecReducePacket& pkt) {
         _packets[d] = true;
         const Route* nh = getNextHop(*d, NULL);
         d->set_route(*nh);
-        _pipe->receivePacket(*d);
+        // Aggregation result toward the root: charge in-switch compute.
+        _reduce_pipe->receivePacket(*d);
     } else if (entry->root_port_idx_or_neg1 < 0) {
         // APEX, Allreduce turn-around: fan the result back down the whole
         // group tree as a multicast (deliver to all members). Synthesise a
@@ -365,7 +374,8 @@ void FatTreeSwitch::handle_reduce(UecReducePacket& pkt) {
                                             static_cast<int>(k))
                     : nullptr;
             fanout_replicas(entry, mask, *seed, /*ingress_iq=*/nullptr,
-                            lossless, /*prev_override=*/prev);
+                            lossless, /*prev_override=*/prev,
+                            /*charge_reduce_compute=*/true);
             seed->free();
         }
     } else {
@@ -382,7 +392,8 @@ void FatTreeSwitch::handle_reduce(UecReducePacket& pkt) {
         if (lossless)
             c->set_ingress_queue(new ReduceFanInCredit(std::move(charges), 1));
         _packets[c] = true;
-        _pipe->receivePacket(*c);
+        // Combined aggregation packet forwarded up: charge in-switch compute.
+        _reduce_pipe->receivePacket(*c);
     }
     pkt.free();
 }

@@ -176,11 +176,18 @@ public:
     // replica drains (ingress_iq == nullptr for switch-originated apex
     // fanout, where there is no ingress charge). Used by handle_mcast and
     // the Allreduce apex turn-around.
+    // charge_reduce_compute: route the replicas through _reduce_pipe (which
+    // adds the opt-in in-switch aggregation cost on top of switch latency)
+    // instead of _pipe. true only for the Allreduce apex turn-around, where
+    // the final sum is computed here; false for pure multicast replication
+    // (no aggregation). The k replicas are emitted concurrently, so the extra
+    // delay is charged once per turn-around, not once per replica.
     void fanout_replicas(INCFibEntry* entry,
                          const std::bitset<128>& egress_mask,
                          UecMcastPacket& templ,
                          VirtualQueue* ingress_iq, bool lossless,
-                         VirtualQueue* prev_override = nullptr);
+                         VirtualQueue* prev_override = nullptr,
+                         bool charge_reduce_compute = false);
 
     uint32_t adaptive_route(vector<FibEntry*>* ecmp_set, int8_t (*cmp)(FibEntry*,FibEntry*));
     uint32_t replace_worst_choice(vector<FibEntry*>* ecmp_set, int8_t (*cmp)(FibEntry*,FibEntry*),uint32_t my_choice);
@@ -202,7 +209,13 @@ public:
     virtual void permute_paths(vector<FibEntry*>* uproutes);
 
     static void set_strategy(routing_strategy s) { assert (_strategy==NIX); _strategy = s; }
-    static void set_ar_fraction(uint16_t f) { assert(f>=1);_ar_fraction = f;} 
+    static void set_ar_fraction(uint16_t f) { assert(f>=1);_ar_fraction = f;}
+
+    // Opt-in in-switch aggregation (reduce ALU + operand-alignment) latency,
+    // charged once per aggregating switch on the reduce path on TOP of the
+    // per-hop switch latency. Default 0 => behaviour identical to before, so
+    // prior results are unaffected. Set from main_uec before topology build.
+    static void set_reduce_compute_latency(simtime_picosec l) { _reduce_compute_latency = l; }
 
     static routing_strategy _strategy;
     static uint16_t _ar_fraction;
@@ -210,9 +223,14 @@ public:
     static simtime_picosec _sticky_delta;
     static double _ecn_threshold_fraction;
     static double _speculative_threshold_fraction;
+    static simtime_picosec _reduce_compute_latency;
 private:
     switch_type _type;
     Pipe* _pipe;
+    // Reduce-path egress pipe: delay = switch_latency + _reduce_compute_latency.
+    // Carries the combined/turned-around aggregation result; identical to _pipe
+    // when _reduce_compute_latency == 0.
+    Pipe* _reduce_pipe;
     FatTreeTopology* _ft;
     
     //CAREFUL: can't always have a single FIB for all up destinations when there are failures!

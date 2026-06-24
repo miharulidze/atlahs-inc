@@ -100,6 +100,10 @@ int main(int argc, char **argv) {
     linkspeed_bps linkspeed = speedFromMbps((double)HOST_NIC);
     simtime_picosec hop_latency = timeFromNs((uint32_t)RTT);
     simtime_picosec switch_latency = timeFromNs((uint32_t)0);
+    // Opt-in in-switch aggregation (reduce ALU) latency, charged on top of
+    // switch_latency at each aggregating switch on the INC reduce path. 0 =
+    // unchanged behaviour (prior results preserved).
+    simtime_picosec reduce_compute_latency = timeFromNs((uint32_t)0);
     simtime_picosec pacing_delay = 1000;
     int packet_size = 2048;
     int kmin = -1;
@@ -289,6 +293,9 @@ int main(int argc, char **argv) {
             i++;
         } else if (!strcmp(argv[i], "-switch_latency")) {
             switch_latency = timeFromNs(atof(argv[i + 1]));
+            i++;
+        } else if (!strcmp(argv[i], "-reduce_compute_latency")) {
+            reduce_compute_latency = timeFromNs(atof(argv[i + 1]));
             i++;
         } else if (!strcmp(argv[i], "-hop_latency")) {
             hop_latency = timeFromNs(atof(argv[i + 1]));
@@ -744,6 +751,10 @@ int main(int argc, char **argv) {
 
     UecSrc::setRouteStrategy(route_strategy);
     UecSink::setRouteStrategy(route_strategy);
+
+    // Opt-in in-switch aggregation latency; must be set before any FatTreeSwitch
+    // is constructed (topology build below, both the .cm and GOAL paths).
+    FatTreeSwitch::set_reduce_compute_latency(reduce_compute_latency);
 
     // Route *routeout, *routein;
     // double extrastarttime;
