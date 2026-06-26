@@ -47,8 +47,9 @@ int main(int argc, char **argv) {
     if (N < 2) { fprintf(stderr, "num_ranks must be >= 2\n"); return 1; }
 
     const bool inc = !strcmp(arm, "inc");
-    if (!inc && strcmp(arm, "ring")) {
-        fprintf(stderr, "arm must be 'inc' or 'ring' (got '%s')\n", arm);
+    const bool rdouble = !strcmp(arm, "rdouble");
+    if (!inc && !rdouble && strcmp(arm, "ring")) {
+        fprintf(stderr, "arm must be 'inc', 'ring', or 'rdouble' (got '%s')\n", arm);
         return 1;
     }
 
@@ -84,6 +85,59 @@ int main(int argc, char **argv) {
         fclose(gf);
         printf("wrote %s (INC): %u ranks, 1 allreduce each (%llu B); groups -> %s\n",
                out, N, (unsigned long long)size, gpath.c_str());
+        return 0;
+    }
+
+    if (rdouble) {
+        // Recursive halving/doubling AllReduce — the latency-optimal algorithm a real
+        // NCCL Tree / Shuhao's simple_sim generator (CollAlgo.RECURSIVE_DOUBLING) use.
+        // 2*log2(N) steps (vs the ring's 2(N-1)), bandwidth-optimal (2(N-1)/N*size per
+        // rank). Reduce-scatter = recursive halving (distances N/2..1, sizes size/2..
+        // size/N); allgather = recursive doubling (distances 1..N/2, sizes size/N..
+        // size/2). Each step exchanges with partner = r XOR mask. Requires N a power of 2.
+        uint32_t p = 0; while ((1u << p) < N) ++p;
+        if ((1u << p) != N) {
+            fprintf(stderr, "rdouble requires N a power of two (got %u)\n", N);
+            return 1;
+        }
+        if (size % N != 0)
+            fprintf(stderr, "warning: size %llu not divisible by N=%u; smallest chunk floors.\n",
+                    (unsigned long long)size, N);
+        for (uint32_t r = 0; r < N; r++) {
+            Goal *g = new Goal;
+            goalop_t prev_recv = nullptr;
+            uint32_t tag = 0;
+            // Reduce-scatter: recursive halving.
+            for (uint32_t i = 0; i < p; i++, tag++) {
+                uint32_t partner = r ^ (N >> (i + 1));
+                uint64_t sz = size >> (i + 1);
+                goalop_t snd = g->Send(r, partner, sz, tag, 0, 0);
+                goalop_t rcv = g->Recv(partner, r, sz, tag, 0, 0);
+                if (prev_recv) g->Dependency(snd, prev_recv);  // reduce-then-forward
+                prev_recv = rcv;
+            }
+            // Allgather: recursive doubling.
+            for (uint32_t j = 0; j < p; j++, tag++) {
+                uint32_t partner = r ^ (1u << j);
+                uint64_t sz = size >> (p - j);
+                goalop_t snd = g->Send(r, partner, sz, tag, 0, 0);
+                goalop_t rcv = g->Recv(partner, r, sz, tag, 0, 0);
+                if (prev_recv) g->Dependency(snd, prev_recv);
+                prev_recv = rcv;
+            }
+            goalop_t c = g->Calc(r, 1, 0, 0);  // oracle tail (matches inc/ring framing)
+            if (prev_recv) g->Dependency(c, prev_recv);
+            g->SetRank(r);
+            g->SetNumRanks(N);
+            g->SerializeSchedule((char *)out);
+            delete g;
+        }
+        uint64_t per_rank = 0;
+        for (uint32_t i = 0; i < p; i++) per_rank += size >> (i + 1);
+        per_rank *= 2;  // RS + AG symmetric
+        printf("wrote %s (RDOUBLE): %u ranks, %u steps (recursive halving/doubling) "
+               "(%llu B/rank moved = 2(N-1)/N*size); no INC\n",
+               out, N, 2 * p, (unsigned long long)per_rank);
         return 0;
     }
 
