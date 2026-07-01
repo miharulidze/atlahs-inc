@@ -1,3 +1,17 @@
+# scaleup_single_switch_16_3600Gbps.topo
+#
+# Models an NVLink-class SCALE-UP domain as a single non-blocking crossbar:
+# 16 hosts (GPUs) all attached to ONE ToR switch, every pair exactly one hop apart.
+# Per-host link = 3600 Gbps (NVLink-aggregate class); switch latency 300 ns, link 500 ns.
+#
+# Encoding note: htsim's FatTree parser rejects Tiers=1 (fat_tree_topology.cpp), so a
+# single switch is expressed as a DEGENERATE 2-tier fat-tree: Podsize == Nodes and
+# Tier-0 Radix_Down == Nodes => exactly one ToR holds all hosts. The Tier-1 uplink
+# (Radix_Up 1) is vestigial and carries no host<->host traffic (all pairs are same-ToR,
+# one hop). Contrast scaleup_tree16_3600Gbps.topo: a real 4-leaf 2-tier fat-tree (2 hops).
+#
+# Validated 2026-07-01 (htsim_uec, arm64): loads without assertion; INC AllReduce
+# (N=16, 64 KiB) completes in 1542 ns, zero drops (vs 3259 ns on the 2-hop tree16).
 Nodes 16
 Tiers 2
 Podsize 16
