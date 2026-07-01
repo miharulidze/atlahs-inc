@@ -1,0 +1,250 @@
+--- a/txt2bin.re
++++ b/txt2bin.re
+@@ -49,6 +49,11 @@
+ 	uint32_t tag;
+ 	uint8_t cpu;
+ 	uint8_t nic;	
++	// INC collective fields (only used when type == CollOp).
++	char coll_optype;        // OPTYPE_BCAST/REDUCE/ALLREDUCE/REDUCE_SCATTER/ALLGATHER
++	uint32_t coll_group;
++	uint32_t coll_instance;
++	int coll_root;           // -1 = rootless
+ } Item;
+ 
+ enum OpTypes {
+@@ -57,7 +62,8 @@
+ 	RecvOp,
+ 	LoclOp,
+ 	StartDependency,
+-	Dependency
++	Dependency,
++	CollOp
+ };
+ 
+ inline uint64_t add_number(unsigned char *s, unsigned char *e) {
+@@ -140,6 +146,10 @@
+ 			assert(op2 != NULL);
+ 			s->schedule->Dependency(op, op2);
+ 			break;
++		case CollOp:
++			op = s->schedule->Collective(item->coll_optype, item->coll_group, item->size, item->coll_instance, item->coll_root, item->cpu, item->nic);
++			if (item->label1 != NULL) insert_id(s, item->label1, op);
++			break;
+ 		default:
+ 			break;
+ 	}
+@@ -248,6 +258,10 @@
+ 	item.cpu = 0;
+ 	item.nic = 0;
+ 	item.tag = 0;
++	item.coll_optype = 0;
++	item.coll_group = 0;
++	item.coll_instance = 0;
++	item.coll_root = -1;
+ 
+ /*!re2c
+ 	re2c:indent:top = 2;
+@@ -275,6 +289,12 @@
+ 	CCOMMENT    = "*/" ;
+ 	ANYSOURCE   = "-1" ;
+ 	ANYTAG      = "-1" ;
++	COLL			= "coll" ;
++	BCAST			= "bcast" ;
++	REDUCE_SCATTER	= "reduce_scatter" ;
++	REDUCE			= "reduce" ;
++	ALLREDUCE		= "allreduce" ;
++	ALLGATHER		= "allgather" ;
+ 	INT         = [0-9]+ ; 
+ 	IDENT       = [a-zA-Z][a-zA-Z0-9_]* ;
+ 	ANY			= [^] ;
+@@ -283,6 +303,7 @@
+ 	SEND		{ item.type = SendOp;  goto s_2; }
+ 	RECV		{ item.type = RecvOp;  goto s_2; }
+ 	CALC		{ item.type = LoclOp;  goto s_3; }
++	COLL		{ item.type = CollOp;  goto s_30; }
+ 	RANK        { goto s_20; }
+ 	NUMRANKS	{ goto s_22; }
+ 	IDENT		{ item.label1 = add_label(s->tok, cursor); goto s_1; }
+@@ -346,6 +367,7 @@
+ 	CALC		{ item.type = LoclOp; goto s_3; }
+ 	SEND		{ item.type = SendOp; goto s_2; }
+ 	RECV		{ item.type = RecvOp; goto s_2; }
++	COLL		{ item.type = CollOp; goto s_30; }
+ 	ANY			{ goto s_err; }
+ */
+ 	assert(0==1); //We should never reach this line
+@@ -614,6 +636,119 @@
+ 
+ 	assert(0==1); //We should never reach this line
+ 	
++s_30:
++	state = 30;
++	// coll: collective kind keyword
++/*!re2c
++	WS			{ goto s_30; }
++	BCAST			{ item.coll_optype = OPTYPE_BCAST; goto s_31; }
++	REDUCE_SCATTER	{ item.coll_optype = OPTYPE_REDUCE_SCATTER; goto s_31; }
++	REDUCE			{ item.coll_optype = OPTYPE_REDUCE; goto s_31; }
++	ALLREDUCE		{ item.coll_optype = OPTYPE_ALLREDUCE; goto s_31; }
++	ALLGATHER		{ item.coll_optype = OPTYPE_ALLGATHER; goto s_31; }
++	ANY			{ goto s_err; }
++*/
++	assert(0==1); //We should never reach this line
++
++s_31:
++	state = 31;
++	s->tok = cursor;
++/*!re2c
++	WS			{ goto s_31; }
++	INT			{ item.size = add_number(s->tok, cursor); goto s_32; }
++	ANY			{ goto s_err; }
++*/
++	assert(0==1); //We should never reach this line
++
++s_32:
++	state = 32;
++/*!re2c
++	WS			{ goto s_32; }
++	BYTE		{ goto s_33; }
++	ANY			{ goto s_err; }
++*/
++	assert(0==1); //We should never reach this line
++
++s_33:
++	state = 33;
++	s->tok = cursor;
++/*!re2c
++	WS			{ goto s_33; }
++	INT			{ item.coll_group = add_number(s->tok, cursor); goto s_34; }
++	ANY			{ goto s_err; }
++*/
++	assert(0==1); //We should never reach this line
++
++s_34:
++	state = 34;
++	s->tok = cursor;
++/*!re2c
++	WS			{ goto s_34; }
++	INT			{ item.coll_instance = add_number(s->tok, cursor); goto s_35; }
++	ANY			{ goto s_err; }
++*/
++	assert(0==1); //We should never reach this line
++
++s_35:
++	state = 35;
++	s->tok = cursor;
++/*!re2c
++	WS			{ goto s_35; }
++	ANYSOURCE	{ item.coll_root = -1; goto s_36; }
++	INT			{ item.coll_root = (int) add_number(s->tok, cursor); goto s_36; }
++	ANY			{ goto s_err; }
++*/
++	assert(0==1); //We should never reach this line
++
++s_36:
++	state = 36;
++/*!re2c
++	WS			{ goto s_36; }
++	CPU			{ goto s_37; }
++	NL			{ s->line++; process_item(s, &item); continue; }
++	ANY			{ goto s_err; }
++*/
++	assert(0==1); //We should never reach this line
++
++s_37:
++	state = 37;
++	s->tok = cursor;
++/*!re2c
++	WS			{ goto s_37; }
++	INT			{ item.cpu = add_number(s->tok, cursor); goto s_38; }
++	ANY			{ goto s_err; }
++*/
++	assert(0==1); //We should never reach this line
++
++s_38:
++	state = 38;
++/*!re2c
++	WS			{ goto s_38; }
++	NIC			{ goto s_39; }
++	NL			{ s->line++; process_item(s, &item); continue; }
++	ANY			{ goto s_err; }
++*/
++	assert(0==1); //We should never reach this line
++
++s_39:
++	state = 39;
++	s->tok = cursor;
++/*!re2c
++	WS			{ goto s_39; }
++	INT			{ item.nic = add_number(s->tok, cursor); goto s_40; }
++	ANY			{ goto s_err; }
++*/
++	assert(0==1); //We should never reach this line
++
++s_40:
++	state = 40;
++/*!re2c
++	WS			{ goto s_40; }
++	NL			{ s->line++; process_item(s, &item); continue; }
++	ANY			{ goto s_err; }
++*/
++	assert(0==1); //We should never reach this line
++
+ s_err:
+ 
+ 	fprintf(stderr, "Error in line %i:\n", s->line);
+@@ -738,7 +873,7 @@
+ }
+ }
+ 
+-main(int argc, char **argv){
++int main(int argc, char **argv){
+     
+ 	Scanner in;
+ 	int lastprogress = 0;
+--- a/Goal.hpp
++++ b/Goal.hpp
+@@ -78,6 +78,28 @@
+ 			return n;
+ 		}
+ 
++		goalop_t Collective(char optype, uint32_t group, uint64_t size, uint32_t instance, int root, uint8_t cpu, uint8_t nic) {
++
++			Node* n = graph.addNode();
++
++			n->Type = optype;
++			// Peer packs group id (low 16 bits) + root host (high 16 bits); root
++			// 0xFFFF marks a rootless op (Allreduce/Reduce-Scatter/Allgather).
++			assert(group <= 0xFFFFu && "Collective: group id exceeds 16-bit Peer field");
++			assert(root < 0xFFFF && "Collective: root host id must be < 0xFFFF (reserved as rootless sentinel)");
++			uint32_t root_field = (root < 0) ? 0xFFFFu : (static_cast<uint32_t>(root) & 0xFFFFu);
++			n->Peer = (group & 0xFFFFu) | (root_field << 16);
++			n->Tag  = instance;     // shared-across-ranks unique op id -> htsim op_flow_id
++			n->Proc = cpu;
++			n->Nic  = nic;
++			n->Size = size;         // total collective bytes
++
++			MaxCPU(cpu);
++			MaxNIC(nic);
++
++			return n;
++		}
++
+ 		void StartDependency(goalop_t src, goalop_t dest) {
+ 			// a can not be executed before b is started	
+ 			graph.addStartDependency(src, dest);
+--- a/Parser.hpp
++++ b/Parser.hpp
+@@ -20,6 +20,12 @@
+ #define OPTYPE_SEND 1
+ #define OPTYPE_RECV 2
+ #define OPTYPE_CALC 3
++/* INC collective op types (match the pcm-sdk lgs reader contract, e5c3ddf) */
++#define OPTYPE_BCAST 10
++#define OPTYPE_REDUCE 11
++#define OPTYPE_ALLREDUCE 12
++#define OPTYPE_REDUCE_SCATTER 13
++#define OPTYPE_ALLGATHER 14
+ 
+ typedef uint64_t base_t;
+ 
