@@ -5,8 +5,9 @@ the same two renderings of one logical AllReduce, run on the **pcm-sdk two-tier
 simulator** after the INC port (branch `wanja/inc-port`, through commit
 `c6aa679`), on the **single-switch NVLink-class scale-up topology**.
 
-First results produced 2026-07-01. **Read the speedup with the caveat below —
-the magnitude is CC-confounded and is not a quotable INC advantage.**
+First results 2026-07-01; corrected diagnosis + warm-ring + analytic ideal-ring
+reference added 2026-07-04. **Quote the `speedup_vs_ideal` column (red curve in
+the figure), not the GOAL-ring speedup — see "How to read this".**
 
 ## Arms
 
@@ -30,46 +31,59 @@ generator-produced trace takes.
 
 ## Results (|G| = 16, single-switch @ 3600 Gbps, lossless_input, 0 drops)
 
-| size | INC (ns) | ring (ns) | speedup |
-|---:|---:|---:|---:|
-| 4 KiB | 1424 | 78046 | 54.8× |
-| 16 KiB | 1449 | 78138 | 53.9× |
-| 64 KiB | 1549 | 82996 | 53.6× |
-| 256 KiB | 1947 | 97940 | 50.3× |
-| 1 MiB | 3541 | 157934 | 44.6× |
-| 4 MiB | 9932 | 397964 | 40.1× |
+| size | INC (ns) | GOAL ring (ns) | warm ring (ns) | ideal ring (ns, analytic) | vs GOAL ring | **vs ideal ring** |
+|---:|---:|---:|---:|---:|---:|---:|
+| 4 KiB | 1424 | 78046 | 78046 | 19517 | 54.8× | **13.7×** |
+| 16 KiB | 1449 | 78138 | 78138 | 19568 | 53.9× | **13.5×** |
+| 64 KiB | 1549 | 82996 | 82897 | 19773 | 53.6× | **12.8×** |
+| 256 KiB | 1947 | 97940 | 97940 | 20592 | 50.3× | **10.6×** |
+| 1 MiB | 3541 | 157934 | 157870 | 23869 | 44.6× | **6.7×** |
+| 4 MiB | 9932 | 397964 | 397889 | 36976 | 40.1× | **3.7×** |
 
 Reproduce: `python3 run_pcm_ab_sweep.py --out results.csv` then
-`python3 plot_pcm_ab.py` (figure: `allreduce_ab_pcm.{png,pdf}`).
+`python3 plot_pcm_ab.py` (figure: `allreduce_ab_pcm.{png,pdf}`). The warm-ring
+column re-runs the ring arm with `-conn_reuse` (persistent NCCL-like
+connections, commit `11c4216`); the ideal-ring column is analytic (below).
 
 ## How to read this (the honest framing)
 
-**The speedup level is CC-confounded — do not quote 40–55× as INC's advantage.**
-The ring arm issues its 30 steps as *sequential, cold-started* flows through
-pcm-sdk's receiver-driven UEC: every step pays the pull/credit handshake and
-window ramp before moving bytes, a ~2.6 µs/step floor (78046/30 ≈ 2602 ns at
-4 KiB) that is nearly independent of chunk size. A real ring (NCCL/MPI) connects
-its neighbors once, keeps the connections warm, and pipelines chunks — it pays
-the CC ramp ~once, not 30×. Most of the ring's makespan here is connection
-setup, not data movement.
+**The GOAL-ring speedup level (40–55×) is inflated by a completion-semantic
+artifact — quote the vs-ideal-ring column instead.** Diagnosis (established
+empirically, 2026-07-04):
 
-**The fingerprint:** the speedup *decreases* with size (54.8× → 40.1×), the
-opposite of the htsim_uec-fork microbench (`../allreduce_ab/`: 3.7× → 33×,
-*growing*). A setup-bound baseline barely grows with data, so as INC's own cost
-rises with size the ratio falls. Cross-engine consistency check: the 64 KiB ring
-on the lossy COMPOSITE queue measured 82997 ns vs 82996 ns here on
-lossless_input — PFC is irrelevant to this uncongested sequential ring, as
-expected.
+1. **It is NOT connection cold-start.** We implemented warm persistent
+   connections (`-conn_reuse`: one `UecSrc`+`UecPdcSes` per pair, each Send a
+   `UecMsg` on the warm session) and re-ran the sweep: **warm == cold within
+   <100 ns at every size** (e.g. 64 KiB 82897 vs 82996). Per-flow setup and CC
+   ramp are not the floor.
+2. **It is the bridge's sender-ACK completion semantic.** The GOAL bridge
+   completes a send (and its matched recv) when the *sender* has the ACK, so
+   every step of the 2(N−1)-step serial dependency chain pays **data one-way +
+   ACK one-way** ≈ 500+300+500 ns × 2 ≈ **2.6 µs** — exactly the measured
+   4 KiB floor (78046/30 ≈ 2602 ns/step). Canonical LogGOPSim completes sends
+   locally and recvs at arrival; changing the bridge to delivery-time
+   completion would be an engine-wide modeling change (affects all existing
+   pcm-sdk results) — flagged, not made unilaterally.
+3. **The remaining per-step data one-way is real physics for a
+   message-granularity ring, but real NCCL pipelines chunk slices within
+   steps.** The fair reference is therefore the **analytic ideal ring**
+   `T = 2(N−1)/N · S/BW + (N−1) · hop_oneway` (hop_oneway = 1.3 µs from the
+   .topo: 500 ns link + 300 ns switch + 500 ns link) — a perfectly pipelined,
+   zero-protocol-overhead ring. INC-vs-ideal is **conservative** for INC (a
+   real endpoint ring cannot beat it).
 
-**What this table IS evidence for:** the INC datapath works end-to-end on
-pcm-sdk (reduce-ascent → apex → mcast-descent, completion, DAG release), INC
-completion is flat-then-linear exactly as on the htsim_uec fork (latency-bound
-≤64 KiB at ~1.4–1.5 µs, bandwidth/chunking-bound above), and INC wins in the
-latency regime for algorithmic reasons (apex depth 1 vs 2(N−1) serial hops).
+**The quotable spread: INC ≈ 13.7× → 3.7× vs an ideal ring** (latency regime →
+bandwidth regime), decreasing toward the asymptotic 2(N−1)/N ≈ 1.9× traffic
+factor as serialization dominates. Consistent with the htsim_uec-fork
+microbench (whose measured span started at 3.7×) and with the
+INC-crossover literature (INC wins big at small/latency-bound sizes; the
+advantage narrows in the bandwidth regime).
 
-**Toward a quotable number:** the ring baseline needs warm/persistent neighbor
-connections (pay the CC ramp once) and/or pipelined chunks — a fair-ring
-generator change, tracked as the #1 eval-methodology item.
+**What the measured table IS evidence for:** the INC datapath works end-to-end
+on pcm-sdk (reduce-ascent → apex → mcast-descent, completion, DAG release);
+INC completion is flat-then-linear exactly as on the htsim_uec fork
+(latency-bound ≤64 KiB at ~1.4–1.5 µs); PFC is timing-neutral for these
+uncongested runs (64 KiB ring: 82997 composite vs 82996 lossless).
 
 ## Scope
 

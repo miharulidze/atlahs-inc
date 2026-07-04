@@ -1,7 +1,7 @@
-group_size,msg_bytes,inc_ns,ring_ns,speedup,inc_makespan_ns,ring_makespan_ns,drops,fabric,reduce_compute_ns,su_topo,engine
-16,4096,1424,78046,54.808,1524,78146,0,lossless_input,100,scaleup_single_switch_16_3600Gbps.topo,pcm-sdk
-16,16384,1449,78138,53.925,1549,78238,0,lossless_input,100,scaleup_single_switch_16_3600Gbps.topo,pcm-sdk
-16,65536,1549,82996,53.580,1649,83096,0,lossless_input,100,scaleup_single_switch_16_3600Gbps.topo,pcm-sdk
-16,262144,1947,97940,50.303,2047,98040,0,lossless_input,100,scaleup_single_switch_16_3600Gbps.topo,pcm-sdk
-16,1048576,3541,157934,44.602,3641,158034,0,lossless_input,100,scaleup_single_switch_16_3600Gbps.topo,pcm-sdk
-16,4194304,9932,397964,40.069,10032,398064,0,lossless_input,100,scaleup_single_switch_16_3600Gbps.topo,pcm-sdk
+group_size,msg_bytes,inc_ns,ring_ns,speedup,inc_makespan_ns,ring_makespan_ns,drops,fabric,reduce_compute_ns,su_topo,engine,ring_warm_ns,ring_ideal_ns,speedup_vs_ideal
+16,4096,1424,78046,54.808,1524,78146,0,lossless_input,100,scaleup_single_switch_16_3600Gbps.topo,pcm-sdk,78046,19517,13.706
+16,16384,1449,78138,53.925,1549,78238,0,lossless_input,100,scaleup_single_switch_16_3600Gbps.topo,pcm-sdk,78138,19568,13.505
+16,65536,1549,82996,53.580,1649,83096,0,lossless_input,100,scaleup_single_switch_16_3600Gbps.topo,pcm-sdk,82897,19773,12.765
+16,262144,1947,97940,50.303,2047,98040,0,lossless_input,100,scaleup_single_switch_16_3600Gbps.topo,pcm-sdk,97940,20592,10.576
+16,1048576,3541,157934,44.602,3641,158034,0,lossless_input,100,scaleup_single_switch_16_3600Gbps.topo,pcm-sdk,157870,23869,6.741
+16,4194304,9932,397964,40.069,10032,398064,0,lossless_input,100,scaleup_single_switch_16_3600Gbps.topo,pcm-sdk,397889,36976,3.723
