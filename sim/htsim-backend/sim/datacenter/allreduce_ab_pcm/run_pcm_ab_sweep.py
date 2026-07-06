@@ -33,6 +33,26 @@ import sys
 
 TAIL_NS = 100  # identical dependent calc tail in both arms; cancels in the A/B
 
+# [D3] analytic ideal-ring reference (matches ../allreduce_ab/run_allreduce_ab_sweep.py).
+# The single-switch scale-up fabric is 3600 Gbps with 1300 ns one-way per-hop latency
+# (500 link + 300 switch + 500 link). B in bps; hop one-way in ns.
+IDEAL_RING_B_BPS = 3600e9
+IDEAL_RING_HOP_ONEWAY_NS = 1300
+
+
+def ideal_ring_ns(N, S, B_bps=IDEAL_RING_B_BPS, hop_oneway_ns=IDEAL_RING_HOP_ONEWAY_NS):
+    """Analytic bandwidth-optimal, line-rate, zero-CC ring AllReduce lower bound [D3].
+
+    2(N-1)/N cost model: each rank moves 2(N-1)/N * S bytes at line rate B, plus (N-1)
+    serial dependency hops at hop_oneway latency. Computed (NOT hand-injected); the
+    measured ring must not beat it, and speedup_vs_ideal = ideal_ring_ns/inc_ns is the
+    CC-decontaminated INC-vs-perfect-ring speedup.
+    """
+    bw_ns = (2.0 * (N - 1) / N) * (8.0 * S) / B_bps * 1e9
+    lat_ns = (N - 1) * hop_oneway_ns
+    return bw_ns + lat_ns
+
+
 MAXFIN = re.compile(r"Maximum finishing time at host \d+:\s*(\d+)")
 ALLRED = re.compile(r"ALLREDUCE_COMPLETE\b.*?duration_ns=(\d+)")
 DROP = re.compile(r"drop arriving|drop last from queue|dropped packet|"
@@ -169,13 +189,18 @@ def main():
             print(f"  WARN: INC makespan-tail ({inc_ns}) != duration_ns ({idur})")
         ok = inc_ns and ring_ns and ist == "ok" and rst == "ok"
         speedup = ring_ns / inc_ns if ok else None
+        # [D3] computed analytic ideal-ring reference + CC-decontaminated speedup.
+        ideal_ns = ideal_ring_ns(n, s)
+        speedup_vs_ideal = ideal_ns / inc_ns if inc_ns else None
         status = "ok" if ok else f"inc={ist},ring={rst}"
         if idrop or rdrop:
             status += f" WARN drops={idrop + rdrop}"
         rows.append({
             "group_size": n, "msg_bytes": s,
             "inc_ns": inc_ns or "", "ring_ns": ring_ns or "",
+            "ideal_ring_ns": f"{ideal_ns:.1f}",
             "speedup": f"{speedup:.3f}" if speedup else "",
+            "speedup_vs_ideal": f"{speedup_vs_ideal:.3f}" if speedup_vs_ideal else "",
             "inc_makespan_ns": ifin or "", "ring_makespan_ns": rfin or "",
             "drops": idrop + rdrop,
             "fabric": "lossless_input",

@@ -8,6 +8,11 @@ logical AllReduce rendered two ways and run on a NVLink-class scale-up topology.
 - **ring arm** — the same AllReduce *decomposed* into a bandwidth-optimal ring of plain
   point-to-point flows: `2(N-1)` steps of `size/N` bytes each (the textbook
   `2(N-1)/N · size` per rank). Switches only forward; no INC.
+- **recursive-doubling (`rdouble`) arm** [D4] — the latency-optimal recursive
+  halving/doubling AllReduce (the algorithm NCCL Tree / the `simple_sim` generator's
+  `RECURSIVE_DOUBLING` use): `2·log2(N)` steps, bandwidth-optimal (`2(N-1)/N · size` per
+  rank), power-of-two `|G|` only. Wired into the sweep as a third measured baseline so it
+  emits **ring / rdouble / INC / ideal-ring side by side**.
 
 Both arms are GOAL `.bin` schedules with identical framing (a single 1-unit calc tail so
 the `Maximum finishing time at host` oracle == the collective time for both) — see
@@ -21,6 +26,8 @@ cd sim/htsim-backend/sim/datacenter
 make htsim_uec
 g++ -std=c++17 -I.. -I. make_allreduce_ab.cpp -o make_allreduce_ab
 cd allreduce_ab
+
+# (a) original size-sweep on the fixed 2-hop tree16 (INC vs ring only):
 python3 run_allreduce_ab_sweep.py \
   --htsim ../htsim_uec --gen ../make_allreduce_ab \
   --topo ../topologies/scaleup_tree16_3600Gbps.topo --linkspeed 3600000 \
@@ -28,6 +35,15 @@ python3 run_allreduce_ab_sweep.py \
   --msg-sizes 4096,16384,65536,262144,1048576,4194304 \
   --reduce-compute 100 --out results.csv
 /usr/bin/python3 plot_allreduce_ab.py --csv results.csv --out allreduce_ab
+
+# (b) [D3] speedup-vs-N sweep on per-N single-switch scale-up crossbars (radix == |G|),
+#     emitting ring / rdouble / INC / analytic ideal-ring side by side:
+python3 run_allreduce_ab_sweep.py \
+  --htsim ../htsim_uec --gen ../make_allreduce_ab \
+  --topo-template ../topologies/scaleup_single_switch_{n}_3600Gbps.topo \
+  --linkspeed 3600000 --group-sizes 2,4,8,16,32,64 \
+  --msg-sizes 65536,1048576 --reduce-compute 100 --out results_vs_n.csv
+/usr/bin/python3 plot_speedup_vs_n.py --csv results_vs_n.csv --out speedup_vs_n
 ```
 
 ## Topology and the fairness model
@@ -105,3 +121,55 @@ under-modelled point worth noting: the ring's per-step CC *cold-start* (a fresh 
 step) is part of why it sits at ~10% of line rate — a real ring reuses a warm connection, so
 even a CC'd ring would beat this; the large-message multiple is thus an upper bound on the
 transport-driven part.
+
+## Scaling vs rank count N — supervisor directives (2026-07-06 meeting)
+
+The `results_vs_n.csv` / `speedup_vs_n.png` sweep answers **D3** ("where does the
+40×→~2× speedup come from") on the D5-scoped **single-switch scale-up** fabric: each `|G|`
+runs on `scaleup_single_switch_{2,4,8,16,32,64}_3600Gbps.topo`, a non-blocking crossbar
+whose radix == `|G|` (every pair one hop apart). This holds the fabric constant so the only
+variable is the collective's *structure*.
+
+Measured (65 KiB/rank, `--reduce-compute 100`): INC is **flat** at 1542 ns from `|G|=2` to
+`|G|=64` (the switch aggregates all N inputs in one apex pass, so completion is O(1) in N);
+the ring grows **O(N)** (5351→15852→36754→78507→162248→329729 ns — one added serial
+dependency hop per rank) and recursive-doubling grows **O(log N)**
+(5351→10634→15885→21119→26353→31586 ns).
+
+### New computed / measured columns
+
+| column | directive | meaning |
+|---|---|---|
+| `rdouble_ns` | D4 | measured recursive halving/doubling baseline (power-of-two `|G|`) |
+| `ideal_ring_ns` | D3 | **computed** analytic ring floor `2(N-1)/N · 8S/B + (N-1)·hop_oneway` (`B=3600e9` bps, `hop_oneway=1300` ns); not simulated |
+| `speedup_vs_ideal` | D3 | `ideal_ring_ns / inc_ns` — the **CC-decontaminated** INC-vs-*perfect*-ring speedup (removes the measured ring's congestion-control cold-start confound) |
+| `inc_synced_ns` | D1 | `inc_ns + --inc-sync-rtt-ns` — the Khalilov 3-phase app-sync charge (ring barrier → ACK-less mcast/aggr → neighbor "I got everything" scan) |
+| `speedup_synced` | D1 | `ring_ns / inc_synced_ns` — INC-pessimistic headline |
+
+**D1 fairness.** INC completes ACK-less while the ring/rdouble baselines complete at
+ACK-return (~1 RTT optimistic for INC). Rather than strip baseline ACKs, we charge INC an
+analytic app-sync cost. `--inc-sync-rtt-ns` defaults to **2600 ns** (= +1 RTT =
+`2·hop_oneway`, the INC-pessimistic headline); pass **1300** for the 1/2-RTT one-way
+sensitivity lower bound. It is pure post-processing over `inc_ns` (no in-sim op). Even at
++1 RTT the advantage is robust: e.g. `|G|=64`, 65 KiB → `speedup_synced` still 79.6×.
+
+### Ideal-ring bug-oracle
+
+The analytic `ideal_ring_ns` is the **floor for the ring arm**: a *measured*, CC'd,
+cold-starting ring can never beat the perfect line-rate zero-CC ring. The sweep asserts this
+(`ring_below_ideal` counter) — **0/12 violations**, so the ring arm is not accidentally
+faster than physics allows. INC, by contrast, legitimately **beats** the ideal-ring in
+11/12 cells (`inc_beats_ideal`), because the ideal-ring's `(N-1)`-serial-hop latency term is
+exactly what INC's O(1) single-switch apex is designed to eliminate — this is the D3
+*algorithmic* result, not a bug. (The lone exception is `|G|=2`, 65 KiB, where a 2-rank ring
+is a single exchange each way and INC's apex+ALU overhead makes `speedup_vs_ideal` = 0.94.)
+
+### Reading the D3 decomposition
+
+At `|G|=64`, 65 KiB the raw `ring/INC` speedup is **213×**, but `ideal_ring/INC` is **53×**:
+the ~4× gap between them is the **transport confound** (the measured ring runs its
+`2(N-1)` steps as fresh CC'd UEC flows at a fraction of line rate; the analytic ideal ring
+does not). The 53× that survives is the **algorithmic + bandwidth** win — the ring's O(N)
+serial latency (`(N-1)·hop_oneway`) against INC's flat apex. Recursive-doubling closes most
+of the *latency* gap (its `rdouble/INC` plateaus ~20× — O(log N)), which is why it is the
+fair latency-regime baseline to cite alongside the ring.

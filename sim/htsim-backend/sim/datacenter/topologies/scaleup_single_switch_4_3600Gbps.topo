@@ -1,0 +1,27 @@
+# scaleup_single_switch_4_3600Gbps.topo
+#
+# Models an NVLink-class SCALE-UP domain as a single non-blocking crossbar:
+# 4 hosts (GPUs) all attached to ONE ToR switch, every pair exactly one hop apart.
+# Per-host link = 3600 Gbps (NVLink-aggregate class); switch latency 300 ns, link 500 ns.
+#
+# Degenerate 2-tier encoding (Tiers=1 is rejected by the FatTree parser): Podsize ==
+# Nodes and Tier-0 Radix_Down == Nodes => one ToR holds all hosts; Radix_Up 1 vestigial;
+# Oversubscribed == Nodes keeps radix_down/radix_up == oversub. Sibling of the _16 topo,
+# scaled to 4 hosts for the INC-vs-ring speedup-vs-N sweep (D3, radix == |G|).
+Nodes 4
+Tiers 2
+Podsize 4
+
+Tier 0
+Downlink_speed_Gbps 3600
+Radix_Down 4
+Radix_Up 1
+Downlink_Latency_ns 500
+Switch_Latency_ns 300
+Oversubscribed 4
+
+Tier 1
+Downlink_speed_Gbps 3600
+Radix_Down 1
+Downlink_Latency_ns 500
+Switch_Latency_ns 300
