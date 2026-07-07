@@ -1,0 +1,14 @@
+C2: TP4/DP4/PP1, 16 ranks as 4 node(s) x 4 GPUs
+engine: pcm-sdk wanja/inc-port @ 2858452 (bin mtime 2026-07-04)
+
+baseline arm:
+  /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/build/bin/htsim_flow_app_atlahs -goal llama3.bin -nodes 16 -num_gpus_per_node 4 -topo /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/apps/htsim_atlahs/example_incast/tree16.topo -intranode_topo /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/llama3_ab_pcm/scaleup_single_switch_4_3600Gbps.topo -end 100000000 -sender_cc_only -intranode_queue_type lossless_input
+  makespan = 484005007 ns; dropped packets = 0; lossless-headroom warnings = 0
+
+INC arm:
+  /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/build/bin/htsim_flow_app_atlahs -goal llama3_inc.bin -nodes 16 -num_gpus_per_node 4 -topo /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/apps/htsim_atlahs/example_incast/tree16.topo -intranode_topo /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/llama3_ab_pcm/scaleup_single_switch_4_3600Gbps.topo -end 100000000 -sender_cc_only -intranode_queue_type lossless_input -groups llama3_inc_local.groups -reduce_compute_latency 100
+  makespan = 483827653 ns; ALLREDUCE_COMPLETE = 64/64; dropped packets = 0; lossless-headroom warnings = 76
+
+delta = 177354 ns (0.0366 % faster/iteration)
+tp_comm_share (INC-goal coll bytes / (coll+send bytes)) = 0.005714
+full stdout/stderr: scratch tp_sweep/C2/ (baseline|inc).(out|err)
