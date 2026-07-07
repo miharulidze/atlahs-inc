@@ -108,6 +108,7 @@ class LogSimInterface {
         size_t expected_members = 0;
         size_t arrived_count = 0;
         bool completed = false;
+        int group_id = -1;  // guards against op_flow_id reuse across groups
         std::vector<std::pair<uint32_t, uint32_t>> rank_nodes; // (host, offset) pending release
     };
     std::unordered_map<uint32_t, CollOpState> _pending_collectives;

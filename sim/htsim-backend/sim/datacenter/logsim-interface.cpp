@@ -256,32 +256,46 @@ void LogSimInterface::launch_collective(graph_node_properties &elem) {
   bool first = (_pending_collectives.count(op_flow_id) == 0);
   CollOpState &st = _pending_collectives[op_flow_id];
 
+  // The per-op state is keyed by op_flow_id ALONE, so op_flow_id MUST be globally
+  // unique across groups. If a generator reuses an op_flow_id for a different
+  // group, the second group attaches to the first's barrier and never sets up ->
+  // the collective hangs. Fail fast with a clear message instead. (Generators
+  // should encode the group, e.g. op_flow_id = (group<<16)|instance.)
+  if (!first && st.group_id != static_cast<int>(group_id)) {
+    fprintf(stderr,
+            "FATAL: GOAL coll op_flow_id %u reused across groups (%d vs %u). "
+            "op_flow_id must be globally unique across groups, e.g. "
+            "(group<<16)|instance.\n",
+            op_flow_id, st.group_id, group_id);
+    exit(EXIT_FAILURE);
+  }
+
   if (first) {
+    st.group_id = static_cast<int>(group_id);
     // group_id indexes top->groups (host ids per group), installed by set_up_mcast.
     std::vector<int32_t> &members = (*_topo->groups)[group_id];
     st.expected_members = members.size();
 
-    // Completion barrier count = number of descent/result deliveries that mark done:
-    //   allreduce -> |G|, bcast -> |G|-1, reduce -> 1, reduce_scatter -> |G|, allgather -> |G|.
-    size_t barrier_count;
-    TriggerTarget *recorder;
-    if (kind == OP_BCAST) {
-      barrier_count = members.size() - 1;
-      recorder = new CollectiveCompletionRecorder(
-          *_eventlist, "BCAST", "legs", static_cast<flowid_t>(op_flow_id),
-          root, static_cast<int>(group_id), static_cast<int>(size),
-          members.size() - 1, _eventlist->now());
-    } else {
-      const char *label = (kind == OP_REDUCE)            ? "REDUCE"
-                          : (kind == OP_REDUCE_SCATTER)  ? "REDUCE_SCATTER"
-                          : (kind == OP_ALLGATHER)       ? "ALLGATHER"
-                                                         : "ALLREDUCE";
-      barrier_count = (kind == OP_REDUCE) ? 1 : members.size();
-      recorder = new CollectiveCompletionRecorder(
-          *_eventlist, label, "members", static_cast<flowid_t>(op_flow_id),
-          root, static_cast<int>(group_id), static_cast<int>(size),
-          members.size(), _eventlist->now());
-    }
+    // Three things vary by kind: the label, the count field reported in the
+    // completion line ("legs"=|G|-1 for bcast, "members"=|G| otherwise), and
+    // the barrier fire-count (allreduce/reduce_scatter/allgather -> |G|,
+    // bcast -> |G|-1, reduce -> 1). The reported count and the barrier count
+    // diverge for rooted reduce, so they stay separate.
+    const bool is_bcast = (kind == OP_BCAST);
+    const char *label = is_bcast                      ? "BCAST"
+                        : (kind == OP_REDUCE)         ? "REDUCE"
+                        : (kind == OP_REDUCE_SCATTER) ? "REDUCE_SCATTER"
+                        : (kind == OP_ALLGATHER)      ? "ALLGATHER"
+                                                      : "ALLREDUCE";
+    const char *count_field = is_bcast ? "legs" : "members";
+    size_t report_count  = is_bcast ? members.size() - 1 : members.size();
+    size_t barrier_count = is_bcast              ? members.size() - 1
+                           : (kind == OP_REDUCE) ? 1
+                                                 : members.size();
+    TriggerTarget *recorder = new CollectiveCompletionRecorder(
+        *_eventlist, label, count_field, static_cast<flowid_t>(op_flow_id),
+        root, static_cast<int>(group_id), static_cast<int>(size),
+        report_count, _eventlist->now());
 
     BarrierTrigger *barrier = new BarrierTrigger(
         *_eventlist, ++_next_coll_barrier_id, barrier_count);
@@ -292,7 +306,7 @@ void LogSimInterface::launch_collective(graph_node_properties &elem) {
     // register_mcast_op, UEC_REDUCE -> register_reduce_op; rooted unicast descents
     // (reduce / reduce_scatter) also need an addHostPort route to resolve the result.
     uint64_t block_bytes =
-        ((kind == OP_REDUCE_SCATTER || kind == OP_ALLGATHER) && !members.empty())
+        (kind == OP_REDUCE_SCATTER || kind == OP_ALLGATHER)
             ? size / members.size() : 0;
     for (int32_t m : members) {
       UecCollectiveSink *sink = _topo->get_collective_sink(m, group_id);
