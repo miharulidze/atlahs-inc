@@ -1,0 +1,21 @@
+SP-C5: TP16(+SP)/DP1/PP1, 16 ranks as 1 node x 16 GPUs
+engine: pcm-sdk wanja/inc-port @ 4d4361b (includes the reduce_scatter
+block-boundary chunking fix; 2858452 hangs on any RS coll)
+generator: nccl_generator_v2 simple-sim-coll (llama3_training_sp.py, SP wiring),
+render via tp_share_sweep/scripts/render_c5.py (dp=1 size-1-group guard),
+EMIT_INC unset / EMIT_INC=1 INC_CONTEXTS=tp,tp_sp
+
+baseline arm:
+  /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/build/bin/htsim_flow_app_atlahs -goal llama3.bin -nodes 16 -num_gpus_per_node 16 -topo /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/apps/htsim_atlahs/example_incast/tree16.topo -intranode_topo /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/topologies/scaleup_single_switch_16_3600Gbps.topo -end 100000000 -sender_cc_only -intranode_queue_type lossless_input
+  makespan = 2423650 ns; dropped packets = 0; lossless-headroom warnings = 0
+
+INC arm:
+  /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/build/bin/htsim_flow_app_atlahs -goal llama3_inc.bin -nodes 16 -num_gpus_per_node 16 -topo /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/apps/htsim_atlahs/example_incast/tree16.topo -intranode_topo /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/topologies/scaleup_single_switch_16_3600Gbps.topo -end 100000000 -sender_cc_only -intranode_queue_type lossless_input -groups llama3_inc_local.groups -reduce_compute_latency 100
+  makespan = 153252 ns; coll completions = 30/30 (ALLGATHER 16/16, REDUCE_SCATTER 14/14); dropped packets = 0; lossless-headroom warnings = 54528 (scale-up last-hop LS0->DST*, packets held not dropped)
+
+delta = 2270398 ns (93.6768 % faster/iteration)
+tp_comm_share = 1.0 (pure TP; dp=1/pp=1 comm is size-1 no-ops)
+in-repo cross-check (htsim_uec single-tier, same llama3_inc.bin + global .groups):
+  16/16 ALLGATHER + 14/14 REDUCE_SCATTER, 0 drops, makespan 153168 ns
+  (two engines within 0.05 % on the same trace)
+full stdout/stderr: scratch sp_ab/SPC5/(baseline|inc).(out|err)

@@ -1,0 +1,17 @@
+SP-C3: TP4(+SP)/DP2/PP2, 16 ranks as 4 nodes x 4 GPUs
+engine: pcm-sdk wanja/inc-port @ 4d4361b (includes the reduce_scatter
+block-boundary chunking fix; 2858452 hangs on any RS coll)
+generator: nccl_generator_v2 simple-sim-coll (llama3_training_sp.py, SP wiring),
+render: EMIT_INC unset -> llama3.goal; EMIT_INC=1 INC_CONTEXTS=tp,tp_sp -> llama3_inc.goal + .groups
+
+baseline arm:
+  /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/build/bin/htsim_flow_app_atlahs -goal llama3.bin -nodes 16 -num_gpus_per_node 4 -topo /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/apps/htsim_atlahs/example_incast/tree16.topo -intranode_topo /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/llama3_ab_pcm/scaleup_single_switch_4_3600Gbps.topo -end 100000000 -sender_cc_only -intranode_queue_type lossless_input
+  makespan = 257540167 ns; dropped packets = 0; lossless-headroom warnings = 0
+
+INC arm:
+  /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/build/bin/htsim_flow_app_atlahs -goal llama3_inc.bin -nodes 16 -num_gpus_per_node 4 -topo /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/apps/htsim_atlahs/example_incast/tree16.topo -intranode_topo /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/llama3_ab_pcm/scaleup_single_switch_4_3600Gbps.topo -end 100000000 -sender_cc_only -intranode_queue_type lossless_input -groups llama3_inc_local.groups -reduce_compute_latency 100
+  makespan = 221091225 ns; coll completions = 60/60 (ALLGATHER 32/32, REDUCE_SCATTER 28/28); dropped packets = 0; lossless-headroom warnings = 13066 (scale-up last-hop LS0->DST*, packets held not dropped)
+
+delta = 36448942 ns (14.1527 % faster/iteration)
+tp_comm_share (INC-goal coll bytes / (coll+send bytes)) = 0.015873
+full stdout/stderr: scratch sp_ab/SPC3/(baseline|inc).(out|err)
