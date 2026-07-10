@@ -67,7 +67,7 @@ False` input), so per-iteration coll counts are 14 (stage-0 groups) / 16
 * SP-C3's larger gain (14.15 % vs plain 2.40 %) is NOT a like-for-like
   improvement: the SP trace has ~2x TP collectives sitting in the same
   PP-amplified critical path (see D2's C3 analysis), a slower endpoint
-  baseline (257.5 ms vs 235.2 ms — 88 additional ring-decomposed colls), and
+  baseline (257.5 ms vs 235.2 ms — 28 additional ring-decomposed collectives (60 vs 32)), and
   less elementwise compute (seq-sharded norms). It says "SP moves MORE of the
   iteration onto TP collectives, which INC accelerates", not "SP makes INC
   2x better".

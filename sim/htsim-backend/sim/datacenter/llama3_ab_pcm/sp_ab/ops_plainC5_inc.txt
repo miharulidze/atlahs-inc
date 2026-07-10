@@ -1,0 +1,19 @@
+# per-op collective completions, plain-TP C5 INC arm (TP16/DP1/PP1, 16 x AllReduce, 2 iterations)
+# source: tp_share_sweep C5 INC run, pcm-sdk two-tier htsim_flow_app_atlahs (wanja/inc-port),
+#         tree16.topo + scaleup_single_switch_16_3600Gbps.topo, makespan 108969 ns (== committed C5 anchor)
+ALLREDUCE_COMPLETE op_id=0 root=-1 group=0 size=1048576 members=16 start_ns=1110 complete_ns=4652 duration_ns=3542
+ALLREDUCE_COMPLETE op_id=1 root=-1 group=0 size=1048576 members=16 start_ns=7473 complete_ns=11015 duration_ns=3542
+ALLREDUCE_COMPLETE op_id=2 root=-1 group=0 size=1048576 members=16 start_ns=12114 complete_ns=15657 duration_ns=3542
+ALLREDUCE_COMPLETE op_id=3 root=-1 group=0 size=1048576 members=16 start_ns=18478 complete_ns=22020 duration_ns=3542
+ALLREDUCE_COMPLETE op_id=4 root=-1 group=0 size=1048576 members=16 start_ns=22028 complete_ns=25571 duration_ns=3542
+ALLREDUCE_COMPLETE op_id=5 root=-1 group=0 size=1048576 members=16 start_ns=30689 complete_ns=35997 duration_ns=5308
+ALLREDUCE_COMPLETE op_id=6 root=-1 group=0 size=1048576 members=16 start_ns=38312 complete_ns=42207 duration_ns=3895
+ALLREDUCE_COMPLETE op_id=7 root=-1 group=0 size=1048576 members=16 start_ns=46910 complete_ns=52636 duration_ns=5725
+ALLREDUCE_COMPLETE op_id=8 root=-1 group=0 size=1048576 members=16 start_ns=55594 complete_ns=59136 duration_ns=3542
+ALLREDUCE_COMPLETE op_id=9 root=-1 group=0 size=1048576 members=16 start_ns=61957 complete_ns=65500 duration_ns=3542
+ALLREDUCE_COMPLETE op_id=10 root=-1 group=0 size=1048576 members=16 start_ns=66599 complete_ns=70141 duration_ns=3542
+ALLREDUCE_COMPLETE op_id=11 root=-1 group=0 size=1048576 members=16 start_ns=72962 complete_ns=76504 duration_ns=3542
+ALLREDUCE_COMPLETE op_id=12 root=-1 group=0 size=1048576 members=16 start_ns=76512 complete_ns=80055 duration_ns=3542
+ALLREDUCE_COMPLETE op_id=13 root=-1 group=0 size=1048576 members=16 start_ns=85699 complete_ns=90478 duration_ns=4779
+ALLREDUCE_COMPLETE op_id=14 root=-1 group=0 size=1048576 members=16 start_ns=92791 complete_ns=96686 duration_ns=3894
+ALLREDUCE_COMPLETE op_id=15 root=-1 group=0 size=1048576 members=16 start_ns=101799 complete_ns=107108 duration_ns=5309

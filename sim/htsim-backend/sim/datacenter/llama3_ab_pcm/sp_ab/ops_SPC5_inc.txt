@@ -1,0 +1,33 @@
+# per-op collective completions, SP-C5 INC arm (TP16+SP/DP1/PP1, 16 x AllGather + 14 x ReduceScatter, 2 iterations)
+# source: sp_ab SPC5 INC run, pcm-sdk two-tier htsim_flow_app_atlahs (wanja/inc-port @ 4d4361b),
+#         tree16.topo + scaleup_single_switch_16_3600Gbps.topo, makespan 153252 ns (== committed SP-C5 row)
+ALLGATHER_COMPLETE op_id=0 root=-1 group=0 size=1048576 members=16 start_ns=4 complete_ns=3312 duration_ns=3308
+REDUCE_SCATTER_COMPLETE op_id=1 root=-1 group=0 size=1048576 members=16 start_ns=4409 complete_ns=7950 duration_ns=3541
+ALLGATHER_COMPLETE op_id=2 root=-1 group=0 size=1048576 members=16 start_ns=7951 complete_ns=11260 duration_ns=3308
+REDUCE_SCATTER_COMPLETE op_id=3 root=-1 group=0 size=1048576 members=16 start_ns=14080 complete_ns=17621 duration_ns=3541
+ALLGATHER_COMPLETE op_id=4 root=-1 group=0 size=1048576 members=16 start_ns=17623 complete_ns=20932 duration_ns=3308
+REDUCE_SCATTER_COMPLETE op_id=5 root=-1 group=0 size=1048576 members=16 start_ns=22029 complete_ns=25570 duration_ns=3541
+ALLGATHER_COMPLETE op_id=6 root=-1 group=0 size=1048576 members=16 start_ns=25571 complete_ns=28880 duration_ns=3308
+REDUCE_SCATTER_COMPLETE op_id=7 root=-1 group=0 size=1048576 members=16 start_ns=31700 complete_ns=35241 duration_ns=3541
+ALLGATHER_COMPLETE op_id=8 root=-1 group=0 size=1048576 members=16 start_ns=35249 complete_ns=38558 duration_ns=3308
+REDUCE_SCATTER_COMPLETE op_id=9 root=-1 group=0 size=1048576 members=16 start_ns=43257 complete_ns=48975 duration_ns=5718
+ALLGATHER_COMPLETE op_id=10 root=-1 group=0 size=1048576 members=16 start_ns=48977 complete_ns=52285 duration_ns=3308
+REDUCE_SCATTER_COMPLETE op_id=11 root=-1 group=0 size=1048576 members=16 start_ns=53790 complete_ns=58136 duration_ns=4345
+ALLGATHER_COMPLETE op_id=12 root=-1 group=0 size=1048576 members=16 start_ns=58139 complete_ns=61447 duration_ns=3308
+REDUCE_SCATTER_COMPLETE op_id=13 root=-1 group=0 size=1048576 members=16 start_ns=65620 complete_ns=71457 duration_ns=5836
+ALLGATHER_COMPLETE op_id=14 root=-1 group=0 size=1048576 members=16 start_ns=71459 complete_ns=74767 duration_ns=3308
+ALLGATHER_COMPLETE op_id=15 root=-1 group=0 size=1048576 members=16 start_ns=76631 complete_ns=79940 duration_ns=3308
+REDUCE_SCATTER_COMPLETE op_id=16 root=-1 group=0 size=1048576 members=16 start_ns=81037 complete_ns=84578 duration_ns=3541
+ALLGATHER_COMPLETE op_id=17 root=-1 group=0 size=1048576 members=16 start_ns=84579 complete_ns=87888 duration_ns=3308
+REDUCE_SCATTER_COMPLETE op_id=18 root=-1 group=0 size=1048576 members=16 start_ns=90708 complete_ns=94249 duration_ns=3541
+ALLGATHER_COMPLETE op_id=19 root=-1 group=0 size=1048576 members=16 start_ns=94251 complete_ns=97560 duration_ns=3308
+REDUCE_SCATTER_COMPLETE op_id=20 root=-1 group=0 size=1048576 members=16 start_ns=98657 complete_ns=102198 duration_ns=3541
+ALLGATHER_COMPLETE op_id=21 root=-1 group=0 size=1048576 members=16 start_ns=102199 complete_ns=105507 duration_ns=3308
+REDUCE_SCATTER_COMPLETE op_id=22 root=-1 group=0 size=1048576 members=16 start_ns=108327 complete_ns=111869 duration_ns=3541
+ALLGATHER_COMPLETE op_id=23 root=-1 group=0 size=1048576 members=16 start_ns=111877 complete_ns=115185 duration_ns=3308
+REDUCE_SCATTER_COMPLETE op_id=24 root=-1 group=0 size=1048576 members=16 start_ns=119885 complete_ns=125192 duration_ns=5306
+ALLGATHER_COMPLETE op_id=25 root=-1 group=0 size=1048576 members=16 start_ns=125194 complete_ns=128502 duration_ns=3308
+REDUCE_SCATTER_COMPLETE op_id=26 root=-1 group=0 size=1048576 members=16 start_ns=130005 complete_ns=134350 duration_ns=4345
+ALLGATHER_COMPLETE op_id=27 root=-1 group=0 size=1048576 members=16 start_ns=134353 complete_ns=137662 duration_ns=3308
+REDUCE_SCATTER_COMPLETE op_id=28 root=-1 group=0 size=1048576 members=16 start_ns=142362 complete_ns=148080 duration_ns=5718
+ALLGATHER_COMPLETE op_id=29 root=-1 group=0 size=1048576 members=16 start_ns=148082 complete_ns=151391 duration_ns=3308
