@@ -1,0 +1,35 @@
+# scaleup_single_switch_72_3600Gbps.topo
+#
+# Models an NVLink-class SCALE-UP domain as a single non-blocking crossbar:
+# 72 hosts (GPUs) all attached to ONE ToR switch, every pair exactly one hop apart.
+# This is the CURRENT-GENERATION REAL-HARDWARE anchor: the GB200 NVL72 places 72
+# Blackwell GPUs in one NVLink domain behind a single NVSwitch tier (one hop, fully
+# non-blocking, 1800 GB/s per GPU). Modelled here at the sweep's uniform 3600 Gbps
+# per-host NVLink-aggregate class; switch latency 300 ns, link 500 ns.
+#
+# Encoding note: htsim's FatTree parser rejects Tiers=1 (fat_tree_topology.cpp), so a
+# single switch is expressed as a DEGENERATE 2-tier fat-tree: Podsize == Nodes and
+# Tier-0 Radix_Down == Nodes => exactly one ToR holds all hosts. The Tier-1 uplink
+# (Radix_Up 1) is vestigial and carries no host<->host traffic (all pairs are same-ToR,
+# one hop). Oversubscribed == Nodes keeps radix_down/radix_up == oversub (parser check).
+#
+# Sibling of scaleup_single_switch_{2..64}_3600Gbps.topo, scaled to 72 hosts (NVL72) for
+# the INC-vs-ring speedup-vs-N sweep (D3). NOTE: 72 is NOT a power of two, so the
+# recursive-doubling arm is skipped for this N (ring is the endpoint baseline).
+Nodes 72
+Tiers 2
+Podsize 72
+
+Tier 0
+Downlink_speed_Gbps 3600
+Radix_Down 72
+Radix_Up 1
+Downlink_Latency_ns 500
+Switch_Latency_ns 300
+Oversubscribed 72
+
+Tier 1
+Downlink_speed_Gbps 3600
+Radix_Down 1
+Downlink_Latency_ns 500
+Switch_Latency_ns 300

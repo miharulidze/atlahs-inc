@@ -1,0 +1,47 @@
+# scaleup_twotier_h100_256gpu_3600Gbps.topo
+#
+# FAITHFUL two-tier NVLink scale-up domain: the NVIDIA DGX H100 "NVLink Switch System",
+# the largest SHIPPED, fully-documented two-tier NVLink domain (256 H100 GPUs).
+# This is the multi-switch scale-up case (supervisor 2026-07-13: model a larger, more
+# advanced scale-up domain as faithfully as possible to official numbers/structures).
+#
+# Official structure (NVIDIA DGX H100 SuperPOD reference architecture; NextPlatform
+# HotChips-2022 NVSwitch coverage):
+#   - 256 H100 GPUs = 32 DGX H100 nodes x 8 GPUs.
+#   - LEAF tier   : the 4 on-board NVSwitch3 ASICs per node act as the leaf switch for
+#                   that node's 8 GPUs (modelled here as one logical leaf per node => 32).
+#   - SPINE tier  : 18 external "NVLink Switch" boxes (2 NVSwitch3 ASICs each = 36),
+#                   giving 128 leaf + 36 spine = 164 switch ASICs total.
+#   - Oversubscription: each node exposes 144 GPU-side NVLink4 links (8 x 18) but only
+#                   72 uplinks to the spine => 2:1 oversubscribed (NOT fully non-blocking).
+#   - NVSwitch3 radix 64 NVLink4 ports; per-GPU NVLink4 = 900 GB/s bidir = 3600 Gbps
+#                   unidirectional (so the sweep's 3600 Gbps per host is FAITHFUL here).
+#   - Reach: intra-node = 1 hop (GPU->leaf->GPU); inter-node = 2 hops through the spine.
+#
+# htsim fat-tree abstraction (what is/ isn't modelled): htsim's parametric fat-tree uses
+# one logical link per radix unit, so the physically-important invariants are preserved
+# exactly -- 8 GPUs/node, 32 leaves, the 2:1 uplink oversubscription, and the 1-hop-intra
+# / 2-hop-inter reach -- while the packaging detail (real 18 spine BOXES / 36 spine ASICs,
+# 4 leaf ASICs/node bundling 18 NVLinks/GPU) is abstracted to an equivalent regular
+# 2-tier fat-tree with 4 logical spines. Bisection ratio and hop count (which drive the
+# simulation) are faithful; the literal ASIC/box counts are not encodable one-to-one.
+#
+# Leaf: Radix_Down 8 (GPUs/node), Radix_Up 4 (=> 8:4 = 2:1 oversub). #leaves = 256/8 = 32.
+# Spine: Radix_Down 32 (one link to each leaf). #spines = (32 leaves x 4 up)/32 = 4 logical.
+Nodes 256
+Tiers 2
+Podsize 256
+
+Tier 0
+Downlink_speed_Gbps 3600
+Radix_Down 8
+Radix_Up 4
+Downlink_Latency_ns 500
+Switch_Latency_ns 300
+Oversubscribed 2
+
+Tier 1
+Downlink_speed_Gbps 3600
+Radix_Down 32
+Downlink_Latency_ns 500
+Switch_Latency_ns 300

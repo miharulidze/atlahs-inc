@@ -1,0 +1,13 @@
+group_size,msg_bytes,inc_ns,ring_ns,ideal_ring_ns,speedup,speedup_vs_ideal,inc_makespan_ns,ring_makespan_ns,drops,fabric,reduce_compute_ns,su_topo,analytic_rate_bns,hop_oneway_ns,engine
+16,4096,1424,78046,19515.6,54.808,13.705,1524,78146,0,lossless_input,100,scaleup_single_switch_16_3600Gbps.topo,492.3,1300,pcm-sdk
+16,16384,1449,78138,19562.4,53.925,13.501,1549,78238,0,lossless_input,100,scaleup_single_switch_16_3600Gbps.topo,492.3,1300,pcm-sdk
+16,65536,1549,82996,19749.6,53.580,12.750,1649,83096,0,lossless_input,100,scaleup_single_switch_16_3600Gbps.topo,492.3,1300,pcm-sdk
+16,262144,1947,97940,20498.4,50.303,10.528,2047,98040,0,lossless_input,100,scaleup_single_switch_16_3600Gbps.topo,492.3,1300,pcm-sdk
+16,1048576,3541,157934,23493.7,44.602,6.635,3641,158034,0,lossless_input,100,scaleup_single_switch_16_3600Gbps.topo,492.3,1300,pcm-sdk
+16,4194304,9932,397964,35474.6,40.069,3.572,10032,398064,0,lossless_input,100,scaleup_single_switch_16_3600Gbps.topo,492.3,1300,pcm-sdk
+72,4608,1424,369309,92318.5,259.346,64.830,1524,369409,0,lossless_input,100,scaleup_single_switch_72_3600Gbps.topo,492.3,1300,pcm-sdk
+72,18432,1449,369418,92373.8,254.947,63.750,1549,369518,0,lossless_input,100,scaleup_single_switch_72_3600Gbps.topo,492.3,1300,pcm-sdk
+72,73728,1566,369854,92595.4,236.178,59.129,1666,369954,0,lossless_input,100,scaleup_single_switch_72_3600Gbps.topo,492.3,1300,pcm-sdk
+72,294912,2014,392850,93481.5,195.060,46.416,2114,392950,0,lossless_input,100,scaleup_single_switch_72_3600Gbps.topo,492.3,1300,pcm-sdk
+72,1179648,3807,463583,97025.8,121.771,25.486,3907,463683,0,lossless_input,100,scaleup_single_switch_72_3600Gbps.topo,492.3,1300,pcm-sdk
+72,4718592,10994,747554,111203.3,67.997,10.115,11094,747654,0,lossless_input,100,scaleup_single_switch_72_3600Gbps.topo,492.3,1300,pcm-sdk

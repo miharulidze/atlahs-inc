@@ -64,16 +64,27 @@ def is_pow2(n):
     return n >= 1 and (n & (n - 1)) == 0
 
 
-def ideal_ring_ns(N, S, B_bps, hop_oneway_ns):
+def ideal_ring_ns(N, S, rate_bns, hop_oneway_ns):
     """Analytic bandwidth-optimal, line-rate, zero-CC ring AllReduce lower bound [D3].
 
-    Textbook 2(N-1)/N cost model: each rank moves 2(N-1)/N * S bytes at line rate B,
-    plus (N-1) serial dependency hops at hop_oneway latency. This is the floor the
-    *measured* ring must not beat (bug-oracle); speedup_vs_ideal = ideal_ring_ns/inc_ns
+    Textbook 2(N-1)/N cost model: each rank moves 2(N-1)/N * S bytes at the *realised*
+    line rate, plus (N-1) serial dependency hops at hop_oneway latency. This is the floor
+    the *measured* ring must not beat (bug-oracle); speedup_vs_ideal = ideal_ring_ns/inc_ns
     is the CC-decontaminated INC-vs-perfect-ring speedup (removes the measured ring's
     congestion-control cold-start confound).
+
+    IMPORTANT (realised wire rate): the analytic bandwidth term is priced at the rate the
+    engine ACTUALLY realises, NOT the nominal --linkspeed. htsim's queue quantises the
+    per-byte serialisation time to integer picoseconds: nominal 3600 Gbps = 450 B/ns would
+    be 2.222 ps/B, truncated to 2 ps/B => 500 B/ns raw, and x (MTU / MTU+hdr) = 4096/4160
+    framing => ~492.3 B/ns payload-effective. This is confirmed empirically: the ACK-less
+    INC arm's completion-vs-size slope is 492.26-492.29 B/ns. Pricing the ideal ring at
+    492.3 (rate_bns) instead of the nominal 450 removes a ~9% bandwidth-term bias and makes
+    the analytic floor consistent with the measured INC bandwidth slope. hop_oneway is the
+    topology's own one-way hop latency (crossbar 2*500+300 = 1300 ns; the two-level fabric
+    4*500+3*300 = 2900 ns) and is realised as-is (latencies are not byte-quantised).
     """
-    bw_ns = (2.0 * (N - 1) / N) * (8.0 * S) / B_bps * 1e9
+    bw_ns = (2.0 * (N - 1) / N) * S / rate_bns
     lat_ns = (N - 1) * hop_oneway_ns
     return bw_ns + lat_ns
 
@@ -132,7 +143,14 @@ def main():
                          "+1 RTT = 2*hop_oneway; 1300 = 1/2-RTT one-way sensitivity)")
     ap.add_argument("--hop-oneway-ns", type=int, default=1300,
                     help="[D3] one-way per-hop latency for the ideal-ring latency term "
-                         "(default 1300 = 500 link + 300 switch + 500 link)")
+                         "(crossbar default 1300 = 500 link + 300 switch + 500 link; the "
+                         "two-level fabric is 2900 = 4*500 + 3*300)")
+    ap.add_argument("--analytic-rate-bns", type=float, default=492.3,
+                    help="[D3] REALISED payload-effective wire rate (B/ns) for the analytic "
+                         "ideal-ring bandwidth term; decoupled from --linkspeed (the engine "
+                         "rate). Default 492.3 = 500 B/ns raw (2 ps/B quantised) x 4096/4160 "
+                         "MTU framing == the ACK-less INC arm's measured size-slope. The "
+                         "measured arms are unaffected (engine still uses --linkspeed).")
     ap.add_argument("--no-rdouble", action="store_true",
                     help="skip the recursive-doubling arm (D4)")
     ap.add_argument("--tmpdir", default="/tmp/ar_ab")
@@ -150,7 +168,11 @@ def main():
             sys.exit(f"not executable: {tool}")
     os.makedirs(args.tmpdir, exist_ok=True)
 
-    B_bps = args.linkspeed * 1e6  # Mbps -> bps (3600000 -> 3.6e12 = 3600e9)
+    # NOTE: --linkspeed drives the ENGINE (measured arms). The analytic ideal-ring is
+    # priced separately at the REALISED payload-effective rate (--analytic-rate-bns,
+    # default 492.3 B/ns), because the engine quantises per-byte time to 2 ps (see
+    # ideal_ring_ns docstring). Keeping them separate is why measured values are unchanged
+    # by this correction and only the analytic references move.
 
     Gs = [int(x) for x in args.group_sizes.split(",")]
     Ss = [int(x) for x in args.msg_sizes.split(",")]
@@ -193,7 +215,7 @@ def main():
                     args.paths, args.seed)
 
             # D3 / D1 computed (analytic) columns -- pure post-processing, no sim.
-            ideal_ns = ideal_ring_ns(N, S, B_bps, args.hop_oneway_ns)
+            ideal_ns = ideal_ring_ns(N, S, args.analytic_rate_bns, args.hop_oneway_ns)
             speedup = (ring_ns / inc_ns) if (inc_ns and ring_ns) else None
             speedup_vs_ideal = (ideal_ns / inc_ns) if inc_ns else None
             inc_synced_ns = (inc_ns + args.inc_sync_rtt_ns) if inc_ns else None
@@ -243,6 +265,7 @@ def main():
                 "linkspeed_mbps": args.linkspeed,
                 "reduce_compute_ns": args.reduce_compute,
                 "hop_oneway_ns": args.hop_oneway_ns,
+                "analytic_rate_bns": args.analytic_rate_bns,
                 "inc_sync_rtt_ns": args.inc_sync_rtt_ns,
             })
             print(f"{N:>4} {S:>10} {str(inc_ns):>10} {str(ring_ns):>10} "

@@ -34,21 +34,23 @@ import sys
 TAIL_NS = 100  # identical dependent calc tail in both arms; cancels in the A/B
 
 # [D3] analytic ideal-ring reference (matches ../allreduce_ab/run_allreduce_ab_sweep.py).
-# The single-switch scale-up fabric is 3600 Gbps with 1300 ns one-way per-hop latency
-# (500 link + 300 switch + 500 link). B in bps; hop one-way in ns.
-IDEAL_RING_B_BPS = 3600e9
+# Priced at the REALISED payload-effective wire rate, NOT the nominal 3600 Gbps: the
+# engine quantises per-byte time to 2 ps (500 B/ns raw) x 4096/4160 MTU framing =>
+# 492.3 B/ns, == the ACK-less INC completion-vs-size slope. Crossbar one-way hop 1300 ns
+# (500 link + 300 switch + 500 link); the two-level fabric is 2900 ns (4*500 + 3*300).
+IDEAL_RING_RATE_BNS = 492.3
 IDEAL_RING_HOP_ONEWAY_NS = 1300
 
 
-def ideal_ring_ns(N, S, B_bps=IDEAL_RING_B_BPS, hop_oneway_ns=IDEAL_RING_HOP_ONEWAY_NS):
+def ideal_ring_ns(N, S, rate_bns=IDEAL_RING_RATE_BNS, hop_oneway_ns=IDEAL_RING_HOP_ONEWAY_NS):
     """Analytic bandwidth-optimal, line-rate, zero-CC ring AllReduce lower bound [D3].
 
-    2(N-1)/N cost model: each rank moves 2(N-1)/N * S bytes at line rate B, plus (N-1)
-    serial dependency hops at hop_oneway latency. Computed (NOT hand-injected); the
-    measured ring must not beat it, and speedup_vs_ideal = ideal_ring_ns/inc_ns is the
-    CC-decontaminated INC-vs-perfect-ring speedup.
+    2(N-1)/N cost model at the REALISED wire rate: each rank moves 2(N-1)/N * S bytes at
+    rate_bns B/ns, plus (N-1) serial dependency hops at hop_oneway latency. Computed (NOT
+    hand-injected); the measured ring must not beat it, and speedup_vs_ideal =
+    ideal_ring_ns/inc_ns is the CC-decontaminated INC-vs-perfect-ring speedup.
     """
-    bw_ns = (2.0 * (N - 1) / N) * (8.0 * S) / B_bps * 1e9
+    bw_ns = (2.0 * (N - 1) / N) * S / rate_bns
     lat_ns = (N - 1) * hop_oneway_ns
     return bw_ns + lat_ns
 
@@ -149,6 +151,12 @@ def main():
     ap.add_argument("--writer", default=DEF_WRITER)
     ap.add_argument("--su-topo", default=DEF_SU_TOPO)
     ap.add_argument("--so-topo", default=DEF_SO_TOPO)
+    ap.add_argument("--analytic-rate-bns", type=float, default=IDEAL_RING_RATE_BNS,
+                    help="realised payload-effective wire rate (B/ns) for the analytic "
+                         "ideal ring; default 492.3 (2 ps/B x MTU framing == INC slope)")
+    ap.add_argument("--hop-oneway-ns", type=int, default=IDEAL_RING_HOP_ONEWAY_NS,
+                    help="one-way per-hop latency for the ideal-ring latency term "
+                         "(1300 crossbar; 2900 two-level fabric)")
     ap.add_argument("--n", type=int, default=16)
     ap.add_argument("--sizes", default="4096,16384,65536,262144,1048576,4194304")
     ap.add_argument("--reduce-compute", type=int, default=100,
@@ -190,7 +198,7 @@ def main():
         ok = inc_ns and ring_ns and ist == "ok" and rst == "ok"
         speedup = ring_ns / inc_ns if ok else None
         # [D3] computed analytic ideal-ring reference + CC-decontaminated speedup.
-        ideal_ns = ideal_ring_ns(n, s)
+        ideal_ns = ideal_ring_ns(n, s, args.analytic_rate_bns, args.hop_oneway_ns)
         speedup_vs_ideal = ideal_ns / inc_ns if inc_ns else None
         status = "ok" if ok else f"inc={ist},ring={rst}"
         if idrop or rdrop:
@@ -206,6 +214,8 @@ def main():
             "fabric": "lossless_input",
             "reduce_compute_ns": args.reduce_compute,
             "su_topo": os.path.basename(args.su_topo),
+            "analytic_rate_bns": args.analytic_rate_bns,
+            "hop_oneway_ns": args.hop_oneway_ns,
             "engine": "pcm-sdk",
         })
         print(f"{s:>10} {str(inc_ns):>10} {str(ring_ns):>10} "

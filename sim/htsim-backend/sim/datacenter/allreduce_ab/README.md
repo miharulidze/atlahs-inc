@@ -37,13 +37,36 @@ python3 run_allreduce_ab_sweep.py \
 /usr/bin/python3 plot_allreduce_ab.py --csv results.csv --out allreduce_ab
 
 # (b) [D3] speedup-vs-N sweep on per-N single-switch scale-up crossbars (radix == |G|),
-#     emitting ring / rdouble / INC / analytic ideal-ring side by side:
+#     extended 2026-07-13 to |G|=72 (NVL72-realistic single-switch ceiling). Analytic
+#     refs priced at the REALISED 492.3 B/ns (not nominal 3600) + 1300 ns/hop. The grid
+#     64512/1048320 is divisible by every |G| incl 256, so the two-level point co-plots:
 python3 run_allreduce_ab_sweep.py \
   --htsim ../htsim_uec --gen ../make_allreduce_ab \
   --topo-template ../topologies/scaleup_single_switch_{n}_3600Gbps.topo \
-  --linkspeed 3600000 --group-sizes 2,4,8,16,32,64 \
-  --msg-sizes 65536,1048576 --reduce-compute 100 --out results_vs_n.csv
-/usr/bin/python3 plot_speedup_vs_n.py --csv results_vs_n.csv --out speedup_vs_n
+  --linkspeed 3600000 --group-sizes 2,4,8,16,32,64,72 \
+  --msg-sizes 64512,1048320 --reduce-compute 100 --out results_vs_n_ext.csv
+
+# (b2) the 256-GPU point on the two-LEVEL fabric (its OWN hop budget: 2900 ns/hop, sync
+#      5800 = 2x2900); append its rows into results_vs_n_ext.csv, then plot:
+python3 run_allreduce_ab_sweep.py \
+  --htsim ../htsim_uec --gen ../make_allreduce_ab \
+  --topo ../topologies/scaleup_twotier_h100_256gpu_3600Gbps.topo \
+  --linkspeed 3600000 --group-sizes 256 --msg-sizes 64512,1048320 \
+  --reduce-compute 100 --hop-oneway-ns 2900 --inc-sync-rtt-ns 5800 --out results_twotier_256.csv
+/usr/bin/python3 plot_speedup_vs_n.py --csv results_vs_n_ext.csv --out speedup_vs_n
+
+# (c) message-size sweep re-anchored at |G|=72 on the crossbar (|G|=16 kept as the
+#     cross-engine anchor); run each |G| on its radix-==-|G| crossbar, merge, then plot:
+python3 run_allreduce_ab_sweep.py --htsim ../htsim_uec --gen ../make_allreduce_ab \
+  --topo ../topologies/scaleup_single_switch_16_3600Gbps.topo --linkspeed 3600000 \
+  --group-sizes 16 --msg-sizes 4096,16384,65536,262144,1048576,4194304 \
+  --reduce-compute 100 --out results_msgsweep_g16.csv
+python3 run_allreduce_ab_sweep.py --htsim ../htsim_uec --gen ../make_allreduce_ab \
+  --topo ../topologies/scaleup_single_switch_72_3600Gbps.topo --linkspeed 3600000 \
+  --group-sizes 72 --msg-sizes 4608,18432,73728,294912,1179648,4718592 \
+  --reduce-compute 100 --out results_msgsweep_g72.csv
+# merge g16+g72 -> results_crossbar_msgsweep.csv, then:
+/usr/bin/python3 plot_allreduce_ab.py --csv results_crossbar_msgsweep.csv --out allreduce_ab
 ```
 
 ## Topology and the fairness model
@@ -141,7 +164,7 @@ dependency hop per rank) and recursive-doubling grows **O(log N)**
 | column | directive | meaning |
 |---|---|---|
 | `rdouble_ns` | D4 | measured recursive halving/doubling baseline (power-of-two `|G|`) |
-| `ideal_ring_ns` | D3 | **computed** analytic ring floor `2(N-1)/N · 8S/B + (N-1)·hop_oneway` (`B=3600e9` bps, `hop_oneway=1300` ns); not simulated |
+| `ideal_ring_ns` | D3 | **computed** analytic ring floor `2(N-1)/N · S/rate + (N-1)·hop_oneway`, priced at the **realised** wire rate (`rate=492.3` B/ns = 2 ps/B engine quantisation × 4096/4160 MTU framing == the ACK-less INC size-slope; not nominal 3600 Gbps=450 B/ns, which biased the old floor ~9%) and the topology's own one-way hop (`1300` ns crossbar / `2900` ns two-level fabric); not simulated |
 | `speedup_vs_ideal` | D3 | `ideal_ring_ns / inc_ns` — the **CC-decontaminated** INC-vs-*perfect*-ring speedup (removes the measured ring's congestion-control cold-start confound) |
 | `inc_synced_ns` | D1 | `inc_ns + --inc-sync-rtt-ns` — the Khalilov 3-phase app-sync charge (ring barrier → ACK-less mcast/aggr → neighbor "I got everything" scan) |
 | `speedup_synced` | D1 | `ring_ns / inc_synced_ns` — INC-pessimistic headline |
