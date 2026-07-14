@@ -14,6 +14,18 @@ htsim_uec fork). Same two arms, same fairness model, different engine:
 Both arms run on the SAME fabric: the single-switch NVLink-class scale-up topology
 with -intranode_queue_type lossless_input (PFC). Both arms end in an identical
 100 ns calc tail that depends on the collective, so
+
+GOTCHA (verified in pcm-sdk source 2026-07-13): the .topo file's link speed sets only
+the fabric PIPES; the per-GPU NIC injection rate is -intranode_linkspeed, which
+DEFAULTS to COPY_ENG = 200,000 Mbps = 200 Gbps (main.h -> htsim_app_atlahs.cpp ->
+atlahs_htsim_api.cpp). UecNIC::startSending then holds the port 166 ns per 4,150 B
+frame = 24.6 payload-B/ns = 5% of the fabric's realised 492.3 B/ns, silently capping
+any p2p arm whose per-step block exceeds one frame (effective MSS 4,086 B payload /
+4,150 B frame). This driver therefore ALWAYS passes -intranode_linkspeed (default
+3600000 Mbps = the fabric rate); the flag also rescales base_rtt, BDP, cwnd and the
+LogGOPS htsim_G gate, so results must be re-measured, never extrapolated, when it
+changes. The ACK-less INC datapath bypasses the NIC pacer (measured slope 492.3 B/ns
+either way).
     collective time = "Maximum finishing time at host 0" - TAIL_NS
 (for the INC arm this equals ALLREDUCE_COMPLETE's duration_ns; asserted per run).
 
@@ -122,9 +134,11 @@ def compile_goal(writer, goal, binout):
 
 
 def run(sim, binpath, so_topo, su_topo, n, groups=None, reduce_compute=0,
-        timeout=300):
+        timeout=300, intranode_linkspeed_mbps=3600000):
+    # -end is parsed in MICROSECONDS; -intranode_linkspeed in Mbps (see GOTCHA above).
     cmd = [sim, "-goal", binpath, "-nodes", str(n), "-num_gpus_per_node", str(n),
            "-topo", so_topo, "-intranode_topo", su_topo,
+           "-intranode_linkspeed", str(intranode_linkspeed_mbps),
            "-end", "100000000", "-sender_cc_only",
            "-intranode_queue_type", "lossless_input"]
     if groups:
@@ -161,6 +175,13 @@ def main():
     ap.add_argument("--sizes", default="4096,16384,65536,262144,1048576,4194304")
     ap.add_argument("--reduce-compute", type=int, default=100,
                     help="INC-only in-switch aggregation latency (ns)")
+    ap.add_argument("--timeout", type=int, default=300,
+                    help="per-run wall-clock timeout (s); raise for very large payloads")
+    ap.add_argument("--intranode-linkspeed", type=int, default=3600000,
+                    help="scale-up per-GPU NIC injection rate in Mbps (see GOTCHA in the "
+                         "module docstring); MUST match the .topo fabric rate — the engine "
+                         "default (200000 = 200 Gbps COPY_ENG) silently caps p2p arms at "
+                         "5%% of a 3600 Gbps fabric")
     ap.add_argument("--tmpdir", default="/tmp/pcm_ar_ab")
     ap.add_argument("--out", default="results.csv")
     args = ap.parse_args()
@@ -188,8 +209,12 @@ def main():
         compile_goal(args.writer, ring_goal, ring_bin)
 
         ifin, idur, idrop, ist = run(args.sim, inc_bin, args.so_topo, args.su_topo,
-                                     n, groups=grp, reduce_compute=args.reduce_compute)
-        rfin, _, rdrop, rst = run(args.sim, ring_bin, args.so_topo, args.su_topo, n)
+                                     n, groups=grp, reduce_compute=args.reduce_compute,
+                                     timeout=args.timeout,
+                                     intranode_linkspeed_mbps=args.intranode_linkspeed)
+        rfin, _, rdrop, rst = run(args.sim, ring_bin, args.so_topo, args.su_topo, n,
+                                  timeout=args.timeout,
+                                  intranode_linkspeed_mbps=args.intranode_linkspeed)
 
         inc_ns = ifin - TAIL_NS if ifin else None
         ring_ns = rfin - TAIL_NS if rfin else None
@@ -216,6 +241,7 @@ def main():
             "su_topo": os.path.basename(args.su_topo),
             "analytic_rate_bns": args.analytic_rate_bns,
             "hop_oneway_ns": args.hop_oneway_ns,
+            "intranode_linkspeed_mbps": args.intranode_linkspeed,
             "engine": "pcm-sdk",
         })
         print(f"{s:>10} {str(inc_ns):>10} {str(ring_ns):>10} "

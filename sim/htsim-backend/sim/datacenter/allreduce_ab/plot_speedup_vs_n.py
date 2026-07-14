@@ -3,10 +3,11 @@
 
 Reads results_vs_n_ext.csv: the single-switch scale-up crossbar swept in |G| = 2..72
 (radix == |G|; 72 = the NVL72-realistic single-switch ceiling), PLUS the 256-GPU point
-measured on the two-LEVEL scale-up fabric (the DGX H100 NVLink Switch System). The
-multi-domain simulator runs every point. The two-level point is drawn with OPEN markers
-past the single-switch ceiling to show INC's advantage still growing when the fabric
-gains a level.
+measured on the two-LEVEL scale-up fabric (the DGX H100 NVLink Switch System). Every
+point runs on the htsim_uec fork (-linkspeed passed explicitly); the multi-domain
+engine independently reproduces the crossbar curve (allreduce_ab_pcm/results_vs_n_pcm.csv).
+The two-level point is drawn with OPEN markers past the single-switch ceiling to show
+INC's advantage still growing when the fabric gains a level.
 
 One row of panels per message size:
   (left)  completion vs N -- INC (flat O(1) single-switch apex; steps up once at the
@@ -166,8 +167,8 @@ def main():
         _finish_axis(axS, xr, tr, "speedup over INC  (x)", f"INC speedup vs N  ({hb(s)}/rank)")
         axS.legend(fontsize=8, loc="upper left")
 
-    fig.suptitle("In-network vs point-to-point AllReduce scaling in |G| on the multi-domain "
-                 "simulator\nsingle-switch scale-up crossbar (radix=|G|, 2..72) + 256-GPU "
+    fig.suptitle("In-network vs point-to-point AllReduce scaling in |G| (htsim_uec fork)\n"
+                 "single-switch scale-up crossbar (radix=|G|, 2..72) + 256-GPU "
                  "two-level fabric (open markers); 3600 Gbps/port, 500 ns link + 300 ns switch",
                  fontsize=10.5)
     fig.tight_layout(rect=[0, 0, 1, 0.97])

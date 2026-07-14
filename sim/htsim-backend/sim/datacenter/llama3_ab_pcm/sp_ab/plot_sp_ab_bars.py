@@ -7,12 +7,16 @@ This is the within-rendering A/B at a glance: each pair is a controlled
 experiment (same trace, same engine, same topology; only the TP collectives
 move into the network).
 
+Numbers are the 2026-07-14 re-measurement with -intranode_linkspeed 3600000
+(NIC-rate fix; INC arms byte-identical, all baselines moved -- cf. README.md).
+
 Framing (cf. README.md): comparisons ACROSS a plain/SP pair of groups are
-cross-workload -- the SP rendering has ~2x TP collectives, a slower endpoint
-baseline and less elementwise compute -- so the 2.40 % -> 14.15 % jump at C3
-is NOT a like-for-like INC improvement; the like-for-like statement is that
-the gain survives the SP re-rendering in both regimes (2.40 vs 14.15 % at
-C3, 93.46 vs 93.68 % at C5).
+cross-workload -- the SP rendering has ~2x TP collectives, a different
+endpoint baseline and less elementwise compute -- so the -4.65 % -> +6.01 %
+flip at C3 is NOT a like-for-like INC improvement. The honest per-regime
+statements: at C3 (placeholder compute model) plain-TP INC is NEGATIVE
+(-4.65 %) and the SP re-rendering turns it positive (+6.01 %); at C5 the
+gain rises under SP (+76.17 -> +88.14 %).
 """
 import argparse
 import csv
@@ -77,10 +81,12 @@ def main():
         ax.annotate(ht(d["inc"]), (bi.get_x() + bi.get_width() / 2, d["inc"]),
                     textcoords="offset points", xytext=(4, 3),
                     ha="center", va="bottom", fontsize=7)
-        ax.annotate(f"−{d['gain']:.2f} %", (xi, d["base"]),
+        # signed INC gain (positive = INC faster); anchor above the taller bar
+        gain_col = C_INC if d["gain"] >= 0 else "#b2182b"
+        ax.annotate(f"{d['gain']:+.2f} %", (xi, max(d["base"], d["inc"])),
                     textcoords="offset points", xytext=(0, 16),
                     ha="center", va="bottom", fontsize=9.5,
-                    fontweight="bold", color=C_INC)
+                    fontweight="bold", color=gain_col)
 
     ax.set_yscale("log")
     ax.set_ylim(4e4, 1.2e9)
@@ -96,7 +102,8 @@ def main():
 
     ax.annotate("each pair = controlled within-rendering A/B; plain → SP is a "
                 "workload change (2× TP collectives,\ndifferent baseline and "
-                "compute) — the 2.40 → 14.15 % jump at C3 is not like-for-like",
+                "compute) — the −4.65 → +6.01 % flip at C3 is not "
+                "like-for-like (placeholder compute model)",
                 xy=(0.5, -0.24), xycoords="axes fraction",
                 ha="center", va="top", fontsize=7.5, color="#555555")
 

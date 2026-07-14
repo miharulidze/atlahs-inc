@@ -1,0 +1,2 @@
+config,tp,dp,pp,gpus_per_node,num_layers,seq_len,hidden_size,n_tp_groups,tp_group_size,n_tp_collectives,coll_bytes,per_coll_payload_bytes,inc_send_bytes,baseline_send_bytes,tp_comm_share,baseline_ns,inc_ns,delta_ns,gain_pct,allreduce_complete,allreduce_expected,dropped_packets,lossless_headroom_warnings,baseline_wall_s,inc_wall_s,status,intranode_linkspeed_mbps
+C3-8L,4,2,2,4,8,512,4096,4,4,128,2147483648,4194304,62411243520,65632468992,0.033264,905536503,822841682,82694821,9.1321,128,128,0,0,,,ok,3600000

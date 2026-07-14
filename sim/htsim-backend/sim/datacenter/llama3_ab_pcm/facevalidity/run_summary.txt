@@ -1,0 +1,154 @@
+FACE-VALIDITY end-to-end A/B: does the D2 characterization hold at a more
+realistic block scale?  (2026-07-13; RE-MEASURED 2026-07-14 after the NIC
+injection-rate fix -- see MEASUREMENT FIX below.  All RESULTS numbers in this
+file are the 2026-07-14 re-run.)
+
+QUESTION
+  D2 (../tp_share_sweep) established that end-to-end INC gain is critical-path
+  structural (sits ABOVE the byte-share Amdahl ceiling for pipeline-parallel
+  configs), measured on a 2-layer/seq-128 TOY block.  [2026-07-14 caveat: the
+  re-measured plain-C3 toy point is now NEGATIVE under the placeholder compute
+  model -- see VERDICT and ../tp_share_sweep.]  This check scales the C3
+  anchor's GEOMETRY only -- Llama3 block num_layers 2->8, seq_len 128->512,
+  hidden_size 4096 and batch 1 unchanged -- keeping C3's parallelism (TP4/DP2/
+  PP2, 16 ranks, plain Megatron TP), the compute cost model, engine, topos and
+  flags identical.  A pure geometry-scaling check on the EXISTING generator +
+  engine.  Primary config ran; no fallback needed.
+
+MEASUREMENT FIX (verified in pcm-sdk source 2026-07-13, fixed 2026-07-14)
+  The pcm-sdk engine takes the per-GPU scale-up NIC injection rate from
+  -intranode_linkspeed (Mbps), NOT from the .topo file (which sets only the
+  fabric pipes).  The flag was never passed in the 2026-07-13 runs, so it
+  defaulted to COPY_ENG = 200,000 Mbps = 200 Gbps: UecNIC::startSending held
+  the port 166 ns per 4,150 B frame = 24.61 payload-B/ns = 5.0% of the
+  fabric's realised 492.3 B/ns.  Every p2p arm whose per-send block exceeded
+  one frame (4,086 B payload) was silently NIC-capped (this trace's decomposed
+  TP sends are 1-2 MiB); the ACK-less INC datapath bypasses the NIC pacer and
+  was NEVER capped -- the INC makespan reproduces BYTE-IDENTICALLY with the
+  flag.  Re-run 2026-07-14 with -intranode_linkspeed 3600000: the NIC paces at
+  9.22 ns/frame = 443.1 payload-B/ns (Mbps arithmetic; the fabric pipes'
+  2 ps/B quantisation realises 492.3 B/ns).
+
+CONFIG ACTUALLY RUN
+  parallelism : TP=4, DP=2, PP=2  (16 ranks = 4 nodes x 4 GPUs, plain Megatron)
+  block       : num_layers=8 (4 per PP stage), seq_len=512, hidden_size=4096,
+                batch_size=1, 2 training iterations
+  generator   : nccl_generator_v2 @ simple-sim-coll, simple_sim llama3 pipeline;
+                Llama3Config(num_layers=8, seq_len=512) edited in
+                simple_sim/llama3_training.py, both arms rendered, file restored
+                (git checkout --; generator tree left clean).
+  compile     : ~/CLionProjects/LogGOPSim-1.1-coll/txt2bin -i X.goal -o X.bin
+  engine      : pcm-sdk two-tier htsim_flow_app_atlahs, branch wanja/inc-port
+                @ 4d4361b, RUN-ONLY (untouched); re-run 2026-07-14.
+  scale-out   : 16-host tree16.topo (lossy composite, 100 Gbps)
+  scale-up    : per-node single-switch NVLink-class crossbar
+                scaleup_single_switch_4_3600Gbps.topo, lossless_input (PFC),
+                per-GPU NIC injection -intranode_linkspeed 3600000 (the fix)
+  groups      : generator emitted 4 node-contained TP groups (global ranks
+                identical to the committed C3 2-layer groups); converted to
+                node-local host ids (rank % 4) after node-containment assert.
+
+INVOCATIONS  (exact, 2026-07-14 re-run; -end 1e11 UNCHANGED = non-truncating
+              safety cap for the ~4x-larger makespan -- both arms terminate
+              NATURALLY far below it, see below)
+
+  baseline (decomposed):
+    htsim_flow_app_atlahs -goal llama3.bin -nodes 16 -num_gpus_per_node 4 \
+      -topo tree16.topo -intranode_topo scaleup_single_switch_4_3600Gbps.topo \
+      -end 100000000000 -sender_cc_only -intranode_queue_type lossless_input \
+      -intranode_linkspeed 3600000
+
+  INC (first-class TP colls):
+    htsim_flow_app_atlahs -goal llama3_inc.bin -nodes 16 -num_gpus_per_node 4 \
+      -topo tree16.topo -intranode_topo scaleup_single_switch_4_3600Gbps.topo \
+      -end 100000000000 -sender_cc_only -intranode_queue_type lossless_input \
+      -groups llama3_inc_local.groups -reduce_compute_latency 100 \
+      -intranode_linkspeed 3600000
+
+RESULTS  (re-measured 2026-07-14, pcm-sdk run-only, flag=3600000)
+  arm                    makespan (ns)    collectives          drops
+  decomposed baseline     905,536,503     0 (all p2p)            0
+  INC (TP AllReduce)      822,841,682     128/128 ALLREDUCE_CMPL 0
+  delta                   -82,694,821                            --
+  GAIN = 9.1321 % faster / iteration          (INC < baseline: YES)
+
+  Old capped-NIC 2026-07-13 numbers for the record: baseline 971,897,616,
+  gain 15.3366% -- the baseline was NIC-capped and thus inflated; the INC
+  makespan (822,841,682) is byte-identical with and without the flag, as
+  predicted by the ACK-less-datapath analysis.  Wall clock was ~31/~33 s per
+  arm on 2026-07-13; re-run wall times were not re-recorded.
+
+  Both arms: "LGS terminates / Finished all" (natural termination),
+  makespan << 1e11 cap => NO truncation; 0 dropped packets and 0
+  "LOSSLESS not working" headroom warnings in either arm/tier.
+
+  Collective count self-consistency:
+    128 distinct AllReduce instances = 4 node-groups x (4 layers/stage x
+    2 colls/layer x 2 passes[f+b] x 2 iterations = 32 per group).  Exactly 4x
+    the C3 2-layer anchor's 32 (matches the 4x layer increase).  The op_ids
+    confirm the (group<<16)|k packing (0, 65536, 65537, ...).
+
+TP COMMUNICATION SHARE (INC .goal, coll / (coll + send), all ranks summed;
+                        trace property, UNCHANGED by the NIC fix)
+    coll_bytes            = 2,147,483,648   (128 x 4 MiB, |G|=4; payload
+                             S = 512x4096xfp16 = 4 MiB, 4x the 2L's 1 MiB)
+    inc_send_bytes        = 62,411,243,520
+    baseline_send_bytes   = 65,632,468,992
+    tp_comm_share         = 0.033264  (3.33 %)
+  vs C3 2-layer anchor: coll x16 (4x layers x 4x payload), send x4 (weights
+  scale with layers, not seq) => share 0.85% -> 3.33% (x3.9).
+
+SAME-ENGINE ANCHOR REPRODUCTION (robustness)
+  The committed C3 2-layer bins (../tp_share_sweep/C3) re-run on THIS engine
+  (@4d4361b) with the fixed flag give baseline 219,352,385 / inc 229,541,927 /
+  -4.6453% / 32 colls / 0 drops -- BYTE-IDENTICAL to the 2026-07-14
+  re-measured sweep row (and independently reproduced byte-identically by the
+  computemodel/ placebo arms).  So the engine has not drifted and the
+  C3-2L -> C3-8L comparison below is airtight same-engine.  Note the OLD
+  anchor (235,177,505 / +2.3963%) is no longer reproduced -- it was itself a
+  capped-NIC artifact, not engine drift.
+
+GAIN DECOMPOSITION  (rewritten 2026-07-14)
+  The old multiplicative decomposition (gain x6.40 = share x3.90 x residual
+  x1.64) is VOID at the fixed NIC: the 2-layer plain-C3 gain is NEGATIVE
+  (-4.6453%) under the placeholder compute model, so gain ratios against it
+  are meaningless.  What survives:
+    share 0.853% -> 3.326%  (x3.90)  -- trace property, unchanged
+    gain  -4.645% -> +9.132%         -- the SIGN FLIPS between geometries
+  The 8-layer point on its own sits ~2.7x ABOVE the byte-share Amdahl ceiling
+  (9.13% gain at 3.33% share; the old "4.6x" was against the capped baseline).
+
+VERDICT  (rewritten 2026-07-14; the 2026-07-13 verdict overstated)
+  At the fixed NIC the 8-layer/seq-512 C3 point still shows a solid positive
+  end-to-end gain (+9.13%) sitting ~2.7x above the byte-share Amdahl ceiling,
+  so the critical-path-structural character of the gain survives at the
+  realistic block geometry.  But the 2-layer C3 toy anchor FLIPS NEGATIVE
+  (-4.6453%): the fixed-NIC plain-C3 baseline (219,352,385 ns) is FASTER than
+  the INC arm (229,541,927 ns, unchanged).  This is not the collective
+  datapath (per-op INC durations are 3.5-9 us; the INC arm's last collective
+  completes at 148.8 ms of its 229.5 ms makespan, and the ~81 ms coll-free
+  tail differs structurally from the baseline's schedule) -- a schedule/
+  congestion-structure effect, mechanism under investigation.  Under the
+  calibrated H100 roofline compute model the same 2-layer config gives
+  +8.8133% (see computemodel/), consistent with this 8-layer +9.1321% -- the
+  sign flip is specific to the near-free placeholder compute model.  So the
+  2026-07-13 chain "D2 holds and is reinforced via the 2L->8L comparison" no
+  longer stands as stated; the honest statement is: the positive, above-
+  ceiling gain holds at the realistic geometry (and at 2 layers under the
+  calibrated compute model), while the 2-layer near-free-compute toy point is
+  negative.
+
+ARTIFACTS (this dir)
+  plot_facevalidity.py                 generating script (/usr/bin/python3)
+  gain_vs_tp_share_facevalidity.{png,pdf}  overlay on the D2 scatter + curves
+                                       (regenerated 2026-07-14)
+  facevalidity_point.csv               the C3-8L datapoint (D2 schema + extras;
+                                       updated 2026-07-14)
+  llama3_inc.groups / _local.groups    emitted (global) + node-local groups
+  baseline.out / inc.out               engine stdout of the 2026-07-13
+                                       CAPPED-NIC runs (kept for provenance;
+                                       baseline makespan there is the old
+                                       971,897,616 -- superseded above)
+  baseline.status / inc.status         2026-07-13 start/exit unix-time stamps
+  Full goals/bins in session scratchpad facevalidity_work/ (goals+bins are
+  regenerable; .goal/.bin are gitignored in the generator).

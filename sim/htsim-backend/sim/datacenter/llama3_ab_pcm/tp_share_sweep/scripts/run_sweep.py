@@ -108,10 +108,15 @@ def txt2bin(goal, binout):
 
 
 def run_sim(binpath, gpn, groups=None, reduce_compute=0, out_prefix="run",
-            timeout=600):
+            timeout=600, intranode_linkspeed_mbps=3600000):
+    # GOTCHA: the .topo speed sets only the fabric pipes; the per-GPU NIC injection
+    # rate is -intranode_linkspeed (Mbps) and DEFAULTS to 200 Gbps (COPY_ENG), which
+    # silently caps any p2p arm whose per-send block exceeds one 4,150 B frame at
+    # ~24.6 payload-B/ns = 5% of the 3,600 Gbps fabric. Always pass it explicitly.
     cmd = [SIM, "-goal", binpath, "-nodes", "16",
            "-num_gpus_per_node", str(gpn),
            "-topo", SO_TOPO, "-intranode_topo", SU_TOPO[gpn],
+           "-intranode_linkspeed", str(intranode_linkspeed_mbps),
            "-end", "100000000", "-sender_cc_only",
            "-intranode_queue_type", "lossless_input"]
     if groups:

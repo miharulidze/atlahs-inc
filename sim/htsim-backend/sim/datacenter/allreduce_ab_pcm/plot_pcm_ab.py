@@ -1,40 +1,38 @@
 #!/usr/bin/env python3
-"""Plot the multi-domain (pcm-sdk) INC-vs-ring AllReduce A/B vs message size.
+"""Message-size AllReduce A/B on the multi-domain (pcm-sdk) simulator, |G|=72 only.
 
-Re-anchored 2026-07-13 on the NVL72-realistic radix-72 crossbar: |G|=72 is the headline,
-|G|=16 kept as the cross-engine anchor (INC @ 64 KiB = 1549 ns here vs 1542 ns on the
-htsim fork). Reads results_msgsweep_pcm.csv. Three curves per group: INC (solid), the
-measured GOAL ring (dashed; its level carries the per-step sender-ACK completion + CC
-confound, see the forensics section), and the analytic ideal ring (dotted; priced at the
-realised 492.3 B/ns) -- INC-vs-ideal is the honest, quotable spread. The warm-connection
-ring forensics arm is discussed at |G|=16 in the text and is omitted from this figure.
+The NVL72-realistic radix-72 crossbar swept 4.5 KiB -> 288 MiB (the SHARP hardware
+range) as a convergence check.
+  Left  : completion time vs payload -- INC (solid), measured ring (dashed), analytic
+          ideal ring (dotted; priced at the realised 492.3 B/ns).
+  Right : the quotable INC-vs-ideal-ring speedup, converging onto the horizontal
+          2(N-1)/N = 1.972x traffic bound.
+The |G|=16 cross-engine anchor is tabulated, not plotted (see the table).
+True numeric log-log payload axis; single human-readable ticks at the sampled sizes.
 """
 import argparse
 import csv
-from collections import defaultdict
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+C_INC = "#1b9e77"     # teal-green
+C_RING = "#d95f02"    # orange
+C_IDEAL = "#444444"   # grey (analytic reference)
+N_GROUP = 72
+TRAFFIC_BOUND = 2.0 * (N_GROUP - 1) / N_GROUP   # 1.9722
 
 
 def hb(n):
     n = int(n)
     if n >= 1000 * 1024:
         v = n / (1024 * 1024)
-        return f"{v:.0f}MiB" if abs(v - round(v)) < 0.05 else f"{v:.1f}MiB"
+        return f"{v:.0f} MiB" if abs(v - round(v)) < 0.05 else f"{v:.3g} MiB"
     if n >= 1024:
         v = n / 1024
-        return f"{v:.0f}KiB" if abs(v - round(v)) < 0.05 else f"{v:.1f}KiB"
-    return f"{n}B"
-
-
-# |G|=72 headline (NVL72-realistic); |G|=16 cross-engine anchor.
-STYLE = {
-    72: dict(color="#1b9e77", label="|G|=72  (NVL72-realistic headline)", lw=2.4, ms=7, z=3),
-    16: dict(color="#7570b3", label="|G|=16  (cross-engine anchor)", lw=1.6, ms=6, z=2),
-}
-DEFAULT = dict(color="#888888", lw=1.4, ms=5, z=1)
+        return f"{v:.0f} KiB" if abs(v - round(v)) < 0.05 else f"{v:.1f} KiB"
+    return f"{n} B"
 
 
 def main():
@@ -43,76 +41,57 @@ def main():
     ap.add_argument("--out", default="allreduce_ab_pcm")
     args = ap.parse_args()
 
-    by_g = defaultdict(list)
+    rows = []
     with open(args.csv) as f:
-        for row in csv.DictReader(f):
-            if not row["inc_ns"] or not row["ring_ns"]:
+        for r in csv.DictReader(f):
+            if int(r["group_size"]) != N_GROUP or not r["inc_ns"] or not r["ring_ns"]:
                 continue
-            by_g[int(row["group_size"])].append((
-                int(row["msg_bytes"]), int(row["inc_ns"]), int(row["ring_ns"]),
-                float(row["speedup"]),
-                float(row["ideal_ring_ns"]) if row.get("ideal_ring_ns") else None,
-                float(row["speedup_vs_ideal"]) if row.get("speedup_vs_ideal") else None))
-    for g in by_g:
-        by_g[g].sort()
+            rows.append((int(r["msg_bytes"]), int(r["inc_ns"]), int(r["ring_ns"]),
+                         float(r["ideal_ring_ns"]), float(r["speedup_vs_ideal"])))
+    rows.sort()
+    S = [r[0] for r in rows]
+    inc = [r[1] for r in rows]
+    ring = [r[2] for r in rows]
+    ideal = [r[3] for r in rows]
+    sp_ideal = [r[4] for r in rows]
 
-    gs = sorted(by_g)
-    all_sizes = sorted({r[0] for g in gs for r in by_g[g]})
+    fig, (axT, axS) = plt.subplots(1, 2, figsize=(13, 5))
 
-    def sty(g, k):
-        return STYLE.get(g, DEFAULT).get(k, DEFAULT.get(k))
+    # --- left: completion time, three arms ---
+    axT.plot(S, inc, "o-", color=C_INC, lw=2.2, ms=6, label="INC (in-network)")
+    axT.plot(S, ring, "s--", color=C_RING, lw=2.0, ms=6, alpha=0.9, label="measured ring")
+    axT.plot(S, ideal, "d:", color=C_IDEAL, lw=2.0, ms=6, label="ideal ring (analytic)")
+    axT.set_yscale("log")
+    axT.set_ylabel("completion time (ns)")
+    axT.set_title("Completion time vs payload")
+    axT.legend(fontsize=9, loc="lower right")
 
-    fig, (axT, axS) = plt.subplots(1, 2, figsize=(13.5, 5.4))
-    for g in gs:
-        rows = by_g[g]
-        sizes = [r[0] for r in rows]
-        inc = [r[1] for r in rows]
-        ring = [r[2] for r in rows]
-        spd = [r[3] for r in rows]
-        ideal = [r[4] for r in rows]
-        spd_i = [r[5] for r in rows]
-        c = sty(g, "color")
-        lab = STYLE.get(g, {}).get("label", f"|G|={g}")
-        axT.plot(sizes, inc, "o-", color=c, lw=sty(g, "lw"), ms=sty(g, "ms"),
-                 zorder=sty(g, "z"), label=f"INC  {lab}")
-        axT.plot(sizes, ring, "s--", color=c, alpha=0.6, lw=sty(g, "lw"),
-                 ms=sty(g, "ms"), zorder=sty(g, "z"), label=f"GOAL ring  {lab}")
-        if all(v is not None for v in ideal):
-            axT.plot(sizes, ideal, ":", color=c, lw=sty(g, "lw"), alpha=0.9,
-                     zorder=sty(g, "z"), label=f"ideal ring  {lab}")
-        axS.plot(sizes, spd, "s--", color=c, alpha=0.5, lw=sty(g, "lw"),
-                 ms=sty(g, "ms"), zorder=sty(g, "z"), label=f"vs GOAL ring  {lab}")
-        if all(v is not None for v in spd_i):
-            axS.plot(sizes, spd_i, "o-", color=c, lw=sty(g, "lw"), ms=sty(g, "ms"),
-                     zorder=sty(g, "z"), label=f"vs ideal ring  {lab} (quotable)")
+    # --- right: quotable INC-vs-ideal-ring speedup + traffic-bound asymptote ---
+    axS.plot(S, sp_ideal, "o-", color=C_INC, lw=2.2, ms=6, label="INC vs ideal ring")
+    axS.axhline(TRAFFIC_BOUND, color="k", lw=1.3, ls="--",
+                label=rf"traffic bound  $2(N{{-}}1)/N = {TRAFFIC_BOUND:.3f}\times$")
+    axS.set_yscale("log")
+    axS.set_ylabel(r"INC speedup vs ideal ring ($\times$)")
+    axS.set_title("Convergence to the traffic bound")
+    axS.legend(fontsize=9, loc="upper right")
 
     for ax in (axT, axS):
         ax.set_xscale("log", base=2)
-        ax.set_xlabel("AllReduce size (bytes/rank)")
-        ax.set_xticks(all_sizes)
-        ax.set_xticklabels([hb(s) for s in all_sizes], rotation=45, fontsize=7)
+        ax.set_xticks(S)
+        ax.set_xticklabels([hb(s) for s in S], rotation=45, ha="right", fontsize=8)
+        ax.set_xlabel("AllReduce payload (bytes/rank)")
         ax.grid(True, which="both", alpha=0.25)
 
-    axT.set_yscale("log")
-    axT.set_ylabel("completion time (ns)")
-    axT.set_title("Completion: INC (solid) vs GOAL ring (dashed) vs ideal ring (dotted)")
-    axT.legend(fontsize=6.5, ncol=2)
-
-    axS.set_yscale("log")
-    axS.set_ylabel("INC speedup  (x)")
-    axS.set_title("INC speedup vs message size (quotable = vs ideal ring)")
-    axS.axhline(1.0, color="k", lw=0.8, ls=":")
-    axS.legend(fontsize=7)
-
-    fig.suptitle("In-network vs point-to-point ring AllReduce vs message size on the "
-                 "multi-domain simulator\nsingle-switch scale-up crossbar (radix=|G|), "
-                 "lossless_input PFC, 3600 Gbps/port; INC charged 100 ns in-switch reduce; "
-                 "analytic ideal ring at the realised 492.3 B/ns",
+    fig.suptitle(r"In-network vs point-to-point AllReduce vs payload on the multi-domain "
+                 r"simulator ($|G|=72$)" "\n"
+                 "single-switch radix-72 scale-up crossbar, lossless_input PFC, 3600 Gbps/port, "
+                 "fabric-rate NIC injection; INC charged 100 ns reduce; ideal ring at the "
+                 "realised 492.3 B/ns",
                  fontsize=10)
-    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    fig.tight_layout(rect=[0, 0, 1, 0.93])
     for ext in ("png", "pdf"):
         fig.savefig(f"{args.out}.{ext}", dpi=140, bbox_inches="tight")
-    print(f"wrote {args.out}.png / .pdf  (|G|: {gs})")
+    print(f"wrote {args.out}.png / .pdf  ({len(rows)} points, |G|={N_GROUP})")
 
 
 if __name__ == "__main__":

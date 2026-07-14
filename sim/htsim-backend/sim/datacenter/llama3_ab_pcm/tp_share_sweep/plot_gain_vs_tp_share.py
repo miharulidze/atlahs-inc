@@ -8,18 +8,19 @@ communicated bytes in the INC arm's .goal that are TP-collective
 
 Reference curves:
   * Amdahl ceiling  gain = 100 * share            (S -> infinity)
-  * Amdahl          gain = 100 * share * (1-1/S)  with S = 15.3, the MEASURED
-    pure-TP end-to-end speedup of this very sweep (C5, share = 1) -- the same
-    engine's own bandwidth-regime speedup, so the curve passes through C5.
+  * Amdahl          gain = 100 * share * (1-1/S)  with S the MEASURED pure-TP
+    end-to-end speedup of this very sweep (C5, share = 1; 4.20 since the
+    2026-07-14 re-measurement) -- the same engine's own speedup, so the curve
+    passes through C5.
 
-The headline finding is the SCATTER around those curves: byte share alone does
-not predict the gain. C3 (PP=2) sits ~3x ABOVE the byte-share ceiling -- TP
-AllReduce latency is amplified through the pipeline dependency chain -- while
-C2 (DP=4-dominated iteration) sits ~6x below it (TP savings hidden under DP
-traffic off the critical path). What must an application look like to see the
-gain: its CRITICAL PATH must spend time in node-contained TP collectives;
-byte share is only a floor-level proxy because scale-up bytes are ~36x cheaper
-per byte than scale-out bytes (3600 vs 100 Gbps).
+Re-measured 2026-07-14 with -intranode_linkspeed 3600000 (the 2026-07-04
+numbers were NIC-capped at the 200 Gbps COPY_ENG default, which inflated every
+p2p baseline). Post-fix headline: under the placeholder compute model the
+realistic mixed-parallelism configs (C1/C2/C4, share < 1%) are within noise of
+zero, and C3 (PP=2) is NEGATIVE (-4.65%; open finding, mechanism under
+investigation -- +8.81% under the calibrated H100 roofline compute model).
+Only the pure-TP end (C5) retains a large placeholder-compute gain. The y-axis
+is symlog so the negative points are visible.
 """
 import argparse
 import csv
@@ -73,33 +74,37 @@ def main():
     ax.plot([d["share"] for d in rows], [d["gain"] for d in rows], "o",
             color=C_INC, ms=8, zorder=3, label="measured end-to-end gain")
 
-    off = {"C1": (-8, 6), "C2": (8, -12), "C3": (8, 2), "C4": (8, -12),
-           "C5": (-8, 8)}
-    ha = {"C5": "right", "C1": "right"}
+    off = {"C1": (-8, 6), "C2": (8, -12), "C3": (-8, -3), "C4": (8, -12),
+           "C5": (-10, -16)}
+    ha = {"C5": "right", "C1": "right", "C3": "right"}
     for d in rows:
         ax.annotate(d["label"], (d["share"], d["gain"]),
                     textcoords="offset points",
                     xytext=off.get(d["cfg"], (8, 2)),
                     ha=ha.get(d["cfg"], "left"), fontsize=8)
 
-    # the two structure-not-share callouts
+    # post-fix callouts (2026-07-14)
     c3 = next(d for d in rows if d["cfg"] == "C3")
-    ax.annotate("PP=2: pipeline-amplified\n(above byte-share ceiling)",
+    ax.annotate("PP=2: INC arm SLOWER under placeholder\ncompute (open finding; +8.81% under\nH100 roofline compute model)",
                 (c3["share"], c3["gain"]), textcoords="offset points",
-                xytext=(10, -26), fontsize=7.5, color="#7570b3")
+                xytext=(12, 2), fontsize=7.5, color="#7570b3")
     c2 = next(d for d in rows if d["cfg"] == "C2")
-    ax.annotate("DP-dominated iteration:\nTP savings hidden off critical path",
+    ax.annotate("realistic mixes (C1/C2/C4):\nwithin noise of zero",
                 (c2["share"], c2["gain"]), textcoords="offset points",
-                xytext=(30, 6), fontsize=7.5, color="#d95f02")
+                xytext=(30, 22), fontsize=7.5, color="#d95f02")
 
+    ax.axhline(0, color="#888888", lw=0.8, alpha=0.6)
     ax.set_xscale("log")
-    ax.set_yscale("log")
+    # symlog: C1/C3 gains are NEGATIVE since the NIC-cap fix
+    ax.set_yscale("symlog", linthresh=0.1)
     ax.set_xlabel("TP communication share of bytes  "
                   "(coll / (coll + send), INC-arm .goal)")
     ax.set_ylabel("end-to-end INC gain per iteration  (%)")
     ax.set_title("llama3 16-rank two-tier A/B: end-to-end INC gain vs TP share\n"
                  "scale-out tree16 (100 Gbps, lossy) + per-node single-switch "
-                 "scale-up (3600 Gbps, lossless PFC)", fontsize=10)
+                 "scale-up (3600 Gbps, lossless PFC)\n"
+                 "re-measured 2026-07-14 with -intranode_linkspeed 3600000 "
+                 "(placeholder compute model)", fontsize=9)
     ax.grid(True, which="both", alpha=0.25)
     ax.legend(fontsize=8, loc="upper left")
 

@@ -6,18 +6,23 @@ the same 5-config plain-TP scatter and Amdahl reference curves, plus the two
 sequence-parallel re-renderings (SP-C3, SP-C5) from ./results.csv as a second
 marker series, with arrows marking the C3->SP-C3 and C5->SP-C5 shifts.
 
+Numbers are the 2026-07-14 re-measurement with -intranode_linkspeed 3600000
+(NIC-rate fix; INC arms byte-identical, baselines moved -- cf. README.md).
+Gains can now be NEGATIVE (C1, C3 under the placeholder compute model), so
+the y axis is symlog (linear inside |gain| <= 1 %) with a zero line.
+
 Visual message: SP does not remove the INC opportunity -- it MOVES workloads
 up the TP-share axis (the same layers now emit ~2x TP collectives, all of
-which INC accelerates) and INC keeps paying. At the pure-TP end (C5,
-share = 1) the relative gain is preserved almost exactly (93.5 -> 93.7 %)
-even though the in-switch apex fusion of the monolithic AllReduce is lost:
-the endpoint baseline must run the doubled collective count too, so the
-RATIO survives the re-rendering.
+which INC accelerates) and INC keeps paying. At C3 the SP re-rendering flips
+the placeholder-compute config from -4.65 % to +6.01 %; at the pure-TP end
+(C5, share = 1) the gain rises (+76.17 -> +88.14 %): the ring-decomposed
+RS+AG endpoint baseline costs 2.8x the plain-AR baseline while INC pays only
+the 1.41x apex-fusion premium.
 
 Framing (cf. README.md): each point is a controlled within-rendering A/B;
 the C3 -> SP-C3 arrow is a WORKLOAD change (2x TP collectives on the same
-PP-amplified critical path, slower endpoint baseline, seq-sharded compute),
-not a single-variable delta.
+PP-amplified critical path, different endpoint baseline, seq-sharded
+compute), not a single-variable delta.
 """
 import argparse
 import csv
@@ -88,7 +93,7 @@ def main():
         ax.plot(shares, 100 * shares * (1 - 1 / s_meas), ":", color=C_IDEAL,
                 lw=1.2,
                 label=f"Amdahl  gain = share·(1−1/S),  "
-                      f"S = {s_meas:.1f} (measured, C5)")
+                      f"S = {s_meas:.2f} (measured, C5)")
 
     ax.plot([d["share"] for d in plain], [d["gain"] for d in plain], "o",
             color=C_INC, ms=8, zorder=3,
@@ -97,7 +102,7 @@ def main():
             color=C_SP, ms=8, zorder=4, mfc="none", mew=1.8,
             label="measured gain, SP rendering (ReduceScatter+AllGather)")
 
-    off = {"C1": (-8, 6), "C2": (8, -12), "C3": (-4, -14), "C4": (8, -12),
+    off = {"C1": (-8, 6), "C2": (8, 4), "C3": (-8, -3), "C4": (8, -14),
            "C5": (-12, -11), "SP-C3": (9, -3), "SP-C5": (-12, 3)}
     ha = {"C5": "right", "C1": "right", "SP-C5": "right", "C3": "right"}
     for d in plain + sp:
@@ -118,16 +123,18 @@ def main():
     ax.annotate("SP re-rendering: ~2×\n"
                 "TP collectives on the\n"
                 "same PP-amplified\n"
-                "critical path (2.40 →\n"
-                "14.15 %, not like-for-like)",
+                "critical path → flips C3\n"
+                "(−4.65 → +6.01 %,\n"
+                "not like-for-like)",
                 (0.0022, 11.0),
                 ha="left", va="center", fontsize=7.5, color=C_SP)
 
     c5 = next(d for d in plain if d["cfg"] == "C5")
     spc5 = next(d for d in sp if d["cfg"] == "SP-C5")
-    ax.annotate("C5 → SP-C5: share = 1 unchanged,\n"
-                "gain preserved (93.46 → 93.68 %)\n"
-                "despite losing apex fusion",
+    ax.annotate("C5 → SP-C5: share = 1 unchanged;\n"
+                "gain rises (76.17 → 88.14 %): ring\n"
+                "RS+AG baseline costs 2.8×, INC only\n"
+                "the 1.41× apex-fusion loss",
                 xy=(spc5["share"], spc5["gain"] * 0.80),
                 xytext=(spc5["share"] * 0.95, 17),
                 ha="right", va="top", fontsize=7.5, color=C_SP,
@@ -135,7 +142,11 @@ def main():
                                 shrinkB=2, connectionstyle="arc3,rad=-0.25"))
 
     ax.set_xscale("log")
-    ax.set_yscale("log")
+    # gains are negative at C1/C3 (placeholder compute model) post NIC-rate
+    # fix -- log y would silently drop them; symlog keeps the log character
+    ax.set_yscale("symlog", linthresh=1.0)
+    ax.set_ylim(-8, 300)
+    ax.axhline(0, color="#888888", lw=0.8, zorder=1)
     ax.set_xlabel("TP communication share of bytes  "
                   "(coll / (coll + send), INC-arm .goal)")
     ax.set_ylabel("end-to-end INC gain per iteration  (%)")
@@ -144,7 +155,7 @@ def main():
                  "scale-out tree16 (100 Gbps, lossy) + per-node single-switch "
                  "scale-up (3600 Gbps, lossless PFC)", fontsize=10)
     ax.grid(True, which="both", alpha=0.25)
-    ax.legend(fontsize=8, loc="upper left")
+    ax.legend(fontsize=8, loc="lower right")
 
     fig.tight_layout()
     for ext in ("png", "pdf"):

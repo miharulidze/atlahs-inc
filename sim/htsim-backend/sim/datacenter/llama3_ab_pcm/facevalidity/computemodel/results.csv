@@ -1,0 +1,5 @@
+model,arm,compute_model,makespan_ns,collectives,drops,total_calc_ns,calc_ns_per_iter,intranode_linkspeed_mbps
+placebo,baseline,"unset(1PFLOP/s,1PB/s)",219352385,0,0,1477024,738512,3600000
+placebo,inc,"unset(1PFLOP/s,1PB/s)",229541927,32,0,1477024,738512,3600000
+h100,baseline,989e12*0.45 / 3.35e12*0.70,245291887,0,0,28973712,14486856,3600000
+h100,inc,989e12*0.45 / 3.35e12*0.70,223673529,32,0,28973712,14486856,3600000
