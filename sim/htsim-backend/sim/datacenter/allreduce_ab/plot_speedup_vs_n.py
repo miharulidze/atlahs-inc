@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """[D3] Plot the INC-vs-ring-vs-recursive-doubling AllReduce A/B versus rank count N.
 
+2026-07-15 two-story split: this figure is the MEASURED story -- the INC series carries
+the synchronisation charge (inc_synced_ns: +2,600 ns crossbar / +5,800 ns two-level) and
+the analytic ideal ring is removed (the bound story lives in the message-size figure).
+
 Reads results_vs_n_ext.csv: the single-switch scale-up crossbar swept in |G| = 2..72
 (radix == |G|; 72 = the NVL72-realistic single-switch ceiling), PLUS the 256-GPU point
 measured on the two-LEVEL scale-up fabric (the DGX H100 NVLink Switch System). Every
@@ -82,10 +86,11 @@ def main():
                 "ring": fval(row, "ring_ns"),
                 "rdouble": fval(row, "rdouble_ns"),
                 "ideal": fval(row, "ideal_ring_ns"),
-                "sp_ring": fval(row, "speedup"),
-                "sp_ideal": fval(row, "speedup_vs_ideal"),
-                "sp_rdbl": fval(row, "speedup_rdouble"),
+                "incc": fval(row, "inc_synced_ns"),
             }
+            rec["sp_ring"] = rec["ring"] / rec["incc"] if rec["ring"] else None
+            rec["sp_rdbl"] = (rec["rdouble"] / rec["incc"]
+                              if rec["rdouble"] is not None else None)
             dest = tl if "twotier" in row.get("topo", "") else xbar
             dest[int(row["msg_bytes"])].append(rec)
     for d in (xbar, tl):
@@ -108,32 +113,29 @@ def main():
         ceiling = max(r["N"] for r in xr)           # single-switch ceiling (72)
 
         # ---------------- completion vs N ----------------
-        nX, vX = xs(xr, "inc")
-        axC.plot(nX, vX, "o-", color=C_INC, label="INC (in-network)")
+        nX, vX = xs(xr, "incc")
+        axC.plot(nX, vX, "o-", color=C_INC, label="INC, charged (+1 sync RTT)")
         nX, vX = xs(xr, "ring")
         axC.plot(nX, vX, "s-", color=C_RING, label="ring (p2p, measured)")
         nX, vX = xs(xr, "rdouble")
         axC.plot(nX, vX, "^-", color=C_RDBL, label="recursive-doubling (measured)")
-        nX, vX = xs(xr, "ideal")
-        axC.plot(nX, vX, "d--", color=C_IDEAL, alpha=0.8, label="ideal ring (analytic)")
-
         # two-level fabric point(s): open markers + dotted bridge from the ceiling
         for r in tr:
-            for key, col, mk in (("ring", C_RING, "s"), ("ideal", C_IDEAL, "d"),
-                                 ("rdouble", C_RDBL, "^"), ("inc", C_INC, "o")):
+            for key, col, mk in (("ring", C_RING, "s"),
+                                 ("rdouble", C_RDBL, "^"), ("incc", C_INC, "o")):
                 anchor = max((b for b in xr if b[key] is not None),
                              key=lambda b: b["N"], default=None)   # last measured point
                 if anchor is not None:
                     axC.plot([anchor["N"], r["N"]], [anchor[key], r[key]], ":",
                              color=col, alpha=0.55, lw=1.3)
                 axC.plot([r["N"]], [r[key]], mk, mfc="none", mec=col, ms=11, mew=2.0)
-            axC.annotate("INC apex\n+1 level", xy=(r["N"], r["inc"]),
+            axC.annotate("INC apex\n+1 level", xy=(r["N"], r["incc"]),
                          xytext=(-12, 26), textcoords="offset points", ha="right",
                          va="bottom", fontsize=7.5, color=C_INC,
                          arrowprops=dict(arrowstyle="->", color=C_INC, lw=1, alpha=0.8))
 
         axC.axvline(ceiling, color="k", lw=0.8, ls="--", alpha=0.5)
-        axC.annotate(" single-switch crossbar\n ceiling (NVL72)", xy=(ceiling, 0.02),
+        axC.annotate(" single-switch crossbar\n ceiling (72)", xy=(ceiling, 0.02),
                      xycoords=("data", "axes fraction"), fontsize=7, va="bottom",
                      ha="left", color="k", alpha=0.7)
         _finish_axis(axC, xr, tr, "completion time (ns)", f"Completion vs N  ({hb(s)}/rank)")
@@ -141,13 +143,11 @@ def main():
 
         # ---------------- speedup vs N ----------------
         nX, vX = xs(xr, "sp_rdbl")
-        axS.plot(nX, vX, "^-", color=C_RDBL, label="recursive-doubling / INC  (headline)")
+        axS.plot(nX, vX, "^-", color=C_RDBL, label="recursive-doubling / INC  (charged; headline)")
         nX, vX = xs(xr, "sp_ring")
-        axS.plot(nX, vX, "s-", color=C_RING, alpha=0.85, label="ring / INC  (measured, CC-confounded)")
-        nX, vX = xs(xr, "sp_ideal")
-        axS.plot(nX, vX, "d--", color=C_IDEAL, label="ideal-ring / INC  (CC-decontaminated)")
+        axS.plot(nX, vX, "s-", color=C_RING, alpha=0.85, label="ring / INC  (charged)")
         for r in tr:
-            for key, col, mk in (("sp_ring", C_RING, "s"), ("sp_ideal", C_IDEAL, "d"),
+            for key, col, mk in (("sp_ring", C_RING, "s"),
                                  ("sp_rdbl", C_RDBL, "^")):
                 anchor = max((b for b in xr if b[key] is not None),
                              key=lambda b: b["N"], default=None)   # last measured point
@@ -157,7 +157,7 @@ def main():
                 if r[key] is not None:
                     axS.plot([r["N"]], [r[key]], mk, mfc="none", mec=col, ms=11, mew=2.0)
             if r["sp_rdbl"] is not None:
-                axS.annotate(f"{r['sp_rdbl']:.0f}x vs RD\n(two-level, uncharged)",
+                axS.annotate(f"{r['sp_rdbl']:.1f}x vs RD\n(two-level, charged)",
                              xy=(r["N"], r["sp_rdbl"]), xytext=(-12, -30),
                              textcoords="offset points", ha="right", va="top",
                              fontsize=7.5, color=C_RDBL,
@@ -168,8 +168,9 @@ def main():
         axS.legend(fontsize=8, loc="upper left")
 
     fig.suptitle("In-network vs point-to-point AllReduce scaling in |G| (htsim_uec fork)\n"
-                 "single-switch scale-up crossbar (radix=|G|, 2..72) + 256-GPU "
-                 "two-level fabric (open markers); 3600 Gbps/port, 500 ns link + 300 ns switch",
+                 "single-switch scale-up crossbar (radix=|G|, 2..72) + 256-GPU two-level fabric "
+                 "(open markers); 3600 Gbps/port, 500 ns link + 300 ns switch;\n"
+                 "all series measured; INC charged +1 sync RTT (2,600 ns crossbar / 5,800 ns two-level)",
                  fontsize=10.5)
     fig.tight_layout(rect=[0, 0, 1, 0.97])
     for ext in ("png", "pdf"):
