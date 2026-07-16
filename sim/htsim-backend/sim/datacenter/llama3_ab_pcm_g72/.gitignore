@@ -1,0 +1,8 @@
+# regenerable trace payloads + raw sim logs (scripts/ regenerates everything;
+# .cmd files + results.csv + STALL_FINDING.md carry the provenance)
+traces/**/*.goal
+traces/**/*.bin
+traces/**/*.out
+traces/**/*.err
+traces/**/*.groups
+traces/**/inc_stalldbg.out.gz
