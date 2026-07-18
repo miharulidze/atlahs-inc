@@ -47,7 +47,9 @@ DROP = re.compile(r"drop arriving|drop last from queue|dropped packet|"
 
 
 def run_sim(binpath, gpn, out_prefix, groups=None, reduce_compute=0,
-            timeout=1800, intranode_linkspeed_mbps=3600000):
+            timeout=1800, intranode_linkspeed_mbps=4000000):
+    # 4000000 Mbps pins the NIC frame time (8.30 ns) to the pipes' 2 ps/B
+    # quantisation of 3,600 Gbps — one realised wire rate (492.3 B/ns) everywhere.
     # -end is in MICROSECONDS; -intranode_linkspeed in Mbps.
     cmd = [SIM, "-goal", binpath, "-nodes", "16",
            "-num_gpus_per_node", str(gpn),
@@ -129,7 +131,7 @@ def main():
             r["dropped_packets"] = base["drops"] + inc["drops"]
             r["lossless_headroom_warnings_inc_arm"] = inc["warns"]
             r["status"] = f"base={base['status']},inc={inc['status']}"
-            r["intranode_linkspeed_mbps"] = 3600000
+            r["intranode_linkspeed_mbps"] = 4000000
         rows.append(r)
     fields = list(rows[0].keys())
     if "intranode_linkspeed_mbps" not in fields:

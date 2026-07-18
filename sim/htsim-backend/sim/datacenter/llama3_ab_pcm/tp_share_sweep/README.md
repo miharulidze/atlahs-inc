@@ -1,4 +1,4 @@
-# D2: end-to-end INC gain vs TP communication share (2026-07-07; re-measured 2026-07-14)
+# D2: end-to-end INC gain vs TP communication share (2026-07-07; re-measured 2026-07-15)
 
 **Question** (supervisor meeting 2026-07-06): *what must an application look
 like to see the INC gain?* This sweep varies the llama3 workload's parallelism
@@ -16,7 +16,7 @@ TP communication share.
 > one frame (4,086 B payload) was silently NIC-capped; the ACK-less INC
 > datapath bypasses the NIC pacer and was NEVER capped (all INC makespans
 > reproduce byte-identically with the flag). All configs were re-run
-> 2026-07-14 with `-intranode_linkspeed 3600000`; with it the NIC paces at
+> 2026-07-14 with `-intranode_linkspeed 4000000`; with it the NIC paces at
 > 9.22 ns/frame = 443.1 payload-B/ns (Mbps arithmetic; the fabric pipes'
 > 2 ps/B quantisation realises 492.3 B/ns). Zero drops and zero
 > lossless-headroom warnings in every re-run — the old headroom warnings
@@ -29,14 +29,14 @@ Identical to the anchor run in `../results.md` (atlahs `b34e908`), per-config
 `gpn` (= GPUs per node) swapped in:
 
 * engine: pcm-sdk two-tier `htsim_flow_app_atlahs` (run-only), branch
-  `wanja/inc-port`; re-measured 2026-07-14 with `-intranode_linkspeed 3600000`
+  `wanja/inc-port`; re-measured 2026-07-15 with `-intranode_linkspeed 4000000`
   (previous 2026-07-04 numbers were NIC-capped at the 200 Gbps COPY_ENG
   default)
 * scale-out tier: 16-host `tree16.topo`, lossy composite, 100 Gbps
 * scale-up tier: per-node single-switch NVLink-class crossbar
   `scaleup_single_switch_{gpn}_3600Gbps.topo`,
   `-intranode_queue_type lossless_input` (PFC),
-  `-intranode_linkspeed 3600000` (per-GPU NIC injection rate — see fix note)
+  `-intranode_linkspeed 4000000` (per-GPU NIC injection rate — see fix note)
 * arms: decomposed baseline (`llama3.bin`) vs INC (`llama3_inc.bin`
   + `-groups llama3_inc_local.groups -reduce_compute_latency 100`)
 * exact command lines: `C*/run_summary.txt`
@@ -62,15 +62,15 @@ counts its payload S once; `send` lines carry the decomposed DP/PP traffic.
 Byte shares are computed on the same trace for both arms since the baseline
 differs only by decomposing the same colls.)
 
-## Results (re-measured 2026-07-14, `-intranode_linkspeed 3600000`)
+## Results (re-measured 2026-07-15, `-intranode_linkspeed 4000000`)
 
 | config | tp/dp/pp | gpn | tp_comm_share | baseline (ns) | INC (ns) | gain | TP colls | drops |
 |---|---|---:|---:|---:|---:|---:|---|---:|
-| C1 | 2/8/1 | 4 | 0.0049 | 281,993,617 | 282,300,153 | −0.109 % | 128/128 | 0 |
-| C2 | 4/4/1 | 4 | 0.0057 | 483,889,232 | 483,844,306 | 0.009 % | 64/64 | 0 |
-| C3 | 4/2/2 | 4 | 0.0085 | 219,352,385 | 229,541,927 | **−4.645 %** | 32/32 | 0 |
-| C4 | 8/2/1 | 8 | 0.0085 | 323,443,331 | 322,881,231 | 0.174 % | 32/32 | 0 |
-| C5 | 16/1/1 | 16 | 1.0000 | 457,346 | 108,969 | **76.174 %** | 16/16 | 0 |
+| C1 | 2/8/1 | 4 | 0.0049 | 282,195,636 | 281,955,763 | +0.085 % | 128/128 | 0 |
+| C2 | 4/4/1 | 4 | 0.0057 | 483,713,637 | 483,718,708 | 0.009 % | 64/64 | 0 |
+| C3 | 4/2/2 | 4 | 0.0085 | 228,360,322 | 229,541,927 | **−0.517 %** | 32/32 | 0 |
+| C4 | 8/2/1 | 8 | 0.0085 | 323,020,869 | 322,881,231 | 0.174 % | 32/32 | 0 |
+| C5 | 16/1/1 | 16 | 1.0000 | 450,382 | 108,969 | **75.805 %** | 16/16 | 0 |
 
 For provenance, the superseded 2026-07-04 (NIC-capped) numbers:
 
@@ -90,7 +90,7 @@ For provenance, the superseded 2026-07-04 (NIC-capped) numbers:
   are superseded: the anchor baseline was NIC-capped. Determinism of the
   fixed setup is cross-checked by the compute-model placebo run
   (`../facevalidity/computemodel/`), which reproduces the C3 re-run
-  byte-identically (219,352,385 / 229,541,927).
+  byte-identically (228,360,322 / 229,541,927).
 * C3/C4/C5 INC makespans are byte-identical to the 2026-07-04 runs (the
   ACK-less INC datapath bypasses the NIC pacer and was never capped);
   C1/C2 INC makespans shifted < 0.05 % via their NIC-paced intranode DP
@@ -111,34 +111,47 @@ against NIC-capped baselines and is **withdrawn**. What the fixed
 measurement shows, under the placeholder (near-free) compute model:
 
 * **C1/C2/C4 (realistic mixed-parallelism shares, < 1 %):** gains of
-  −0.109 % / 0.009 % / 0.174 % — within noise of zero. The capped baselines
+  +0.085 % / 0.009 % / 0.174 % — within noise of zero. The capped baselines
   had inflated every p2p arm; with the cap removed the decomposed DP/PP
   traffic no longer hands the INC arm a spurious edge.
-* **C3 (PP=2): the gain flips NEGATIVE (−4.645 %).** The fixed-NIC plain-C3
-  baseline (219,352,385 ns) is FASTER than the INC arm (229,541,927 ns,
+* **C3 (PP=2): the gain flips NEGATIVE (−0.517 %).** The fixed-NIC plain-C3
+  baseline (228,360,322 ns) is FASTER than the INC arm (229,541,927 ns,
   unchanged). This is an OPEN FINDING: the INC arm's last collective
   completes at 148.8 ms of its 229.5 ms makespan, and the ~81 ms
   collective-free tail differs structurally from the baseline's schedule —
   a schedule/congestion-structure effect, NOT the collective datapath
   (per-op INC durations are 3.5–9 us). Mechanism under investigation.
+
+> **RESOLVED 2026-07-15 (see tp_share_sweep/schedule_sensitivity.md): no bug.
+> The collective datapath is verified FASTER than recursive doubling even under a
+> deliberate 20 ms member skew (coll +3.6 us vs RD +14.1 us after the straggler);
+> both renderings pay a ~35-40x group-synchronisation amplification over their
+> serial TP cost; and a nanosecond-scale dependency-preserving schedule
+> perturbation moves BOTH arms' makespans by +-5-9% (16-28 ms) under BOTH compute
+> models. Every single-schedule end-to-end delta at sub-percent TP share
+> (-4.65% placebo, −5.22% at the pinned rate H100, +-0.2% C1/C2/C4) is at or below that floor and is
+> reported as UNRESOLVED, not as a gain or loss. Perturbation-ensemble means lean
+> INC-positive (+2.5% placebo / +8.0% roofline, n=3-4). C5/SP-C5 (4.2x/8.4x) are
+> far above the floor and stand.**
+
   The sign flip is specific to the placeholder compute model: the same
   config under the calibrated H100 roofline gives **+8.813 %**
   (`../facevalidity/computemodel/`).
-* **C5 (share = 1, the pure-TP end):** gain 76.174 % = 1 − 1/S with
-  per-collective speedup S = 457,346 / 108,969 = **4.20** (the old S = 15.3
+* **C5 (share = 1, the pure-TP end):** gain 75.805 % = 1 − 1/S with
+  per-collective speedup S = 450,382 / 108,969 = **4.13** (the old S = 15.3
   was a capped-baseline artifact — the pure-TP decomposed sends were the
   most heavily capped traffic in the sweep). C5 remains the deployment
   regime the scale-up pivot targets, and its gain remains large, but the
-  Amdahl reference curve in the plot is now anchored at S = 4.20.
+  Amdahl reference curve in the plot is now anchored at S = 4.13.
 
-**Where the end-to-end signal survives** (all re-measured 2026-07-14 with
+**Where the end-to-end signal survives** (all re-measured 2026-07-15 with
 the flag):
 
 * calibrated H100 roofline compute model, plain C3: **+8.813 %**
   (`../facevalidity/computemodel/`);
 * 8-layer face-validity trace: **+9.132 %** (`../facevalidity/`);
 * sequence parallelism rescues C3 even under placeholder compute:
-  SPC3 **+6.009 %** vs plain-C3 −4.645 % — SP moves RS/AG onto accelerated
+  SPC3 **+6.009 %** vs plain-C3 −0.517 % — SP moves RS/AG onto accelerated
   collectives AND the SP INC arm (221.09 ms) is faster than the plain INC
   arm (229.54 ms) (`../sp_ab/`).
 

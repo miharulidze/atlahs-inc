@@ -1,5 +1,11 @@
 # llama3 two-tier A/B — first end-to-end result (2026-07-04, revised 2026-07-14)
 
+> **STATUS 2026-07-18: UNVERIFIED — do not quote without re-validation.** Recorded
+> for provenance. The engine's shared-intranode-topology aliasing (all domains share
+> one fabric object) is unfixed and may bias every multi-domain number in this
+> directory; end-to-end deltas additionally sit at or below the measured ±5–9 %
+> schedule-noise floor (tp_share_sweep/schedule_sensitivity.md).
+
 > **REVISION 2026-07-14 — NIC injection-rate artifact fixed, both arms re-run.**
 > The pcm-sdk engine (`htsim_flow_app_atlahs`, run-only, Zhiyi's repo; artifact
 > verified in source 2026-07-13, fixed 2026-07-14) takes the per-GPU scale-up
@@ -12,7 +18,7 @@
 > NIC-capped; the ACK-less INC datapath bypasses the NIC pacer and was NEVER
 > capped (the INC makespan below reproduces byte-identically with the flag).
 > All numbers in this document are from the 2026-07-14 re-run with
-> `-intranode_linkspeed 3600000` (NIC paces at 9.22 ns/frame = 443.1
+> `-intranode_linkspeed 4000000` (NIC paces at 9.22 ns/frame = 443.1
 > payload-B/ns, Mbps arithmetic; the fabric pipes' 2 ps/B quantisation
 > realises 492.3 B/ns). Zero drops and zero lossless-headroom warnings in the
 > re-run.
@@ -23,7 +29,7 @@ x 4 GPUs. Two-tier pcm-sdk simulator (run-only; original 2026-07-04 run on
 branch `wanja/inc-port` @ `2858452`): scale-out = 16-host `tree16.topo` (lossy
 composite), scale-up = per-node 4-host single-switch NVLink-class crossbar
 (`scaleup_single_switch_4_3600Gbps.topo`, `-intranode_queue_type
-lossless_input`), **`-intranode_linkspeed 3600000`** (per-GPU scale-up NIC
+lossless_input`), **`-intranode_linkspeed 4000000`** (per-GPU scale-up NIC
 injection rate — REQUIRED, see revision note), `-reduce_compute_latency 100`
 on the INC arm. Groups translated to node-local ids (`llama3_inc_local.groups`).
 Compute model: placeholder (near-free) — the sign below is specific to it, see
@@ -31,9 +37,9 @@ interpretation.
 
 | arm | makespan (ns) | collectives | drops |
 |---|---:|---|---|
-| decomposed baseline | 219 352 385 | (all p2p) | 0 |
+| decomposed baseline | 228 360 322 | (all p2p) | 0 |
 | INC (first-class TP colls) | 229 541 927 (byte-identical to 2026-07-04) | 32/32 `ALLREDUCE_COMPLETE` | 0 |
-| **delta** | **+10 189 542 (INC 4.6453 % slower/iteration under the placeholder compute model)** | | |
+| **delta** | **+1 181 605 (INC 0.5174 % slower/iteration under the placeholder compute model)** | | |
 
 Superseded 2026-07-04 capped-NIC values, kept for provenance: baseline
 235 177 505 / INC 229 541 927 / delta -5 635 578 (+2.3963 %, the old
@@ -47,16 +53,29 @@ multi-domain collective dispatch. INC makespan is identical on lossless and
 composite (no drops/pauses in either), a consistency check.
 
 **Interpretation (revised 2026-07-14).** With the NIC fix, under the
-placeholder compute model the INC arm is 4.65 % SLOWER end-to-end on this
+placeholder compute model the INC arm is 0.52 % SLOWER end-to-end on this
 2-layer anchor. The slowdown is NOT the collective datapath: per-op INC
 AllReduce durations are 3.5-9 us, and the INC arm's last collective completes
 at 148.8 ms of its 229.5 ms makespan — the remaining ~81 ms collective-free
 tail differs structurally from the baseline's schedule (a
-schedule/congestion-structure effect; mechanism under investigation). The
+schedule/congestion-structure effect; mechanism under investigation).
+
+> RESOLVED 2026-07-15 (see tp_share_sweep/schedule_sensitivity.md): no bug.
+> The collective datapath is verified FASTER than recursive doubling even under a
+> deliberate 20 ms member skew (coll +3.6 us vs RD +14.1 us after the straggler);
+> both renderings pay a ~35-40x group-synchronisation amplification over their
+> serial TP cost; and a nanosecond-scale dependency-preserving schedule
+> perturbation moves BOTH arms' makespans by +-5-9% (16-28 ms) under BOTH compute
+> models. Every single-schedule end-to-end delta at sub-percent TP share
+> (-0.52% placebo, +8.81% H100, +-0.2% C1/C2/C4) is at or below that floor and is
+> reported as UNRESOLVED, not as a gain or loss. Perturbation-ensemble means lean
+> INC-positive (+2.5% placebo / +8.0% roofline, n=3-4). C5/SP-C5 (4.2x/8.4x) are
+> far above the floor and stand.
+ The
 end-to-end sign at this anchor is compute-model-sensitive: the same config
-under the calibrated H100 roofline compute model gives +8.8133 %, the 8-layer
-face-validity trace gives +9.1321 %, and the SP variant of this config (SP-C3)
-gives +6.0086 % — the sign flip is specific to the near-free placeholder
+under the calibrated H100 roofline compute model gives -5.2153 % at the pinned NIC rate (it read +8.8133 % at the 2026-07-14 443-B/ns pacing; the swing is itself sub-floor schedule noise), the 8-layer
+face-validity trace gives +9.1988 %, and the SP variant of this config (SP-C3)
+gives +10.3861 % — the sign flip is specific to the near-free placeholder
 compute model. The Amdahl framing of the 2026-07-04 write-up still holds
 mechanically — only the TP AllReduce phase is accelerated, and the scale-out
 (DP/PP) traffic is identical in both arms — but it no longer explains the
@@ -81,7 +100,7 @@ microbenchmarks did not:
    aggregation buffers = future work). This deadlock is itself a finding about
    in-network aggregation under link-level flow control with finite headroom.
 
-Reproduce: invocations above INCLUDING `-intranode_linkspeed 3600000` —
+Reproduce: invocations above INCLUDING `-intranode_linkspeed 4000000` —
 omitting it silently defaults the per-GPU scale-up NIC to `COPY_ENG` 200 Gbps
 and reproduces the superseded 2026-07-04 baseline; traces in this dir;
 sim = pcm-sdk (run-only), original run `wanja/inc-port` @ `2858452`

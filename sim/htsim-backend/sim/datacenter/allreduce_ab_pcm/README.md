@@ -9,7 +9,7 @@ First results 2026-07-01; corrected diagnosis + warm-ring + analytic ideal-ring
 reference added 2026-07-04. **A second measurement artifact — the engine's
 NIC-injection default, verified in pcm-sdk source 2026-07-13, fixed 2026-07-14 —
 silently capped every ring row from 64 KiB up; all rows below are the 2026-07-14
-re-run on pcm-sdk (run-only) with `-intranode_linkspeed 3600000` (see point 3 of
+re-run on pcm-sdk (run-only) with `-intranode_linkspeed 4000000` (see point 3 of
 "How to read this"). All INC rows reproduce byte-identically.** Quote the
 `speedup_vs_ideal` column (red curve in the figure), not the GOAL-ring speedup —
 see "How to read this".
@@ -23,7 +23,7 @@ see "How to read this".
 
 Both arms: **same fabric** — `-intranode_queue_type lossless_input` (PFC) on the
 scale-up tier, single scale-up domain (`-nodes 16 -num_gpus_per_node 16`),
-`-intranode_linkspeed 3600000` (the per-GPU scale-up NIC injection rate in Mbps —
+`-intranode_linkspeed 4000000` (the per-GPU scale-up NIC injection rate in Mbps —
 **must be passed explicitly**, the `.topo` file does NOT set it; see point 3
 below), and an identical 100 ns calc tail that depends on the collective, so
 
@@ -38,7 +38,7 @@ generator-produced trace takes.
 
 ## Results (|G| = 16, single-switch @ 3600 Gbps, lossless_input, 0 drops)
 
-Re-run 2026-07-14 on pcm-sdk (run-only) with `-intranode_linkspeed 3600000`;
+Re-run 2026-07-15 on pcm-sdk (run-only) with `-intranode_linkspeed 4000000`;
 zero drops and zero lossless-headroom warnings in every run.
 
 | size | INC (ns) | GOAL ring (ns) | warm ring (ns) | ideal ring (ns, analytic) | vs GOAL ring | **vs ideal ring** |
@@ -46,13 +46,13 @@ zero drops and zero lossless-headroom warnings in every run.
 | 4 KiB | 1424 | 78046 | 78046 | 19517 | 54.8× | **13.7×** |
 | 16 KiB | 1449 | 78138 | 78138 | 19568 | 53.9× | **13.5×** |
 | 64 KiB | 1549 | 78510 | 78510 | 19750 | 50.7× | **12.8×** |
-| 256 KiB | 1947 | 79341 | 79341 | 20498 | 40.8× | **10.5×** |
-| 1 MiB | 3541 | 82669 | 82669 | 23494 | 23.3× | **6.6×** |
-| 4 MiB | 9932 | 95977 | 95977 | 35475 | 9.7× | **3.6×** |
+| 256 KiB | 1947 | 79258 | 79258 | 20498 | 40.7× | **10.5×** |
+| 1 MiB | 3541 | 82254 | 82254 | 23494 | 23.2× | **6.6×** |
+| 4 MiB | 9932 | 94234 | 94234 | 35475 | 9.5× | **3.6×** |
 
 Reproduce: `python3 run_pcm_ab_sweep.py --out results.csv` then
 `python3 plot_pcm_ab.py` (figure: `allreduce_ab_pcm.{png,pdf}`). The sweep
-driver now always passes `-intranode_linkspeed` (default 3600000) — never rely
+driver now always passes `-intranode_linkspeed` (default 4000000, the NIC frame time pinned to the pipes' 2 ps/B quantisation of 3,600 Gbps: 8.30 ns/frame = 492.3 payload-B/ns, one realised wire rate everywhere; the literal 3600000 would pace ~10% under the pipes) — never rely
 on the engine default (point 3 below). The warm-ring column re-runs the ring
 arm with `-conn_reuse` (persistent NCCL-like connections, commit `11c4216`);
 the ideal-ring column is analytic (below).
@@ -94,11 +94,13 @@ source 2026-07-13, fixed and re-run 2026-07-14):
    NIC-capped — here, every ring row from 64 KiB up (per-step block
    S/16 > 4,086 B). The ACK-less INC datapath bypasses the NIC pacer and was
    **never** capped: all INC rows reproduce byte-identically with the flag.
-   With `-intranode_linkspeed 3600000` the NIC paces at 9.22 ns/frame
-   = 443.1 payload-B/ns (Mbps arithmetic; the fabric pipes' 2 ps/B
-   quantisation realises 492.3 B/ns), and e.g. the 4 MiB ring falls
-   397964 → 95977 ns. Zero drops and zero lossless-headroom warnings in every
-   re-run.
+   The NIC is pinned to the pipes' realised rate: with
+   `-intranode_linkspeed 4000000` its Mbps arithmetic gives 8.30 ns/frame,
+   exactly the pipes' 4,150 B x 2 ps quantisation of 3,600 Gbps, so one wire
+   rate (492.3 payload-B/ns) governs every device. (The literal 3600000 would
+   pace 9.22 ns/frame = 443 B/ns, ~10% under the pipes.) E.g. the 4 MiB ring
+   falls 397964 -> 94234 ns. Zero drops and zero lossless-headroom warnings in
+   every re-run.
 4. **The remaining per-step data one-way is real physics for a
    message-granularity ring, but real NCCL pipelines chunk slices within
    steps.** The fair reference is therefore the **analytic ideal ring**

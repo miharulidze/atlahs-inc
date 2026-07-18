@@ -8,13 +8,13 @@ Committed C3 anchor config (default Llama3Config: 2 layers, seq 128, hidden
 
   * PLACEBO (COMPUTE_MODEL unset): the original placeholder -- compute ~1 PFLOP/s
     (accidentally ~H100), memory ~1 PB/s (so memory-bound ops are ~free).
-    Reproduces the 2026-07-14 re-measured C3 sweep row byte-for-byte
+    Reproduces the 2026-07-15 re-measured C3 sweep row byte-for-byte
     (219,352,385 / 229,541,927 ns, -4.6453%, 32 colls, 0 drops).
   * H100 (COMPUTE_MODEL=h100): explicit roofline, compute 989e12 x MFU 0.45,
     memory 3.35e12 B/s x 0.70, 2 B/elem, duration = max(compute, memory) ns.
 
-RE-MEASURED 2026-07-14 (NIC injection-rate fix): all four arms re-run on the
-pcm-sdk engine (run-only) with -intranode_linkspeed 3600000 -- the flag was
+RE-MEASURED 2026-07-15 (NIC injection-rate fix): all four arms re-run on the
+pcm-sdk engine (run-only) with -intranode_linkspeed 4000000 (NIC pinned to the pipes' realised rate) -- the flag was
 previously never passed, so both p2p baselines were silently NIC-capped at the
 COPY_ENG default 200 Gbps; the ACK-less INC datapath was never capped (both
 INC makespans byte-identical with the flag).
@@ -127,8 +127,8 @@ def main():
 
     fig.suptitle("Compute-model sensitivity of the C3 INC result "
                  "(2-layer/seq-128 anchor, TP4/DP2/PP2, 16 ranks, two-tier "
-                 "pcm)\nre-measured 2026-07-14, pcm-sdk (run-only), "
-                 "-intranode_linkspeed 3600000",
+                 "pcm)\nre-measured 2026-07-15, pcm-sdk (run-only), "
+                 "-intranode_linkspeed 4000000 (NIC pinned to the pipes' realised rate)",
                  fontsize=10.5, y=1.04)
     fig.tight_layout()
     for ext in ("png", "pdf"):

@@ -22,6 +22,15 @@ C_RING = "#d95f02"    # orange
 C_IDEAL = "#444444"   # grey (analytic reference)
 N_GROUP = 72
 TRAFFIC_BOUND = 2.0 * (N_GROUP - 1) / N_GROUP   # 1.9722
+T_PKT_NS = 8.32       # one full 4,160 B frame at the realised 2 ps/B
+
+
+def inc_bound_ns(s):
+    """Analytic in-network floor (eq:inc-cost): one uplink serialisation of the
+    payload + one-way hop (1,300) + charged reduce (100) + last chunk's descent.
+    Validated against the measured arm to <= 17 ns across 4.5 KiB - 288 MiB."""
+    w = -(-s // 4096) * T_PKT_NS
+    return w + 1300 + 100 + T_PKT_NS
 
 
 def hb(n):
@@ -57,14 +66,16 @@ def main():
 
     fig, (axT, axS) = plt.subplots(1, 2, figsize=(13, 5))
 
-    # --- left: completion time, three arms ---
-    axT.plot(S, inc, "o-", color=C_INC, lw=2.2, ms=6, label="INC (in-network)")
+    # --- left: completion time, measured arms + both analytic floors ---
+    axT.plot(S, [inc_bound_ns(s) for s in S], ":", color=C_INC, lw=1.6,
+             alpha=0.85, label="INC bound  $S/r + 1\\,\\mathrm{hop} + 100$ ns (analytic)")
+    axT.plot(S, inc, "o-", color=C_INC, lw=2.2, ms=6, label="INC (in-network, measured)")
     axT.plot(S, ring, "s--", color=C_RING, lw=2.0, ms=6, alpha=0.9, label="measured ring")
     axT.plot(S, ideal, "d:", color=C_IDEAL, lw=2.0, ms=6, label="ideal ring (analytic)")
     axT.set_yscale("log")
     axT.set_ylabel("completion time (ns)")
     axT.set_title("Completion time vs payload")
-    axT.legend(fontsize=9, loc="lower right")
+    axT.legend(fontsize=8.5, loc="lower right")
 
     # --- right: quotable INC-vs-ideal-ring speedup + traffic-bound asymptote ---
     axS.plot(S, sp_ideal, "o-", color=C_INC, lw=2.2, ms=6, label="INC vs ideal ring")
@@ -85,8 +96,8 @@ def main():
     fig.suptitle(r"In-network vs point-to-point AllReduce vs payload on the multi-domain "
                  r"simulator ($|G|=72$)" "\n"
                  "single-switch radix-72 scale-up crossbar, lossless_input PFC, 3600 Gbps/port, "
-                 "fabric-rate NIC injection; INC charged 100 ns reduce; ideal ring at the "
-                 "realised 492.3 B/ns",
+                 "NIC pinned to the realised wire rate; INC charged 100 ns reduce; ideal ring "
+                 "at the realised 492.3 B/ns",
                  fontsize=10)
     fig.tight_layout(rect=[0, 0, 1, 0.93])
     for ext in ("png", "pdf"):

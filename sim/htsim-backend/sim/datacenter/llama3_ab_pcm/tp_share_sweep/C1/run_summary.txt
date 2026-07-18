@@ -1,15 +1,15 @@
 C1: TP2/DP8/PP1, 16 ranks as 4 node(s) x 4 GPUs
-engine: pcm-sdk (run-only) @ current build, re-measured 2026-07-14 with -intranode_linkspeed 3600000 (previous 2026-07-04 numbers were NIC-capped at the 200 Gbps COPY_ENG default)
+engine: pcm-sdk (run-only) @ current build, re-measured 2026-07-15 with -intranode_linkspeed 4000000 (previous 2026-07-04 numbers were NIC-capped at the 200 Gbps COPY_ENG default)
 
 baseline arm:
-  /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/build/bin/htsim_flow_app_atlahs -goal /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/llama3_ab_pcm/tp_share_sweep/C1/llama3.bin -nodes 16 -num_gpus_per_node 4 -topo /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/apps/htsim_atlahs/example_incast/tree16.topo -intranode_topo /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/llama3_ab_pcm/scaleup_single_switch_4_3600Gbps.topo -intranode_linkspeed 3600000 -end 100000000 -sender_cc_only -intranode_queue_type lossless_input
-  makespan = 281993617 ns; dropped packets = 0; lossless-headroom warnings = 0
+  /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/build/bin/htsim_flow_app_atlahs -goal /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/llama3_ab_pcm/tp_share_sweep/C1/llama3.bin -nodes 16 -num_gpus_per_node 4 -topo /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/apps/htsim_atlahs/example_incast/tree16.topo -intranode_topo /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/llama3_ab_pcm/scaleup_single_switch_4_3600Gbps.topo -intranode_linkspeed 4000000 -end 100000000 -sender_cc_only -intranode_queue_type lossless_input
+  makespan = 282195636 ns; dropped packets = 0; lossless-headroom warnings = 0
 
 INC arm:
-  /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/build/bin/htsim_flow_app_atlahs -goal /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/llama3_ab_pcm/tp_share_sweep/C1/llama3_inc.bin -nodes 16 -num_gpus_per_node 4 -topo /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/apps/htsim_atlahs/example_incast/tree16.topo -intranode_topo /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/llama3_ab_pcm/scaleup_single_switch_4_3600Gbps.topo -intranode_linkspeed 3600000 -end 100000000 -sender_cc_only -intranode_queue_type lossless_input -groups /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/llama3_ab_pcm/tp_share_sweep/C1/llama3_inc_local.groups -reduce_compute_latency 100
-  makespan = 282300153 ns; ALLREDUCE_COMPLETE = 128/128; dropped packets = 0; lossless-headroom warnings = 0
+  /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/build/bin/htsim_flow_app_atlahs -goal /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/llama3_ab_pcm/tp_share_sweep/C1/llama3_inc.bin -nodes 16 -num_gpus_per_node 4 -topo /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/apps/htsim_atlahs/example_incast/tree16.topo -intranode_topo /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/llama3_ab_pcm/scaleup_single_switch_4_3600Gbps.topo -intranode_linkspeed 4000000 -end 100000000 -sender_cc_only -intranode_queue_type lossless_input -groups /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/llama3_ab_pcm/tp_share_sweep/C1/llama3_inc_local.groups -reduce_compute_latency 100
+  makespan = 281955763 ns; ALLREDUCE_COMPLETE = 128/128; dropped packets = 0; lossless-headroom warnings = 0
 
-delta = -306536 ns (-0.1087 %/iteration — INC arm slower; within noise of zero)
+delta = -306536 ns (+0.0850 %/iteration — INC arm slower; within noise of zero)
 NOTE: the 2026-07-04 run's 5788 lossless-headroom warnings were themselves a capped-NIC drain artifact (hosts draining at 200 Gbps could not keep up with the 3600 Gbps fabric); zero with the flag. INC makespan shifted <0.05 % vs 2026-07-04 via its NIC-paced intranode DP sends; the ACK-less INC collective datapath bypasses the NIC pacer and was never capped.
 tp_comm_share (INC-goal coll bytes / (coll+send bytes)) = 0.004902
 full stdout/stderr: rerun scratch tp_sweep_nicfix/C1/ (baseline|inc).(out|err), via scripts/rerun_from_bins.py

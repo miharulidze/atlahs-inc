@@ -1,5 +1,10 @@
 # Realism ladder R2/R3 on the G72 suite (2026-07-15, sims in flight)
 
+> **STATUS 2026-07-18: UNVERIFIED — do not quote without re-validation.** Recorded
+> for provenance. The shared-intranode-topology aliasing (all 4 domains share one
+> fabric object) is unfixed and may bias the INC arm and the aggregation-pressure
+> signal in unquantified direction; see ../llama3_ab_pcm results.md OPEN item 1.
+
 Staged answer to "the anchor trace is 99% communication — can we create
 realistic traces?": four stages on ONE config (tp/dp/pp = 72/2/2, 288 ranks,
 4 domains — the C3/G4 analog), each isolating one variable. Driver:
@@ -50,11 +55,52 @@ G1's single-domain baseline: makespan reproduces byte-identically (6,039,542 ns)
   unquantified until the per-domain-topology fix lands (Zhiyi's repo,
   propose-then-approve).
 
-## Outputs (when the chain lands)
+## Results (complete, 2026-07-16; realism_results.csv at the suite root)
 
-`realism_results.csv` (suite root): per stage — TP byte share, per-rank calc
-ns/iteration, baseline/INC makespans, gain, compute share of the baseline
-makespan, and the schedule-noise spreads from 2 perturbed schedules per arm
-(units 200/400 ns; R0F/R1F = the same floors measured on G4/H4's own traces).
-The four-column thesis table (comm share / TP share / A/B delta / floor) is
-derived from it.
+Floors: 3 schedules per arm (unperturbed + p200 + p400), 9 A/B pairings per
+stage. All runs zero real drops (INC-arm `LOSSLESS not working` lines are
+held-packet PFC headroom warnings, not drops).
+
+| stage | trace | comm share (base) | TP byte share | gain worst/mean/best | base spread | INC spread | verdict |
+|---|---|---|---|---|---|---|---|
+| R0 = G4 | 2L/seq144, placebo | 99.997 % | 0.85 % | +6.2 / +10.6 / +14.9 % | 8.1 % | 1.9 % | at floor's edge |
+| R1 = H4 | 2L/seq144, h100 | 99.3 % | 0.85 % | −3.3 / +11.8 / +19.1 % | 23.2 % | 3.6 % | UNRESOLVED (sign flips) |
+| R2A | 4L/seq1152, h100 | 99.3 % | 6.4 % | **+12.2** / +16.5 / +21.4 % | 10.6 % | 0.9 % | resolved, all 9 positive |
+| R2 | 8L/seq2304, h100, 2.5 B params | 99.2 % | 12.0 % | **+12.8** / +17.2 / +20.9 % | 9.0 % | 1.1 % | resolved, all 9 positive |
+| R3 | = R2 bins @ 400 G scale-out | 97.1 % | 12.0 % | **+19.5** / +22.9 / +27.1 % | 9.0 % | 1.2 % | resolved, all 9 positive |
+
+Readings: the gain rises monotonically with realism (payloads, then scale-out
+bandwidth); the in-network arm is ~10x more schedule-stable than the ring
+baseline at every rung; R1's 23 % baseline spread is the definitive
+demonstration that toy-trace single-schedule deltas (H4's −0.8 %, the 16-rank
+C3) are draws, not measurements.
+
+## Skeleton decomposition (R2A): the gain, derived causally
+
+Re-run each arm with its TP operations neutralised into dependency-preserving
+no-ops (`coll` -> `calc 0` in the INC arm; the 288k intranode ring send/recvs
+-> `calc 0` in the baseline). TP-attributable cost = full − skeleton:
+
+| quantity | baseline (ring) | in-network |
+|---|---|---|
+| full makespan | 647.998 ms | 568.766 ms |
+| TP-neutralised skeleton | 482.691 ms | 473.756 ms |
+| **TP-attributable cost** | **165.31 ms (25.5 %)** | **95.01 ms (16.7 %)** |
+
+* Gain identity: Δ = (165.31 − 95.01) + (482.69 − 473.76) = 70.30 + 8.94 =
+  79.23 ms — **89 % of the measured gain is directly TP-attributable**; the
+  8.9 ms skeleton difference (1.9 %) is DAG microstructure, inside the floor.
+* Byte share understates TP's critical-path weight **4.0x** (6.4 % of bytes,
+  25.5 % of makespan) — the tier-bandwidth-ratio effect, now measured.
+* The naive serial saving (16 ops x (413 − 23.1) µs = 6.2 ms) is amplified
+  **11.3x** by convoy re-timing — the sync-amplification mechanism of
+  schedule_sensitivity.md, reproduced at 288 ranks.
+* The in-network arm's residual 95 ms is group-max straggler waiting: its
+  actual TP data movement is ~0.4 ms (per-op minima byte-exact against the
+  cost model: 22,980 ns measured vs 23.1 µs predicted at 10.6 MB; 44,543 ns
+  vs 44.6 µs at R3's 21.2 MB). INC removes 43 % of the baseline's TP
+  critical-path cost; the rest is workload physics no collective
+  implementation can remove (the result cannot exist before its slowest
+  member arrives).
+
+Skeleton artifacts: traces/R2A/{base,inc}_notp.{bin,out} (zero drops).

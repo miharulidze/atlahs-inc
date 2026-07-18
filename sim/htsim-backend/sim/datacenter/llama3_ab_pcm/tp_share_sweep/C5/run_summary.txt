@@ -1,15 +1,15 @@
 C5: TP16/DP1/PP1, 16 ranks as 1 node(s) x 16 GPUs
-engine: pcm-sdk (run-only) @ current build, re-measured 2026-07-14 with -intranode_linkspeed 3600000 (previous 2026-07-04 numbers were NIC-capped at the 200 Gbps COPY_ENG default)
+engine: pcm-sdk (run-only) @ current build, re-measured 2026-07-15 with -intranode_linkspeed 4000000 (previous 2026-07-04 numbers were NIC-capped at the 200 Gbps COPY_ENG default)
 
 baseline arm:
-  /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/build/bin/htsim_flow_app_atlahs -goal /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/llama3_ab_pcm/tp_share_sweep/C5/llama3.bin -nodes 16 -num_gpus_per_node 16 -topo /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/apps/htsim_atlahs/example_incast/tree16.topo -intranode_topo /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/topologies/scaleup_single_switch_16_3600Gbps.topo -intranode_linkspeed 3600000 -end 100000000 -sender_cc_only -intranode_queue_type lossless_input
-  makespan = 457346 ns; dropped packets = 0; lossless-headroom warnings = 0
+  /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/build/bin/htsim_flow_app_atlahs -goal /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/llama3_ab_pcm/tp_share_sweep/C5/llama3.bin -nodes 16 -num_gpus_per_node 16 -topo /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/apps/htsim_atlahs/example_incast/tree16.topo -intranode_topo /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/topologies/scaleup_single_switch_16_3600Gbps.topo -intranode_linkspeed 4000000 -end 100000000 -sender_cc_only -intranode_queue_type lossless_input
+  makespan = 450382 ns; dropped packets = 0; lossless-headroom warnings = 0
 
 INC arm:
-  /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/build/bin/htsim_flow_app_atlahs -goal /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/llama3_ab_pcm/tp_share_sweep/C5/llama3_inc.bin -nodes 16 -num_gpus_per_node 16 -topo /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/apps/htsim_atlahs/example_incast/tree16.topo -intranode_topo /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/topologies/scaleup_single_switch_16_3600Gbps.topo -intranode_linkspeed 3600000 -end 100000000 -sender_cc_only -intranode_queue_type lossless_input -groups /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/llama3_ab_pcm/tp_share_sweep/C5/llama3_inc_local.groups -reduce_compute_latency 100
+  /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/build/bin/htsim_flow_app_atlahs -goal /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/llama3_ab_pcm/tp_share_sweep/C5/llama3_inc.bin -nodes 16 -num_gpus_per_node 16 -topo /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/apps/htsim_atlahs/example_incast/tree16.topo -intranode_topo /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/topologies/scaleup_single_switch_16_3600Gbps.topo -intranode_linkspeed 4000000 -end 100000000 -sender_cc_only -intranode_queue_type lossless_input -groups /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/llama3_ab_pcm/tp_share_sweep/C5/llama3_inc_local.groups -reduce_compute_latency 100
   makespan = 108969 ns; ALLREDUCE_COMPLETE = 16/16; dropped packets = 0; lossless-headroom warnings = 0
 
-delta = 348377 ns (76.1736 % faster/iteration; per-collective speedup S = 457346/108969 = 4.20)
+delta = 348377 ns (75.8052 % faster/iteration; per-collective speedup S = 450382/108969 = 4.20)
 NOTE: the 2026-07-04 baseline (1665136 ns, 93.4558 % gain) was NIC-capped — the pure-TP decomposed sends exceed one 4150 B frame, so the baseline arm ran at 200 Gbps against the 3600 Gbps fabric. INC makespan byte-identical to the 2026-07-04 run (the ACK-less INC datapath bypasses the NIC pacer and was never capped).
 tp_comm_share (INC-goal coll bytes / (coll+send bytes)) = 1.000000
 full stdout/stderr: rerun scratch tp_sweep_nicfix/C5/ (baseline|inc).(out|err), via scripts/rerun_from_bins.py

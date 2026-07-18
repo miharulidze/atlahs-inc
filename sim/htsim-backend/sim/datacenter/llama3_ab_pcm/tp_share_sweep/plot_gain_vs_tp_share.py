@@ -10,10 +10,10 @@ Reference curves:
   * Amdahl ceiling  gain = 100 * share            (S -> infinity)
   * Amdahl          gain = 100 * share * (1-1/S)  with S the MEASURED pure-TP
     end-to-end speedup of this very sweep (C5, share = 1; 4.20 since the
-    2026-07-14 re-measurement) -- the same engine's own speedup, so the curve
+    2026-07-15 re-measurement) -- the same engine's own speedup, so the curve
     passes through C5.
 
-Re-measured 2026-07-14 with -intranode_linkspeed 3600000 (the 2026-07-04
+Re-measured 2026-07-15 with -intranode_linkspeed 4000000 (NIC pinned to the pipes' realised rate) (the 2026-07-04
 numbers were NIC-capped at the 200 Gbps COPY_ENG default, which inflated every
 p2p baseline). Post-fix headline: under the placeholder compute model the
 realistic mixed-parallelism configs (C1/C2/C4, share < 1%) are within noise of
@@ -83,15 +83,12 @@ def main():
                     xytext=off.get(d["cfg"], (8, 2)),
                     ha=ha.get(d["cfg"], "left"), fontsize=8)
 
-    # post-fix callouts (2026-07-14)
+    # post-fix callouts (2026-07-15): all sub-percent-share deltas sit below the
+    # measured +-5-9% single-schedule sensitivity floor (schedule_sensitivity.md)
     c3 = next(d for d in rows if d["cfg"] == "C3")
-    ax.annotate("PP=2: INC arm SLOWER under placeholder\ncompute (open finding; +8.81% under\nH100 roofline compute model)",
+    ax.annotate("sub-percent TP share (C1-C4):\nbelow the +-5-9% schedule-noise\nfloor, either sign unresolved\n(schedule_sensitivity.md)",
                 (c3["share"], c3["gain"]), textcoords="offset points",
                 xytext=(12, 2), fontsize=7.5, color="#7570b3")
-    c2 = next(d for d in rows if d["cfg"] == "C2")
-    ax.annotate("realistic mixes (C1/C2/C4):\nwithin noise of zero",
-                (c2["share"], c2["gain"]), textcoords="offset points",
-                xytext=(30, 22), fontsize=7.5, color="#d95f02")
 
     ax.axhline(0, color="#888888", lw=0.8, alpha=0.6)
     ax.set_xscale("log")
@@ -103,7 +100,7 @@ def main():
     ax.set_title("llama3 16-rank two-tier A/B: end-to-end INC gain vs TP share\n"
                  "scale-out tree16 (100 Gbps, lossy) + per-node single-switch "
                  "scale-up (3600 Gbps, lossless PFC)\n"
-                 "re-measured 2026-07-14 with -intranode_linkspeed 3600000 "
+                 "re-measured 2026-07-15 with -intranode_linkspeed 4000000 (NIC pinned to the pipes' realised rate) "
                  "(placeholder compute model)", fontsize=9)
     ax.grid(True, which="both", alpha=0.25)
     ax.legend(fontsize=8, loc="upper left")

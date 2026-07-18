@@ -1,7 +1,7 @@
 SP-C5: TP16(+SP)/DP1/PP1, 16 ranks as 1 node x 16 GPUs
 engine: pcm-sdk (run-only) wanja/inc-port @ 4d4361b (includes the reduce_scatter
 block-boundary chunking fix; 2858452 hangs on any RS coll)
-re-measured 2026-07-14 with -intranode_linkspeed 3600000 on BOTH arms: the engine
+re-measured 2026-07-15 with -intranode_linkspeed 4000000 on BOTH arms: the engine
 takes the per-GPU scale-up NIC injection rate from this flag (Mbps), NOT from the
 .topo (which sets only fabric pipes); unset it defaults to COPY_ENG = 200,000 Mbps
 = 200 Gbps = 5.0 % of the fabric's realised 492.3 B/ns, silently capping the p2p
@@ -12,19 +12,19 @@ render via tp_share_sweep/scripts/render_c5.py (dp=1 size-1-group guard),
 EMIT_INC unset / EMIT_INC=1 INC_CONTEXTS=tp,tp_sp
 
 baseline arm:
-  /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/build/bin/htsim_flow_app_atlahs -goal llama3.bin -nodes 16 -num_gpus_per_node 16 -topo /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/apps/htsim_atlahs/example_incast/tree16.topo -intranode_topo /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/topologies/scaleup_single_switch_16_3600Gbps.topo -end 100000000 -sender_cc_only -intranode_queue_type lossless_input -intranode_linkspeed 3600000
-  makespan = 1292541 ns; dropped packets = 0; lossless-headroom warnings = 0
+  /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/build/bin/htsim_flow_app_atlahs -goal llama3.bin -nodes 16 -num_gpus_per_node 16 -topo /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/apps/htsim_atlahs/example_incast/tree16.topo -intranode_topo /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/topologies/scaleup_single_switch_16_3600Gbps.topo -end 100000000 -sender_cc_only -intranode_queue_type lossless_input -intranode_linkspeed 4000000
+  makespan = 1286317 ns; dropped packets = 0; lossless-headroom warnings = 0
   (2026-07-10 capped-NIC value, superseded: 2423650 ns)
 
 INC arm:
-  /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/build/bin/htsim_flow_app_atlahs -goal llama3_inc.bin -nodes 16 -num_gpus_per_node 16 -topo /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/apps/htsim_atlahs/example_incast/tree16.topo -intranode_topo /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/topologies/scaleup_single_switch_16_3600Gbps.topo -end 100000000 -sender_cc_only -intranode_queue_type lossless_input -groups llama3_inc_local.groups -reduce_compute_latency 100 -intranode_linkspeed 3600000
+  /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/build/bin/htsim_flow_app_atlahs -goal llama3_inc.bin -nodes 16 -num_gpus_per_node 16 -topo /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/apps/htsim_atlahs/example_incast/tree16.topo -intranode_topo /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/topologies/scaleup_single_switch_16_3600Gbps.topo -end 100000000 -sender_cc_only -intranode_queue_type lossless_input -groups llama3_inc_local.groups -reduce_compute_latency 100 -intranode_linkspeed 4000000
   makespan = 153252 ns (byte-identical to 2026-07-10); coll completions = 30/30 (ALLGATHER 16/16, REDUCE_SCATTER 14/14); dropped packets = 0; lossless-headroom warnings = 0
   (the 2026-07-10 run's 54528 warnings were a drain artifact of the capped-NIC
   default: hosts draining at 200 Gbps could not keep up with the 3600 Gbps fabric;
   packets were held, not dropped, and the makespan was unaffected -- INC arm value
   identical with the flag)
 
-delta = 1139289 ns (88.1433 % faster/iteration)
+delta = 1133065 ns (88.0852 % faster/iteration)
 tp_comm_share = 1.0 (pure TP; dp=1/pp=1 comm is size-1 no-ops)
 in-repo cross-check (htsim_uec single-tier, same llama3_inc.bin + global .groups):
   16/16 ALLGATHER + 14/14 REDUCE_SCATTER, 0 drops, makespan 153168 ns

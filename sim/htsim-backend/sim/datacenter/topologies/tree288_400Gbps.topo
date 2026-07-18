@@ -1,0 +1,29 @@
+# tree288_400Gbps.topo — R3 realism stage: the tree288 scale-out tier at
+# 400 Gbps host links (H100-cluster class) instead of the 100 Gbps example
+# shape. Structure, latencies, and oversubscription identical to
+# tree288_100Gbps.topo so the R2->R3 delta isolates scale-out bandwidth:
+# 288 hosts as 12 ToRs x 24 hosts, 2:1 oversubscribed, 12 aggs (parser
+# invariant: T1 Radix_Down = #ToRs = 12).
+#
+# NIC note: at 400 Gbps the engine's Mbps arithmetic and the pipes' ps/B
+# quantisation agree exactly (4,150 B x 8 / 4e11 = 83.0 ns/frame = 4,150 x
+# 20 ps), so passing -linkspeed 400000 pins the scale-out NIC to the pipes
+# with zero residual. It MUST be passed: the COPY_ENG default (200,000 Mbps)
+# would silently cap a 400 Gbps fabric at half rate.
+Nodes 288
+Tiers 2
+Podsize 288
+
+Tier 0
+Downlink_speed_Gbps 400
+Radix_Down 24
+Radix_Up 12
+Downlink_Latency_ns 1
+Switch_Latency_ns 0
+Oversubscribed 2
+
+Tier 1
+Downlink_speed_Gbps 400
+Radix_Down 12
+Downlink_Latency_ns 1000
+Switch_Latency_ns 0

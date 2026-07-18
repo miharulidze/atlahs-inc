@@ -7,15 +7,15 @@ This is the within-rendering A/B at a glance: each pair is a controlled
 experiment (same trace, same engine, same topology; only the TP collectives
 move into the network).
 
-Numbers are the 2026-07-14 re-measurement with -intranode_linkspeed 3600000
+Numbers are the 2026-07-15 re-measurement with -intranode_linkspeed 4000000 (NIC pinned to the pipes' realised rate)
 (NIC-rate fix; INC arms byte-identical, all baselines moved -- cf. README.md).
 
 Framing (cf. README.md): comparisons ACROSS a plain/SP pair of groups are
 cross-workload -- the SP rendering has ~2x TP collectives, a different
-endpoint baseline and less elementwise compute -- so the -4.65 % -> +6.01 %
+endpoint baseline and less elementwise compute -- so the -0.52 % -> +10.39 %
 flip at C3 is NOT a like-for-like INC improvement. The honest per-regime
 statements: at C3 (placeholder compute model) plain-TP INC is NEGATIVE
-(-4.65 %) and the SP re-rendering turns it positive (+6.01 %); at C5 the
+(-0.52 %, sub-floor) and the SP re-rendering reads +10.39 %; at C5 the
 gain rises under SP (+76.17 -> +88.14 %).
 """
 import argparse
@@ -102,7 +102,7 @@ def main():
 
     ax.annotate("each pair = controlled within-rendering A/B; plain → SP is a "
                 "workload change (2× TP collectives,\ndifferent baseline and "
-                "compute) — the −4.65 → +6.01 % flip at C3 is not "
+                "compute) — the −0.52 → +10.39 % swing at C3 is not "
                 "like-for-like (placeholder compute model)",
                 xy=(0.5, -0.24), xycoords="axes fraction",
                 ha="center", va="top", fontsize=7.5, color="#555555")

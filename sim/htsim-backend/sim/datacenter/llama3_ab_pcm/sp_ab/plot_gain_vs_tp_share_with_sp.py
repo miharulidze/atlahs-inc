@@ -6,7 +6,7 @@ the same 5-config plain-TP scatter and Amdahl reference curves, plus the two
 sequence-parallel re-renderings (SP-C3, SP-C5) from ./results.csv as a second
 marker series, with arrows marking the C3->SP-C3 and C5->SP-C5 shifts.
 
-Numbers are the 2026-07-14 re-measurement with -intranode_linkspeed 3600000
+Numbers are the 2026-07-15 re-measurement with -intranode_linkspeed 4000000 (NIC pinned to the pipes' realised rate)
 (NIC-rate fix; INC arms byte-identical, baselines moved -- cf. README.md).
 Gains can now be NEGATIVE (C1, C3 under the placeholder compute model), so
 the y axis is symlog (linear inside |gain| <= 1 %) with a zero line.
@@ -14,7 +14,7 @@ the y axis is symlog (linear inside |gain| <= 1 %) with a zero line.
 Visual message: SP does not remove the INC opportunity -- it MOVES workloads
 up the TP-share axis (the same layers now emit ~2x TP collectives, all of
 which INC accelerates) and INC keeps paying. At C3 the SP re-rendering flips
-the placeholder-compute config from -4.65 % to +6.01 %; at the pure-TP end
+the placeholder-compute config from -0.52 % to +10.39 %; at the pure-TP end
 (C5, share = 1) the gain rises (+76.17 -> +88.14 %): the ring-decomposed
 RS+AG endpoint baseline costs 2.8x the plain-AR baseline while INC pays only
 the 1.41x apex-fusion premium.
@@ -124,7 +124,7 @@ def main():
                 "TP collectives on the\n"
                 "same PP-amplified\n"
                 "critical path → flips C3\n"
-                "(−4.65 → +6.01 %,\n"
+                "(−0.52 → +10.39 %,\n"
                 "not like-for-like)",
                 (0.0022, 11.0),
                 ha="left", va="center", fontsize=7.5, color=C_SP)

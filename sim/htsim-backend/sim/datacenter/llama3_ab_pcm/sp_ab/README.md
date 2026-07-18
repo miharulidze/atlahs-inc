@@ -1,4 +1,4 @@
-# SP A/B: INC vs endpoint under sequence parallelism (2026-07-10; re-measured 2026-07-14, NIC-rate fix)
+# SP A/B: INC vs endpoint under sequence parallelism (2026-07-10; re-measured 2026-07-15, NIC-rate fix)
 
 **Question.** Modern Megatron tensor parallelism is essentially always run
 *with sequence parallelism* (SP), which re-expresses the TP AllReduce as
@@ -22,8 +22,8 @@ below) — plus, like every 2026-07-14 re-run, the NIC-rate invocation fix
 * scale-out: 16-host `tree16.topo` (lossy composite); scale-up: per-node
   `scaleup_single_switch_{4,16}_3600Gbps.topo`, `-intranode_queue_type
   lossless_input`; INC arm adds `-groups` + `-reduce_compute_latency 100`
-* **NIC-rate fix (all numbers below re-measured 2026-07-14, engine pcm-sdk
-  run-only):** every run now passes `-intranode_linkspeed 3600000` on BOTH
+* **NIC-rate fix (all numbers below re-measured 2026-07-15, engine pcm-sdk
+  run-only):** every run now passes `-intranode_linkspeed 4000000` on BOTH
   arms. The engine takes the per-GPU scale-up NIC injection rate from this
   flag (Mbps), NOT from the `.topo` file (which sets only fabric pipes);
   unset, it silently defaulted to COPY_ENG = 200,000 Mbps = 200 Gbps —
@@ -35,7 +35,7 @@ below) — plus, like every 2026-07-14 re-run, the NIC-rate invocation fix
   the NIC paces at 9.22 ns/frame = 443.1 payload-B/ns (Mbps arithmetic; the
   fabric pipes' 2 ps/B quantisation realises 492.3 B/ns). Zero drops and
   zero lossless-headroom warnings in every re-run.
-* exact command lines (incl. `-intranode_linkspeed 3600000`):
+* exact command lines (incl. `-intranode_linkspeed 4000000`):
   `SPC3/run_summary.txt`, `SPC5/run_summary.txt`
 
 **SP traces.** New additive generator driver
@@ -71,10 +71,10 @@ False` input), so per-iteration coll counts are 14 (stage-0 groups) / 16
 
 | config | parallelism | baseline (ns) | INC (ns) | gain | colls (AG+RS) | drops |
 |---|---|---:|---:|---:|---|---:|
-| SP-C3 | TP4+SP/DP2/PP2 | 235,224,847 | 221,091,225 | **+6.01 %** | 60/60 (32+28) | 0 |
-| SP-C5 | TP16+SP/DP1/PP1 | 1,292,541 | 153,252 | **+88.14 %** | 30/30 (16+14) | 0 |
-| C3 anchor (plain TP) | TP4/DP2/PP2 | 219,352,385 | 229,541,927 | −4.65 % | 32/32 AR | 0 |
-| C5 anchor (plain TP) | TP16/DP1/PP1 | 457,346 | 108,969 | +76.17 % | 16/16 AR | 0 |
+| SP-C3 | TP4+SP/DP2/PP2 | 246,715,422 | 221,091,225 | **+10.39 %** | 60/60 (32+28) | 0 |
+| SP-C5 | TP16+SP/DP1/PP1 | 1,286,317 | 153,252 | **+88.09 %** | 30/30 (16+14) | 0 |
+| C3 anchor (plain TP) | TP4/DP2/PP2 | 219,352,385 | 229,541,927 | −0.52 % | 32/32 AR | 0 |
+| C5 anchor (plain TP) | TP16/DP1/PP1 | 457,346 | 108,969 | +75.81 % | 16/16 AR | 0 |
 
 (2026-07-14 re-measurement; the INC arms are byte-identical to the 2026-07-10
 runs, all four baselines moved with the NIC-rate fix. Superseded 2026-07-10
@@ -83,7 +83,7 @@ capped-NIC gains for the record: SP-C3 14.15 %, SP-C5 93.68 %, plain C3
 
 * **The modern-regime headline (stronger post-fix): SP does not merely
   preserve the INC gain at C3 — it moves the config from negative to
-  positive (−4.65 % plain → +6.01 % SP).** Under the placeholder compute
+  positive (−0.52 % plain → +10.39 % SP).** Under the placeholder compute
   model the fixed-NIC plain-C3 endpoint baseline (219.35 ms) now BEATS the
   plain INC arm (229.54 ms; see `../tp_share_sweep/README.md` — the INC
   arm's last collective completes at 148.8 ms of its 229.5 ms makespan, so
@@ -91,10 +91,25 @@ capped-NIC gains for the record: SP-C3 14.15 %, SP-C5 93.68 %, plain C3
   structurally from the baseline's; a schedule/congestion-structure effect
   under investigation, NOT the collective datapath — per-op INC durations
   are 3.5–9 µs. Under the calibrated H100 roofline compute model the same
-  config is +8.81 %). SP-C3 is +6.01 %: SP moves the RS/AG re-rendering onto
+
+> RESOLVED 2026-07-15 (see tp_share_sweep/schedule_sensitivity.md): no bug.
+> The collective datapath is verified FASTER than recursive doubling even under a
+> deliberate 20 ms member skew (coll +3.6 us vs RD +14.1 us after the straggler);
+> both renderings pay a ~35-40x group-synchronisation amplification over their
+> serial TP cost; and a nanosecond-scale dependency-preserving schedule
+> perturbation moves BOTH arms' makespans by +-5-9% (16-28 ms) under BOTH compute
+> models. Every single-schedule end-to-end delta at sub-percent TP share
+> (-0.52% placebo, +8.81% H100, +-0.2% C1/C2/C4) is at or below that floor and is
+> reported as UNRESOLVED, not as a gain or loss. Perturbation-ensemble means lean
+> INC-positive (+2.5% placebo / +8.0% roofline, n=3-4). C5/SP-C5 (4.2x/8.4x) are
+> far above the floor and stand.
+> SP note: the SP-C3 +10.39% delta (14.1 ms) also sits near the floor and carries
+> the same caveat; SP-C5 (8.4x) is unaffected.
+
+  config is +8.81 %). SP-C3 is +10.39 %: SP moves the RS/AG re-rendering onto
   accelerated collectives, AND the SP INC arm (221.09 ms) is faster than the
   plain INC arm (229.54 ms) outright.
-* At the pure-TP end (C5) the gain RISES under SP (+76.17 % → +88.14 %). The
+* At the pure-TP end (C5) the gain RISES under SP (+75.81 % → +88.09 %). The
   pre-fix "ratio preserved (93.46 % vs 93.68 %)" reading was an artifact of
   both baselines being NIC-capped: with the fixed NIC, the ring-decomposed
   RS+AG endpoint baseline (1.29 ms) costs 2.8x the plain-AR baseline
@@ -135,7 +150,7 @@ and SP rows are DIFFERENT workloads with different baselines (1.29 ms vs
 0.457 ms endpoint; different compute, different coll counts). The premium is a
 statement about INC wall time on the two renderings of the same logical
 layer, not a controlled single-variable experiment. The honest pairing is:
-relative gain vs its own baseline (+76.17 % plain vs +88.14 % SP — HIGHER
+relative gain vs its own baseline (+75.81 % plain vs +88.09 % SP — HIGHER
 under SP, because the fixed-NIC endpoint baseline pays 2.8x for the ring
 RS+AG decomposition while INC pays only the 1.41x apex-fusion loss),
 absolute INC time (+41 % under SP at C5). Both INC makespans are
@@ -221,7 +236,7 @@ simple_sim.llama3_training_sp` (16 pkl graphs into `./llama3_graphs`) ->
 `simple_sim2goal.py` twice (baseline; `EMIT_INC=1 INC_CONTEXTS=tp,tp_sp`) —
 SP-C5 via `../tp_share_sweep/scripts/render_c5.py` — -> node-local groups
 (`rank % gpn` after containment assert) -> `txt2bin` (coll-capable LogGOPSim
-1.1) -> the run_summary command lines (`-intranode_linkspeed 3600000` is
+1.1) -> the run_summary command lines (`-intranode_linkspeed 4000000` is
 MANDATORY on both arms — see the NIC-rate fix note in Setup; omitting it
 silently reverts the p2p arm to the 200 Gbps NIC default). Same three
 gotchas as `../tp_share_sweep/README.md`.

@@ -21,11 +21,17 @@ DEFAULTS to COPY_ENG = 200,000 Mbps = 200 Gbps (main.h -> htsim_app_atlahs.cpp -
 atlahs_htsim_api.cpp). UecNIC::startSending then holds the port 166 ns per 4,150 B
 frame = 24.6 payload-B/ns = 5% of the fabric's realised 492.3 B/ns, silently capping
 any p2p arm whose per-step block exceeds one frame (effective MSS 4,086 B payload /
-4,150 B frame). This driver therefore ALWAYS passes -intranode_linkspeed (default
-3600000 Mbps = the fabric rate); the flag also rescales base_rtt, BDP, cwnd and the
-LogGOPS htsim_G gate, so results must be re-measured, never extrapolated, when it
-changes. The ACK-less INC datapath bypasses the NIC pacer (measured slope 492.3 B/ns
-either way).
+4,150 B frame). This driver therefore ALWAYS passes -intranode_linkspeed. The flag
+also rescales base_rtt, BDP, cwnd and the LogGOPS htsim_G gate, so results must be
+re-measured, never extrapolated, when it changes. The ACK-less INC datapath bypasses
+the NIC pacer (measured slope 492.3 B/ns regardless of the flag).
+
+NIC PINNED TO THE PIPES' REALISED RATE (default 4000000 Mbps): the fabric pipes
+quantise the .topo's 3,600 Gbps to 2 ps/B (realised 492.3 payload-B/ns), but the NIC
+pacer does exact Mbps arithmetic (at 3600000: 4,150x8/3.6e12 = 9.22 ns/frame = 443
+payload-B/ns, ~10% under the pipes). Passing 4000000 makes the NIC frame time
+4,150x8/4e12 = 8.30 ns = exactly the pipes' 4,150 x 2 ps: ONE wire rate everywhere.
+The .topo keeps its 3,600 Gbps declaration (same quantised wire).
     collective time = "Maximum finishing time at host 0" - TAIL_NS
 (for the INC arm this equals ALLREDUCE_COMPLETE's duration_ns; asserted per run).
 
@@ -134,7 +140,7 @@ def compile_goal(writer, goal, binout):
 
 
 def run(sim, binpath, so_topo, su_topo, n, groups=None, reduce_compute=0,
-        timeout=300, intranode_linkspeed_mbps=3600000):
+        timeout=300, intranode_linkspeed_mbps=4000000):
     # -end is parsed in MICROSECONDS; -intranode_linkspeed in Mbps (see GOTCHA above).
     cmd = [sim, "-goal", binpath, "-nodes", str(n), "-num_gpus_per_node", str(n),
            "-topo", so_topo, "-intranode_topo", su_topo,
@@ -177,11 +183,13 @@ def main():
                     help="INC-only in-switch aggregation latency (ns)")
     ap.add_argument("--timeout", type=int, default=300,
                     help="per-run wall-clock timeout (s); raise for very large payloads")
-    ap.add_argument("--intranode-linkspeed", type=int, default=3600000,
+    ap.add_argument("--intranode-linkspeed", type=int, default=4000000,
                     help="scale-up per-GPU NIC injection rate in Mbps (see GOTCHA in the "
-                         "module docstring); MUST match the .topo fabric rate — the engine "
-                         "default (200000 = 200 Gbps COPY_ENG) silently caps p2p arms at "
-                         "5%% of a 3600 Gbps fabric")
+                         "module docstring); default 4000000 pins the NIC frame time to "
+                         "the pipes' 2 ps/B quantised rate (8.30 ns/frame = 492.3 "
+                         "payload-B/ns) — the engine default (200000 = 200 Gbps COPY_ENG) "
+                         "silently caps p2p arms at 5%% of a 3600 Gbps fabric, and the "
+                         "literal 3600000 paces ~10%% under the pipes (443 B/ns)")
     ap.add_argument("--tmpdir", default="/tmp/pcm_ar_ab")
     ap.add_argument("--out", default="results.csv")
     args = ap.parse_args()

@@ -10,8 +10,8 @@ scaled by GEOMETRY ONLY -- num_layers 2->8, seq_len 128->512 -- everything else
 anchor.  Both arms (decomposed baseline vs INC) run on the two-tier pcm-sdk
 engine exactly as the anchor (`../results.md`, `../tp_share_sweep/run_summary`).
 
-RE-MEASURED 2026-07-14 (NIC injection-rate fix): all runs re-done on the
-pcm-sdk engine (run-only) with -intranode_linkspeed 3600000 -- the flag was
+RE-MEASURED 2026-07-15 (NIC injection-rate fix): all runs re-done on the
+pcm-sdk engine (run-only) with -intranode_linkspeed 4000000 (NIC pinned to the pipes' realised rate) -- the flag was
 previously never passed, so every p2p baseline was silently NIC-capped at the
 COPY_ENG default 200 Gbps while the ACK-less INC datapath was never capped.
 At the fixed NIC the picture changes honestly:
@@ -147,8 +147,8 @@ def main():
         "geometry\n"
         "C3 parallelism (TP4/DP2/PP2, 16 ranks) -- 2-layer/seq-128 toy vs "
         "8-layer/seq-512\n"
-        "re-measured 2026-07-14, pcm-sdk (run-only), "
-        "-intranode_linkspeed 3600000", fontsize=10)
+        "re-measured 2026-07-15, pcm-sdk (run-only), "
+        "-intranode_linkspeed 4000000 (NIC pinned to the pipes' realised rate)", fontsize=10)
     ax.grid(True, which="both", alpha=0.25)
     ax.legend(fontsize=8, loc="lower right")
 
