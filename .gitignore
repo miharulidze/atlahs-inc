@@ -24,3 +24,5 @@ __pycache__/
 *$py.class
 logout.dat
 **/__pycache__/
+# design plans & working notes stay local (user rule 2026-07-18)
+sim/htsim-backend/sim/AA*
