@@ -26,3 +26,11 @@ logout.dat
 **/__pycache__/
 # design plans & working notes stay local (user rule 2026-07-18)
 sim/htsim-backend/sim/AA*
+
+# local build artifacts: GOAL test generators, coll txt2bin, run stderr logs
+sim/htsim-backend/sim/datacenter/make_allreduce_ab
+sim/htsim-backend/sim/datacenter/make_coll_test
+sim/htsim-backend/sim/datacenter/make_multicoll_test
+sim/htsim-backend/sim/datacenter/make_sr_test
+sim/htsim-backend/sim/lgs/txt2bin
+sim/htsim-backend/sim/datacenter/llama3_ab_pcm/*.err
