@@ -9,6 +9,8 @@ HTSIM_DIR = "sim/htsim-backend/sim"
 ASTRASIM_DIR = "apps/ai/astra-sim"
 HPC_GOAL_GEN_DIR = "goal_gen/hpc"
 HPC_APPS_DIR = "apps/hpc"
+NCCL_GENERATOR_V2_DIR = "goal_gen/ai/nccl_generator_v2_zhiyi"
+PCM_SDK_DIR = "sim/pcm-sdk_zhiyi"
 
 ASTRASIM_RUN_SCRIPT = "/workspace/scripts/run_network_analytical.sh"
 
@@ -185,7 +187,69 @@ def build_hpc_apps(verbose: bool = True) -> None:
     
     os.chdir(CURR_DIR)
 
+def build_nccl_generator_v2(verbose: bool = True) -> None:
+    print_info("Building nccl_generator_v2_zhiyi...", verbose)
+    assert os.path.exists(NCCL_GENERATOR_V2_DIR), \
+        "nccl_generator_v2_zhiyi not found (run git submodule update --init --recursive first)"
 
+    os.chdir(NCCL_GENERATOR_V2_DIR)
+    try:
+        subprocess.run(
+            ["uv", "sync"],
+            check=True,
+            stdout=sys.stderr,
+            stderr=sys.stderr
+        )
+
+        print_success("nccl_generator_v2_zhiyi built (env synced) successfully", verbose)
+    finally:
+        os.chdir(CURR_DIR)
+
+def build_pcm_sdk(verbose: bool = True) -> None:
+    print_info("Building pcm-sdk_zhiyi...", verbose)
+    assert os.path.exists(PCM_SDK_DIR), \
+        "pcm-sdk_zhiyi not found (run git submodule update --init --recursive first)"
+
+    os.chdir(PCM_SDK_DIR)
+    try:
+        required_dirs = [
+            "uet-htsim-patch",
+            "uet-htsim/htsim/sim",
+            "HTSIM_spcl-patch",
+            "HTSIM_spcl/htsim/sim",
+            "xxHash",
+            "pcm",
+        ]
+        missing = [d for d in required_dirs if not os.path.exists(d)]
+        assert not missing, f"pcm-sdk_zhiyi missing paths: {missing}"
+
+        subprocess.run(
+            [
+                "bash",
+                "-lc",
+                "set -euo pipefail; "
+                "command -v cmake >/dev/null 2>&1; "
+                "cp -rf ./uet-htsim-patch/. ./uet-htsim/htsim/sim/; "
+                "cd ./uet-htsim/htsim/sim; "
+                "cmake -S . -B build; "
+                "cmake --build build --parallel; "
+                "cd - >/dev/null; "
+                "cp -rf ./HTSIM_spcl-patch/. ./HTSIM_spcl/htsim/sim/; "
+                "cd ./HTSIM_spcl/htsim/sim; "
+                "cmake -S . -B build; "
+                "cmake --build build --parallel; "
+                "cd - >/dev/null; "
+                "cd xxHash; make; cd - >/dev/null; "
+                "cd pcm; python3 build.py --debug --clean --build-htsim-atlahs; cd - >/dev/null"
+            ],
+            check=True,
+            stdout=sys.stderr,
+            stderr=sys.stderr
+        )
+
+        print_success("pcm-sdk_zhiyi built successfully", verbose)
+    finally:
+        os.chdir(CURR_DIR)
 
 def build_all_apps(verbose: bool = True) -> None:
     """
@@ -201,6 +265,8 @@ def build_apps(reproduce: bool, trace: bool, verbose: bool = True) -> None:
     if reproduce:
         print_info("Building the simulators for reproducing the results...")
         build_sims(verbose)
+        build_nccl_generator_v2(verbose)
+        build_pcm_sdk(verbose)
         # FIXME: Ugly code
         assert os.path.exists(HPC_GOAL_GEN_DIR), "HPC goal gen not found"
         os.chdir(HPC_GOAL_GEN_DIR)
@@ -209,6 +275,8 @@ def build_apps(reproduce: bool, trace: bool, verbose: bool = True) -> None:
     elif trace:
         print_info("Building the simulators for tracing and producing the GOAL schedules...")
         build_all_apps(verbose)
+        build_nccl_generator_v2(verbose)
+        build_pcm_sdk(verbose)
     else:
         print_error("Invalid build option. Please use -r or -t.")
         exit(1)
