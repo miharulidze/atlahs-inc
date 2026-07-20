@@ -55,5 +55,5 @@
 	feature = zhiyi/tests
 [submodule "sim/pcm-sdk_zhiyi"]
 	path = sim/pcm-sdk_zhiyi
-	url = https://github.com/wstaempfli/pcm-sdk.git
+	url = https://github.com/ZhiyiHu1999/pcm-sdk
 	branch = wanja/inc-port
