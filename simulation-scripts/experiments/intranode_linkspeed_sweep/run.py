@@ -31,11 +31,16 @@ and the topo fabric pipe are in-series limiters, so with flag <= topo the flag
 governs at every point (verified in AA-plan-Intranode-Linkspeed-Sweep). Two PNGs,
 split by PP; each: 2 configs x {baseline solid, INC dashed} + the NVLink line.
 
+The fixed scale-out (inter-node) fabric bandwidth is selectable via
+`--internode_gbps {100,200}` (default 100). Outputs are suffixed `_ib<N>` so the
+variants coexist; at 200 the fabric pipe matches the scale-out NIC exactly.
+
 Reproduce (Docker, sim-only image):
   docker build -f simulation-scripts/Dockerfile -t atlahs-sim .
   docker run --rm -v $(pwd):/workspace atlahs-sim build
   docker run --rm -v $(pwd):/workspace atlahs-sim run intranode_linkspeed_sweep --validate
-  docker run --rm -v $(pwd):/workspace atlahs-sim run intranode_linkspeed_sweep
+  docker run --rm -v $(pwd):/workspace atlahs-sim run intranode_linkspeed_sweep                      # inter-node 100 Gbps
+  docker run --rm -v $(pwd):/workspace atlahs-sim run intranode_linkspeed_sweep --internode_gbps 200 # inter-node 200 Gbps
 Local (binaries built in-tree; needs numpy/scipy/tqdm/matplotlib on PATH python):
   python3 experiments/intranode_linkspeed_sweep/run.py --validate
 """
@@ -62,7 +67,7 @@ CONFIGS = [
     dict(plot="pp2", tp=4, dp=2, pp=2),
     dict(plot="pp2", tp=2, dp=4, pp=2),
 ]
-DEFAULT_SPEEDS_GBPS = [100, 200, 400, 800, 1600, 3200, 3600, 6400, 8000]
+DEFAULT_SPEEDS_GBPS = [100, 200, 400, 800, 1600, 3200, 3600, 6400]
 NVLINK_GBPS = 3600         # kept reference line
 
 # Intranode (scale-up) topo per TP degree: a single-switch crossbar with EXACTLY
@@ -78,9 +83,15 @@ NVLINK_GBPS = 3600         # kept reference line
 # the exit-ramp bottleneck without changing link speed (structure, not speed).
 SU_TOPO = {4: "scaleup_single_switch_4_12800Gbps.topo",
            2: "scaleup_single_switch_2_12800Gbps.topo"}
-SO_TOPO = "tree16_nonblocking_100Gbps.topo"
+# Scale-out (inter-node) fabric, selectable via --internode_gbps. Non-blocking
+# 16-host single switch at the chosen per-host link rate. At 200 the fabric pipe
+# matches the scale-out NIC (SO_LINKSPEED_MBPS below) exactly, so effective
+# inter-node bandwidth == 200 with no NIC/fabric mismatch; at 100 the 100 Gbps
+# pipe is the binding constraint (NIC over-provisioned, effective 100).
+SO_TOPO_BY_GBPS = {100: "tree16_nonblocking_100Gbps.topo",
+                   200: "tree16_nonblocking_200Gbps.topo"}
 SIM_END_NS = 10 ** 12   # ceiling >> any iteration makespan; the sim stops at completion
-SO_LINKSPEED_MBPS = 200000   # scale-out NIC rate (reference value); tree16 pipes cap DP/PP
+SO_LINKSPEED_MBPS = 200000   # scale-out NIC rate (200 Gbps); the fabric pipe caps the effective rate
 QSIZE = 1000000              # scale-out buffer (bytes)
 
 # Intranode CC bypass (AA-plan-Intranode-CC-Bypass): the scale-up domain models
@@ -115,8 +126,8 @@ PCM_LIB_DIR = os.environ.get(
 
 CSV_FIELDS = ["plot", "config", "tp", "dp", "pp", "arm", "intranode_linkspeed_gbps",
               "intranode_linkspeed_mbps", "makespan_ns", "iters", "time_per_iter_s",
-              "drops", "status", "su_topo", "so_topo", "intranode_cc", "pfc_high",
-              "compute_model", "engine", "command"]
+              "drops", "status", "su_topo", "so_topo", "so_gbps", "intranode_cc",
+              "pfc_high", "compute_model", "engine", "command"]
 
 
 def cfg_tag(cfg):
@@ -258,11 +269,12 @@ def validate(layers, iters, tmpdir):
     return 0 if ok else 1
 
 
-def run_exp(speeds_gbps, layers, iters, tmpdir, timeout, do_plot):
+def run_exp(speeds_gbps, layers, iters, tmpdir, timeout, do_plot, internode_gbps):
     goal.require_txt2bin()
     goal.require_generator()
     sim.require_simulator()
-    so_topo = paths.topo(SO_TOPO)
+    so_topo_name = SO_TOPO_BY_GBPS[internode_gbps]
+    so_topo = paths.topo(so_topo_name)
     needed = [so_topo] + [paths.topo(v) for v in set(SU_TOPO.values())]
     for t in needed:
         if not os.path.isfile(t):
@@ -276,7 +288,8 @@ def run_exp(speeds_gbps, layers, iters, tmpdir, timeout, do_plot):
 
     out_dir = paths.results_dir(EXP_NAME)
     os.makedirs(out_dir, exist_ok=True)
-    csv_path = os.path.join(out_dir, "sweep.csv")
+    # Suffix outputs by inter-node bandwidth so the 100 and 200 Gbps variants coexist.
+    csv_path = os.path.join(out_dir, f"sweep_ib{internode_gbps}.csv")
     # A full sweep is one self-contained result set: start a FRESH CSV (CsvAppender
     # appends, so without this a re-run would mix rows from the previous config).
     if os.path.exists(csv_path):
@@ -303,9 +316,9 @@ def run_exp(speeds_gbps, layers, iters, tmpdir, timeout, do_plot):
                            "makespan_ns": fin or "", "iters": iters,
                            "time_per_iter_s": f"{tpi:.9f}" if tpi is not None else "",
                            "drops": drops, "status": status, "su_topo": SU_TOPO[gpn],
-                           "so_topo": SO_TOPO, "intranode_cc": INTRANODE_CC,
-                           "pfc_high": LOSSLESS_HIGH_PFC, "compute_model": COMPUTE_MODEL,
-                           "engine": "pcm-sdk", "command": cmd}
+                           "so_topo": so_topo_name, "so_gbps": internode_gbps,
+                           "intranode_cc": INTRANODE_CC, "pfc_high": LOSSLESS_HIGH_PFC,
+                           "compute_model": COMPUTE_MODEL, "engine": "pcm-sdk", "command": cmd}
                     out.write(row)
                     rows.append(row)
                 b = next((r for r in rows if r["config"] == cfg_tag(cfg)
@@ -319,7 +332,7 @@ def run_exp(speeds_gbps, layers, iters, tmpdir, timeout, do_plot):
                       f"INC {str(i['time_per_iter_s']) if i else '-':>13} s{warn}")
     report.print_success(f"wrote {len(rows)} rows to {csv_path}")
     if do_plot:
-        plot_from_rows(rows, out_dir, speeds_gbps)
+        plot_from_rows(rows, out_dir, speeds_gbps, internode_gbps)
     return 0
 
 
@@ -329,7 +342,7 @@ def _read_csv(csv_path):
         return list(csv.DictReader(f))
 
 
-def plot_from_rows(rows, out_dir, speeds_gbps):
+def plot_from_rows(rows, out_dir, speeds_gbps, internode_gbps):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -340,16 +353,19 @@ def plot_from_rows(rows, out_dir, speeds_gbps):
 
     # stable color per config, consistent markers per arm
     colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
+    speed_set = set(speeds_gbps)   # only plot the requested speeds (CSV may hold more)
     made = []
-    for plot_key, title in (("pp1", "Tuning Intranode Link Speed (PP=1)"),
-                            ("pp2", "Tuning Intranode Link Speed (PP=2)")):
+    for plot_key, title in (
+            ("pp1", f"Tuning Intranode Link Speed (PP=1, inter-node {internode_gbps} Gbps)"),
+            ("pp2", f"Tuning Intranode Link Speed (PP=2, inter-node {internode_gbps} Gbps)")):
         cfgs = [c for c in CONFIGS if c["plot"] == plot_key]
         fig, ax = plt.subplots(figsize=(8, 6))
         for ci, cfg in enumerate(cfgs):
             color = colors[ci % len(colors)]
             for arm, ls, mk in (("baseline", "-", "o"), ("inc", "--", "^")):
                 pts = [(int(r["intranode_linkspeed_gbps"]), val(r, "time_per_iter_s"))
-                       for r in rows if r["config"] == cfg_tag(cfg) and r["arm"] == arm]
+                       for r in rows if r["config"] == cfg_tag(cfg) and r["arm"] == arm
+                       and int(r["intranode_linkspeed_gbps"]) in speed_set]
                 pts = sorted((x, y) for x, y in pts if y is not None)
                 if not pts:
                     continue
@@ -377,11 +393,75 @@ def plot_from_rows(rows, out_dir, speeds_gbps):
         ax.grid(True, which="both", ls=":", alpha=0.5)
         ax.legend(fontsize=9)
         fig.tight_layout()
-        png = os.path.join(out_dir, f"intranode_linkspeed_{plot_key}.png")
+        png = os.path.join(out_dir, f"intranode_linkspeed_{plot_key}_ib{internode_gbps}.png")
         fig.savefig(png, dpi=150)
         plt.close(fig)
         made.append(png)
     report.print_success("plots: " + ", ".join(made))
+
+
+def plot_speedup(out_dir, speeds_gbps, ib):
+    """Plot INC speedup (baseline_time / INC_time) vs intranode link speed for the
+    PP=1 configs at a SINGLE inter-node bandwidth (reads sweep_ib<ib>.csv). Two
+    lines: TP4·DP4 and TP2·DP8. 1.0 = no speedup; >1 = INC faster. No sim."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    p = os.path.join(out_dir, f"sweep_ib{ib}.csv")
+    if not os.path.isfile(p):
+        sys.exit(f"no {p} (run the sweep first: ... --internode_gbps {ib})")
+    rows = _read_csv(p)
+
+    def tval(cfg, gbps, arm):
+        for r in rows:
+            if (r["config"] == cfg_tag(cfg) and int(r["intranode_linkspeed_gbps"]) == gbps
+                    and r["arm"] == arm):
+                v = r.get("time_per_iter_s", "")
+                return float(v) if v not in ("", None) else None
+        return None
+
+    colors = {"pp1_tp4_dp4_pp1": "#1f77b4", "pp1_tp2_dp8_pp1": "#ff7f0e"}
+    pp1_cfgs = [c for c in CONFIGS if c["plot"] == "pp1"]
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    for cfg in pp1_cfgs:
+        pts = []
+        for gbps in speeds_gbps:
+            b = tval(cfg, gbps, "baseline")
+            i = tval(cfg, gbps, "inc")
+            if b and i:
+                pts.append((gbps, b / i))
+        pts.sort()
+        if not pts:
+            continue
+        xs, ys = zip(*pts)
+        ax.plot(xs, ys, ls="-", marker="o", markersize=6,
+                color=colors.get(cfg_tag(cfg), "#2ca02c"), label=cfg_label(cfg))
+    ax.axhline(1.0, color="grey", ls=":", lw=1.2, label="no speedup (1.0×)")
+    ax.axvline(NVLINK_GBPS, color="#7b1fa2", ls="--", lw=1.3,
+               label=f"NVLink Bandwidth ({NVLINK_GBPS} Gbps)")
+    ax.set_xscale("log", base=2)
+    ticks = []
+    for s in [x for x in speeds_gbps if x != NVLINK_GBPS]:
+        if ticks and s / ticks[-1] < 1.5:
+            ticks[-1] = s
+        else:
+            ticks.append(s)
+    ax.set_xticks(ticks)
+    ax.set_xticklabels([str(s) for s in ticks])
+    ax.minorticks_off()
+    ax.set_xlabel("Intranode Link Speed (Gbps)", fontsize=13)
+    ax.set_ylabel("Speedup  (baseline time / INC time)", fontsize=13)
+    ax.set_title(f"INC Speedup over Baseline (PP=1, inter-node {ib} Gbps)", fontsize=14)
+    ax.grid(True, which="both", ls=":", alpha=0.5)
+    ax.legend(fontsize=10)
+    fig.tight_layout()
+    png = os.path.join(out_dir, f"intranode_linkspeed_speedup_pp1_ib{ib}.png")
+    fig.savefig(png, dpi=150)
+    plt.close(fig)
+    report.print_success(f"speedup plot: {png}")
+    return png
 
 
 def main():
@@ -396,21 +476,30 @@ def main():
     ap.add_argument("--validate", action="store_true", help="build + check layout, no sim")
     ap.add_argument("--no-plot", action="store_true", help="write CSV only, skip PNGs")
     ap.add_argument("--only-plot", action="store_true",
-                    help="re-plot from an existing results/<exp>/sweep.csv (no gen, no sim)")
+                    help="re-plot from an existing results/<exp>/sweep_ib<N>.csv (no gen, no sim)")
+    ap.add_argument("--internode_gbps", type=int, default=100, choices=sorted(SO_TOPO_BY_GBPS),
+                    help="scale-out (inter-node) fabric bandwidth in Gbps (picks the SO topo)")
+    ap.add_argument("--speedup", action="store_true",
+                    help="plot INC speedup (baseline/INC) vs intranode speed for the PP=1 configs "
+                         "at --internode_gbps (reads that sweep_ib<N>.csv; no gen, no sim)")
     args = ap.parse_args()
     speeds = [int(x) for x in args.speeds.split(",")]
 
+    if args.speedup:
+        out_dir = paths.results_dir(EXP_NAME)
+        plot_speedup(out_dir, speeds, args.internode_gbps)
+        return 0
     if args.only_plot:
         out_dir = paths.results_dir(EXP_NAME)
-        csv_path = os.path.join(out_dir, "sweep.csv")
+        csv_path = os.path.join(out_dir, f"sweep_ib{args.internode_gbps}.csv")
         if not os.path.isfile(csv_path):
             sys.exit(f"no CSV to plot: {csv_path}")
-        plot_from_rows(_read_csv(csv_path), out_dir, speeds)
+        plot_from_rows(_read_csv(csv_path), out_dir, speeds, args.internode_gbps)
         return 0
     if args.validate:
         return validate(args.layers, args.iters, args.tmpdir)
     return run_exp(speeds, args.layers, args.iters, args.tmpdir, args.timeout,
-                   do_plot=not args.no_plot)
+                   do_plot=not args.no_plot, internode_gbps=args.internode_gbps)
 
 
 if __name__ == "__main__":

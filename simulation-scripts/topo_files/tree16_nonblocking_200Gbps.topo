@@ -1,0 +1,25 @@
+# tree16_nonblocking_200Gbps.topo
+# Scale-out fabric variant: all 16 hosts on ONE non-blocking switch (Podsize==
+# Nodes==Radix_Down => 1 ToR, every pair one hop, no oversubscription). Identical
+# to tree16_nonblocking_100Gbps.topo but the per-host link is 200 Gbps instead of
+# 100. Used for the inter-node-bandwidth = 200 Gbps variant of the intranode
+# link-speed sweep: at 200 the scale-out NIC (-linkspeed 200000) and this fabric
+# pipe match exactly (effective = min = 200 Gbps, no NIC/fabric mismatch), so the
+# only difference vs the 100 Gbps run is the inter-node bandwidth.
+Nodes 16
+Tiers 2
+Podsize 16
+
+Tier 0
+Downlink_speed_Gbps 200
+Radix_Down 16
+Radix_Up 1
+Downlink_Latency_ns 1
+Switch_Latency_ns 0
+Oversubscribed 16
+
+Tier 1
+Downlink_speed_Gbps 200
+Radix_Down 1
+Downlink_Latency_ns 1
+Switch_Latency_ns 0

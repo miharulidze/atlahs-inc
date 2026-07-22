@@ -42,11 +42,15 @@ single-switch crossbar with exactly `TP` hosts (must equal `-num_gpus_per_node`)
 pinned at the sweep **max**; `-intranode_linkspeed` and the topo pipe are in-series
 limiters, so with flag ≤ topo the flag governs at every point.
 
-**Scale-out (DP/PP, fixed):** `tree16_nonblocking_100Gbps.topo` — 16 hosts on one
-**non-blocking** switch. The earlier 2:1-oversubscribed `tree16` penalised TP4 (its
-DP ring lands one-per-rack → 100 % cross-rack through the squeezed uplinks) and
-added ECMP routing noise; non-blocking removes both confounds without changing link
-speed (structure, not speed).
+**Scale-out (DP/PP, fixed per run, selectable via `--internode_gbps`):**
+`tree16_nonblocking_{100,200}Gbps.topo` — 16 hosts on one **non-blocking** switch.
+The earlier 2:1-oversubscribed `tree16` penalised TP4 (its DP ring lands
+one-per-rack → 100 % cross-rack through the squeezed uplinks) and added ECMP
+routing noise; non-blocking removes both confounds without changing link speed
+(structure, not speed). `--internode_gbps 100` (default) or `200` sets the
+inter-node bandwidth; at 200 the fabric pipe matches the scale-out NIC exactly
+(`-linkspeed 200000`), so there is no NIC/fabric mismatch, at 100 the pipe is the
+binding constraint. Outputs are suffixed `_ib<N>` so both variants coexist.
 
 **Congestion control (per-tier).** The two tiers model different fabrics, so they
 run different CC (see `AA-plan-Intranode-CC-Bypass`):
@@ -78,19 +82,29 @@ an unfair, misleading comparison.)
 docker build -f simulation-scripts/Dockerfile -t atlahs-sim .
 docker run --rm -v "$(pwd)":/workspace atlahs-sim build            # one-time
 docker run --rm -v "$(pwd)":/workspace atlahs-sim run intranode_linkspeed_sweep --validate
-docker run --rm -v "$(pwd)":/workspace atlahs-sim run intranode_linkspeed_sweep
+docker run --rm -v "$(pwd)":/workspace atlahs-sim run intranode_linkspeed_sweep                      # inter-node 100 Gbps (default)
+docker run --rm -v "$(pwd)":/workspace atlahs-sim run intranode_linkspeed_sweep --internode_gbps 200 # inter-node 200 Gbps
 ```
 
-Useful flags: `--speeds 100,3600,12800` (subset), `--layers N`, `--iters N`,
-`--no-plot`, `--only-plot` (re-render PNGs from an existing `sweep.csv`),
-`--validate` (build + check the 16-GPU/INC-group layout, no sim).
+Useful flags: `--internode_gbps {100,200}` (scale-out fabric bandwidth; default
+100), `--speeds 100,3600,12800` (subset), `--layers N`, `--iters N`, `--no-plot`,
+`--only-plot` (re-render PNGs from an existing `sweep_ib<N>.csv` — pair with the
+matching `--internode_gbps`), `--speedup` (plot INC speedup = baseline/INC vs
+intranode speed for the PP=1 configs at `--internode_gbps`, two lines TP4·DP4 /
+TP2·DP8; reads that `sweep_ib<N>.csv`, no sim), `--validate` (build + check the
+16-GPU/INC-group layout, no sim).
 
 ## Output (`results/intranode_linkspeed_sweep/`)
 
-- `sweep.csv` — one row per (config, speed, arm); columns include
-  `time_per_iter_s`, `makespan_ns`, `drops`, `status`, `intranode_linkspeed_mbps`,
-  `compute_model`, and the full simulator `command`.
-- `intranode_linkspeed_pp1.png`, `intranode_linkspeed_pp2.png`.
+- `sweep_ib<N>.csv` (N = inter-node Gbps) — one row per (config, speed, arm);
+  columns include `time_per_iter_s`, `makespan_ns`, `drops`, `status`,
+  `intranode_linkspeed_mbps`, `so_gbps`, `compute_model`, and the full simulator
+  `command`.
+- `intranode_linkspeed_pp1_ib<N>.png`, `intranode_linkspeed_pp2_ib<N>.png` — one
+  pair per `--internode_gbps` value (e.g. `_ib100`, `_ib200`).
+- `intranode_linkspeed_speedup_pp1_ib<N>.png` (via `--speedup --internode_gbps N`)
+  — INC speedup (baseline/INC) vs intranode speed, PP=1, two lines (TP4·DP4,
+  TP2·DP8) at that inter-node bandwidth.
 
 ## Notes
 
