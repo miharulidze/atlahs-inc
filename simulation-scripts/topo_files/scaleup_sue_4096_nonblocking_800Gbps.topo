@@ -1,0 +1,89 @@
+# scaleup_sue_4096_nonblocking_800Gbps.topo
+#
+# Models an emerging SCALE-UP ETHERNET (SUE) domain as an IDEALIZED, full-bisection
+# NON-BLOCKING fabric at the framework's maximum scale of 4096 endpoints (XPUs/GPUs).
+# This is the clean A/B reference: uniform per-host bandwidth, no oversubscription
+# anywhere, so the fabric is never the bottleneck and INC-vs-endpoint deltas are not
+# confounded by fabric taper.
+#
+# WHAT REAL PRODUCT THIS MODELS
+#   Broadcom Scale-Up Ethernet (SUE) framework -- a standards-based, Ethernet-native
+#   XPU interconnect that targets NVLink/UALink-class scale-up. SUE framework spec v1.0
+#   was contributed to OCP (Sept 2025). SUE pods are built from Tomahawk-class Ethernet
+#   switch ASICs (Tomahawk 5 / Tomahawk 6 / the purpose-built low-latency Tomahawk Ultra).
+#
+# OFFICIAL STRUCTURE (real numbers + sources)
+#   - Max Scale                : 4096 endpoints                 [SUE spec, Table 2.2]
+#   - Per-endpoint bandwidth   : 200 GB/s BIDIRECTIONAL         [SUE spec, Table 2.2]
+#   - Topology class           : switch-based; SUE scale-up is "typically single-tier
+#                                (single hop) or two-tier" -- deep multi-tier is atypical
+#                                [Broadcom "Introducing Ethernet Scale Up Networking",
+#                                 Ram Velaga; SUE framework overview].
+#   - Reference switch ASICs   : Tomahawk 6 = 102.4 Tbps, 512x200G (or 1024x100G) SerDes,
+#                                up to 64x1.6T / 128x800G / 256x400G / 512x200G ports
+#                                [Broadcom news release 63146]. Tomahawk Ultra = 51.2 Tbps,
+#                                250 ns switch latency, sub-400 ns XPU-to-XPU incl. switch
+#                                transit, lossless via LLR + CBFC [Broadcom investor release
+#                                / HPCwire, Jul 2025].
+#   - Non-blocking?            : scale-up carries bandwidth-critical collective/tensor
+#                                traffic; Table 2.2 preserves the FULL 200 GB/s per endpoint
+#                                at max scale => the reference fabric is NON-BLOCKING
+#                                (full bisection). This file models exactly that.
+#   - With TH6 (radix-128 in 800G ports) real SUE reaches 4096 endpoints NON-BLOCKING in
+#     just TWO tiers (64 leaves x 64 endpoints, 64 uplinks/leaf, 32 radix-128 spines).
+#
+# BANDWIDTH DERIVATION (bidir GB/s -> unidir Gbps; convention LOCKED to the .topo family)
+#   Downlink_speed_Gbps (per host, per direction) = (Table 2.2 bidir GB/s) x 4
+#                                                  = 200 x 4 = 800 Gbps.
+#   Cross-check: 200 GB/s bidir = 100 GB/s per direction = 100 x 8 = 800 Gbit/s unidir. OK.
+#
+# HTSIM FAT-TREE ABSTRACTION -- what is preserved vs. abstracted away (KEY CAVEAT)
+#   htsim's FatTree asserts <96 ports on every switch. A 2-tier non-blocking fat-tree
+#   therefore maxes at (96/2)^2 = 48^2 = 2304 hosts < 4096, so *4096 non-blocking REQUIRES
+#   3 TIERS in htsim*. The REAL SUE fabric needs only TWO tiers because a real Tomahawk 6
+#   is radix-128 (128x800G) -- far above htsim's 96-port cap. So this file trades TIER-COUNT
+#   fidelity (real = 2 tiers) for BANDWIDTH fidelity (non-blocking, full 200 GB/s/endpoint):
+#   it renders the non-blocking fabric as a regular 3-tier Clos of uniform radix-16 switches.
+#   Preserved exactly: host count (4096), per-host bandwidth (800 Gbps), full bisection /
+#   1:1 oversub, and packet-level queueing/CC dynamics. Abstracted away: the real high-radix
+#   Tomahawk packaging (a real 2-tier pod becomes 3 htsim tiers => a worst-case inter-pod
+#   path traverses 5 switches / 6 links here vs. 3 switches in the real 2-tier pod, inflating
+#   modelled end-to-end latency relative to the real fabric). See the *realistic* sibling
+#   (scaleup_sue_4096_realistic_800Gbps.topo) for the faithful 2-tier / cap-forced-oversub view.
+#
+# RADIX DERIVATION (uniform radix-16; every switch <= 32 ports, well under the 96 cap)
+#   4096 = 2^12. Choose 16 downlinks per switch at every tier, oversub 1 everywhere.
+#   Tier 0 (leaf) : 16 hosts down + 16 up = 32 ports. #leaves = 4096/16      = 256.
+#   Tier 1 (agg)  : 16 down + 16 up       = 32 ports. Podsize 256 => 16 leaves & 16 agg
+#                   per pod; #pods = 4096/256 = 16; #agg = 16 x 16            = 256.
+#   Tier 2 (core) : 16 down               = 16 ports. #core = 4096/16        = 256.
+#   Bisection: leaf up-bw == down-bw (16x800 == 16x800); agg 1:1; 256 core x 16 = 4096
+#   = total agg uplinks => full-bisection NON-BLOCKING. 768 switches total.
+#   Latencies use the family's generic idealized scale-up numbers (link 500 ns, switch
+#   300 ns) for cross-sweep A/B comparability -- NOT SUE-specific; the realistic sibling
+#   carries the real Tomahawk-Ultra Ethernet latencies.
+Nodes 4096
+Tiers 3
+Podsize 256
+
+Tier 0
+Downlink_speed_Gbps 800
+Radix_Down 16
+Radix_Up 16
+Downlink_Latency_ns 500
+Switch_Latency_ns 300
+Oversubscribed 1
+
+Tier 1
+Downlink_speed_Gbps 800
+Radix_Down 16
+Radix_Up 16
+Downlink_Latency_ns 500
+Switch_Latency_ns 300
+Oversubscribed 1
+
+Tier 2
+Downlink_speed_Gbps 800
+Radix_Down 16
+Downlink_Latency_ns 500
+Switch_Latency_ns 300

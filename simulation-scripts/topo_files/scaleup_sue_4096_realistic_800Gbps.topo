@@ -1,0 +1,82 @@
+# scaleup_sue_4096_realistic_800Gbps.topo
+#
+# FAITHFUL rendering of how an emerging SCALE-UP ETHERNET (SUE) pod actually ships:
+# a TWO-TIER Tomahawk-class Ethernet fabric at the framework's maximum scale of 4096
+# endpoints (XPUs/GPUs), with real Tomahawk-Ultra Ethernet switch latency and the
+# oversubscription that htsim's radix cap forces onto a 2-tier rendering at this scale.
+# Sibling of the idealized scaleup_sue_4096_nonblocking_800Gbps.topo.
+#
+# WHAT REAL PRODUCT THIS MODELS
+#   Broadcom Scale-Up Ethernet (SUE) framework pod (SUE spec v1.0 -> OCP, Sept 2025), built
+#   from Tomahawk-class Ethernet ASICs and positioned as the Ethernet-native replacement for
+#   NVLink/InfiniBand in scale-up. SUE scale-up is characterized by very high per-endpoint
+#   bandwidth, low RTT sensitivity, node counts up to ~1000s, and "typically single-tier or
+#   two-tier" switch hierarchies -- NOT deep multi-tier Clos.
+#
+# OFFICIAL STRUCTURE (real numbers + sources)
+#   - Max Scale                : 4096 endpoints                 [SUE spec, Table 2.2]
+#   - Per-endpoint bandwidth   : 200 GB/s BIDIRECTIONAL         [SUE spec, Table 2.2]
+#   - Scale-up switch ASIC     : Tomahawk Ultra -- 51.2 Tbps, 250 ns switch latency at full
+#                                throughput, line-rate at 64 B (77 Bpps), sub-400 ns
+#                                XPU-to-XPU incl. switch transit, lossless via Link Layer
+#                                Retry (LLR) + Credit-Based Flow Control (CBFC), pin-compatible
+#                                with Tomahawk 5 [Broadcom investor release / HPCwire /
+#                                ServeTheHome, Jul 2025]. Throughput-optimized sibling
+#                                Tomahawk 6 = 102.4 Tbps, 128x800G ports [Broadcom NR 63146].
+#   - Real 2-tier reach to 4096: with a Tomahawk 6 (radix-128 in 800G ports) a two-tier Clos
+#                                reaches 4096 endpoints NON-BLOCKING: 64 leaves x 64 endpoints,
+#                                64 uplinks per leaf, 32 radix-128 spines (2 links/leaf-spine).
+#                                Real SUE scale-up is thus a NON-BLOCKING two-tier pod.
+#   - Per-endpoint aggregate   : 200 GB/s bidir = 1.6 Tbps bidir (= one 800G link/direction,
+#                                i.e. 4x 200G SerDes lanes per direction).
+#   - Reach                    : intra-leaf = 1 hop; inter-leaf = 2 hops (through one spine).
+#
+# BANDWIDTH DERIVATION (bidir GB/s -> unidir Gbps; convention LOCKED to the .topo family)
+#   Downlink_speed_Gbps (per host, per direction) = (Table 2.2 bidir GB/s) x 4
+#                                                  = 200 x 4 = 800 Gbps.
+#   Cross-check: 200 GB/s bidir = 100 GB/s per direction = 100 x 8 = 800 Gbit/s unidir. OK.
+#
+# HTSIM FAT-TREE ABSTRACTION -- what is preserved vs. abstracted away (KEY CAVEAT)
+#   This file preserves the REAL SUE TWO-TIER structure and real Ethernet latencies, but
+#   htsim's <96-port cap CANNOT express Tomahawk's radix-128 leaf (the thing that makes real
+#   SUE non-blocking at 4096 in two tiers). Under the cap a 2-tier fabric maxes at (96/2)^2 =
+#   2304 hosts if kept non-blocking; to keep BOTH two tiers AND 4096 hosts we must taper the
+#   leaf uplinks -> 64 downlinks + 32 uplinks = 2:1 OVERSUBSCRIBED. So the modelled 2:1 taper
+#   is an htsim RADIX-CAP ARTIFACT, not a property of real SUE (real TH6 4096 pods are
+#   non-blocking). The trade is explicit: this *realistic* file keeps the real 2-tier topology
+#   and accepts cap-forced oversubscription; the *nonblocking* sibling instead preserves full
+#   bandwidth by spending a 3rd htsim tier. Preserved exactly: 4096 hosts, 800 Gbps/host,
+#   the 2-tier 1-hop/2-hop reach, real Tomahawk-Ultra 250 ns switch latency + short-reach
+#   in-rack link latency, and lossless queueing. Abstracted away: real radix-128 packaging
+#   (64 leaves + 32 spines here vs. the real 64-leaf/32-spine radix-128 pod), and the 2:1
+#   taper stands in for what is physically a non-blocking pod.
+#
+# RADIX DERIVATION (2-tier, 2:1 oversub; leaf uses the full 96-port budget, spine 64 ports)
+#   4096 = 2^12. Leaf down radix d0 must divide 4096 with #leaves = 4096/d0 <= 96 (a spine's
+#   down radix = #leaves <= 96) and leaf ports d0 + u0 <= 96. The only power-of-two leaf that
+#   hits 4096 in two htsim tiers is d0 = 64:
+#   Tier 0 (leaf) : 64 endpoints down + 32 up = 96 ports (at the cap). oversub = 64/32 = 2:1.
+#                   #leaves = 4096/64 = 64.  Leaf uplinks total = 64 x 32 = 2048.
+#   Tier 1 (spine): 64 down (one link to each of the 64 leaves) = 64 ports (top tier, no up).
+#                   #spines = leaf_uplinks / #leaves = 2048/64 = 32 = leaf Radix_Up. OK.
+#   Podsize = Nodes = 4096 (single pod, as in the family's two-tier files).
+#   Latencies: Tomahawk-Ultra scale-up switch = 250 ns; short-reach in-rack copper/AOC link
+#   = 100 ns (single-hop endpoint->leaf->endpoint ~= 250 + 2x100 ~= 450 ns, matching Broadcom's
+#   sub-400..~450 ns XPU-to-XPU-through-one-switch figure).
+Nodes 4096
+Tiers 2
+Podsize 4096
+
+Tier 0
+Downlink_speed_Gbps 800
+Radix_Down 64
+Radix_Up 32
+Downlink_Latency_ns 100
+Switch_Latency_ns 250
+Oversubscribed 2
+
+Tier 1
+Downlink_speed_Gbps 800
+Radix_Down 64
+Downlink_Latency_ns 100
+Switch_Latency_ns 250

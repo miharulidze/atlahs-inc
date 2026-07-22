@@ -1,0 +1,24 @@
+# scaleup_single_switch_4_12800Gbps.topo
+# 4-host NVLink-class scale-up domain: one non-blocking crossbar (Podsize==Nodes==
+# Radix_Down => 1 ToR, every pair one hop). Per-host 12800 Gbps = the MAX of the
+# intranode-linkspeed sweep, so the swept -intranode_linkspeed (NIC/copy-engine
+# rate) governs under the fabric ceiling at every point (flag <= topo => min = flag;
+# see AA-plan-Intranode-Linkspeed-Sweep §7). Degenerate 2-tier encoding because the
+# FatTree parser rejects Tiers=1. Sibling of the validated scaleup_single_switch_4.
+Nodes 4
+Tiers 2
+Podsize 4
+
+Tier 0
+Downlink_speed_Gbps 12800
+Radix_Down 4
+Radix_Up 1
+Downlink_Latency_ns 500
+Switch_Latency_ns 300
+Oversubscribed 4
+
+Tier 1
+Downlink_speed_Gbps 12800
+Radix_Down 1
+Downlink_Latency_ns 500
+Switch_Latency_ns 300

@@ -1,0 +1,23 @@
+# scaleup_single_switch_4_100Gbps.topo
+# DIAGNOSTIC: 4-host single-switch scale-up domain at 100 Gbps (80 ps/B, no
+# quantisation loss). Used only to test which fabric the INC `coll` serializes on:
+# if swapping the intranode topo between this (100) and the 12800 variant changes
+# the INC makespan, the collective rides the intranode fabric; if not, it rides
+# the scale-out fabric. Not a production topo.
+Nodes 4
+Tiers 2
+Podsize 4
+
+Tier 0
+Downlink_speed_Gbps 100
+Radix_Down 4
+Radix_Up 1
+Downlink_Latency_ns 500
+Switch_Latency_ns 300
+Oversubscribed 4
+
+Tier 1
+Downlink_speed_Gbps 100
+Radix_Down 1
+Downlink_Latency_ns 500
+Switch_Latency_ns 300

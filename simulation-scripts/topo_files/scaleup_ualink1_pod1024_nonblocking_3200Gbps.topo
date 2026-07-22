@@ -1,0 +1,89 @@
+# scaleup_ualink1_pod1024_nonblocking_3200Gbps.topo
+#
+# Models a UALink 200G 1.0 SCALE-UP POD at MAX SCALE (1024 accelerators) as an idealized,
+# fully NON-BLOCKING, full-bisection fabric. This is the NONBLOCKING / idealized variant:
+# uniform per-host bandwidth, no oversubscription -- the cleanest fabric for the
+# INC-vs-endpoint A/B (uniform 3200 Gbps per host, 1:1 bisection). The realistic sibling
+# (scaleup_ualink1_pod1024_realistic_3200Gbps.topo) carries the faithful UALink switch
+# radix / single-switch-hop / latency framing; this file is the comparability anchor.
+#
+# What real product this models: the UALink 200G 1.0 specification pod (UALink Consortium,
+# ratified April 2025). UALink is the open, memory-semantic (load/store) scale-up
+# accelerator interconnect positioned against NVIDIA NVLink. Max Scale = 1024 accelerators
+# in one Pod, connected by UALink Switches (ULS).
+#
+# Official structure (UALink 200G 1.0), with sources:
+#   - Max Scale: up to 1,024 accelerators (xPUs) per Pod; each accelerator carries a unique
+#     10-bit routing identifier (2^10 = 1024) -- the spec's flat, SINGLE-switch-hop address
+#     space.
+#   - PHY: 200 GT/s per lane (212.5 GT/s on the wire), based on the IEEE 802.3dj / Ultra
+#     Ethernet 200G-per-lane SerDes. Effective ~200 Gb/s per lane.
+#   - Port / station: a UALink "station" = 4 lanes, max 800 Gb/s (100 GB/s/direction); it
+#     may be bifurcated as one x4, two x2, or four x1 UALink links.
+#   - Per accelerator (to reach Table 2.2's 800 GB/s BIDIRECTIONAL): 4 stations = 16 lanes
+#     @ 200 Gb/s => 4 x 100 GB/s/dir = 400 GB/s/dir = 800 GB/s bidirectional per accelerator.
+#   - Switch (ULS): first-generation UALink switch chips target 102.4 Tb/s = 512 x 200G
+#     lanes, with a 512x512 internal switch fabric (= 128 x4-ports, i.e. 32 accelerators
+#     worth of 16-lane full-bandwidth attachment per ULS chip). ULS provides NON-BLOCKING,
+#     lossless, virtual-pod-isolated connectivity between endpoints.
+#   - Topology: UALink 1.0 defines a SINGLE switch layer (one switch hop) reaching up to
+#     1024 endpoints -- a switched all-to-all fabric (NVSwitch-like, broader scale), NOT a
+#     routed multi-tier Clos in the protocol. The Pod is NON-BLOCKING (full bisection).
+#   - Latency: expected ULS port-to-port hop latency ~100-150 ns; cables optimized for
+#     <4 m enabling <1 microsecond round-trip.
+#   Sources: UALink Consortium "UALink 200G 1.0 Specification" (ualinkconsortium.org,
+#   press release + white paper, Apr 2025); UALink 200G 1.0 Specification Overview
+#   (ualinkconsortium.org/blog, Cadence/ChipEstimate technical article, 2025);
+#   APNIC Blog "Scale-up fabrics" (2025-06-03, 512x200G / 512x512 ULS, single switch layer,
+#   10-bit routing ID); Tom's Hardware "UALink ... final specs support up to 1,024 GPUs
+#   with 200 GT/s" (2025); Synopsys/Cadence UALink IP overviews.
+#
+# Bandwidth convention (LOCKED, matches sibling scaleup files where NVLink-4 900 GB/s bidir
+# => 3600 Gbps and NVLink-5 1800 GB/s bidir => 7200 Gbps): per-host unidirectional
+# Downlink_speed_Gbps = (Table 2.2 bidirectional GB/s) x 4. UALink = 800 GB/s bidir =>
+# 800 x 4 = 3200 Gbps unidirectional per host (physically: 800 GB/s bidir = 400 GB/s unidir
+# = 3200 Gb/s unidir). Half the NVLink-5 sweep class, matching UALink 1.0's 800 vs 1800
+# GB/s bidir per accelerator.
+#
+# htsim fat-tree abstraction (preserved vs. abstracted):
+#   Max Scale 1024 > htsim's 96-ports/switch cap, so a single switch is IMPOSSIBLE in htsim;
+#   the fabric MUST be a multi-tier fat-tree. This nonblocking variant uses a full-bisection
+#   2-tier folded-Clos: 32 leaf switches + 32 spine switches, 1:1 (no oversubscription).
+#   PRESERVED (drives the simulation): 1024 accelerators; uniform 3200 Gbps per host;
+#   1:1 non-blocking full bisection (65.5 Tbps... i.e. 1024 x 3200 Gbps aggregate one-way).
+#   ABSTRACTED: the real UALink Pod is a SINGLE switch hop (10-bit flat routing); htsim's
+#   96-port cap forces the 1024-wide switch stage to be decomposed into a leaf+spine Clos,
+#   so inter-leaf pairs traverse 2 switch hops here vs. the real fabric's uniform 1 hop.
+#   The real, higher-radix ULS packaging (512-lane / 128-x4-port chips, striped planes) is
+#   collapsed into regular 32-port logical leaves; bisection ratio and per-host bandwidth
+#   (which drive the sim) are faithful, the literal ULS ASIC/port counts are not one-to-one.
+#   Latency: retains the sweep-uniform 500 ns link / 300 ns switch used by all sibling
+#   scaleup_* files for cross-topology A/B comparability (the realistic sibling swaps in the
+#   real UALink ~100-150 ns hop / <4 m short-reach link latencies).
+#
+# Radix derivation (how Nodes/leaves/spines/ports were computed):
+#   Nodes 1024, Podsize 1024 => 1 pod. Non-blocking => Radix_Up == Radix_Down at the leaf.
+#   Leaf Radix_Down 32 (hosts/leaf) => #leaves = 1024 / 32 = 32. Leaf Radix_Up 32, Oversub 1
+#   (32/32 = 1). ToR uplinks = 1024*3200 / (3200*1) = 1024 => spread over spines of
+#   Radix_Down 32 => #spines = 1024 / 32 = 32; agg-switches-per-pod = 1024/(1*32) = 32 ==
+#   leaf Radix_Up 32 (consistent). Leaf port count = 32 down + 32 up = 64 <= 96 (OK).
+#   Spine port count = 32 down <= 96 (OK). Hosts built = 32 leaves x 32 = 1024 (exact).
+#   32 is a power of two and, notably, equals the number of full-800GB/s-bidir accelerators
+#   one real 512-lane ULS chip serves (512 lanes / 16 lanes-per-accelerator = 32).
+Nodes 1024
+Tiers 2
+Podsize 1024
+
+Tier 0
+Downlink_speed_Gbps 3200
+Radix_Down 32
+Radix_Up 32
+Downlink_Latency_ns 500
+Switch_Latency_ns 300
+Oversubscribed 1
+
+Tier 1
+Downlink_speed_Gbps 3200
+Radix_Down 32
+Downlink_Latency_ns 500
+Switch_Latency_ns 300

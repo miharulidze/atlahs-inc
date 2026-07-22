@@ -1,0 +1,23 @@
+# scaleup_single_switch_8_12800Gbps.topo
+# 8-GPU NVLink-class scale-up domain (one DGX-H100-style node): single non-blocking
+# crossbar (Podsize==Nodes==Radix_Down => 1 ToR, one hop). Per-host 12800 Gbps = the
+# MAX of the intranode-linkspeed sweep, so the swept -intranode_linkspeed governs
+# under the fabric ceiling at every point. Degenerate 2-tier encoding (FatTree parser
+# rejects Tiers=1). This is the TP=8 scale-up domain that INC accelerates.
+Nodes 8
+Tiers 2
+Podsize 8
+
+Tier 0
+Downlink_speed_Gbps 12800
+Radix_Down 8
+Radix_Up 1
+Downlink_Latency_ns 500
+Switch_Latency_ns 300
+Oversubscribed 8
+
+Tier 1
+Downlink_speed_Gbps 12800
+Radix_Down 1
+Downlink_Latency_ns 500
+Switch_Latency_ns 300

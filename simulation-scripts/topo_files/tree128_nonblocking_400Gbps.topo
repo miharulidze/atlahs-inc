@@ -1,0 +1,23 @@
+# tree128_nonblocking_400Gbps.topo
+# Scale-out (inter-node) fabric for the 128-GPU realistic embedding: 128 hosts on a
+# single non-blocking crossbar (Podsize==Nodes==Radix_Down => 1 ToR, every pair one
+# hop, no oversubscription). Per-host 400 Gbps = NDR InfiniBand (one rail/GPU) — the
+# rail-optimized, non-blocking design of a DGX-H100 SuperPOD Scalable Unit (non-
+# blocking up to 256 GPUs). Carries the DP/PP traffic; -nodes must equal 128 hosts.
+Nodes 128
+Tiers 2
+Podsize 128
+
+Tier 0
+Downlink_speed_Gbps 400
+Radix_Down 128
+Radix_Up 1
+Downlink_Latency_ns 500
+Switch_Latency_ns 100
+Oversubscribed 128
+
+Tier 1
+Downlink_speed_Gbps 400
+Radix_Down 1
+Downlink_Latency_ns 500
+Switch_Latency_ns 100

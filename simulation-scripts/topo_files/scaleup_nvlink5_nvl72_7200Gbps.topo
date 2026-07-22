@@ -1,0 +1,33 @@
+# NVIDIA GB200 NVL72 NVLink-5 scale-up domain: 72 GPUs, one non-blocking NVSwitch hop.
+# Sources, bandwidth convention, and abstraction caveats: see README.md in this folder.
+# Comments below explain only the values in this file.
+#
+# Nodes 72             72 Blackwell GPUs (the NVLink endpoints).
+# Tiers 2, Podsize 72  One physical NVSwitch stage; htsim rejects Tiers=1, so this is a
+#                      degenerate 2-tier fat-tree: Podsize==Nodes and Tier-0 Radix_Down==Nodes
+#                      put all 72 GPUs on ONE ToR, and Tier-1 is vestigial.
+# Downlink_speed_Gbps  7200 = per-host unidirectional rate (1800 GB/s bidir x 4).
+# Radix_Down 72        all 72 GPUs attach to the single ToR.
+# Radix_Up 1 +         one vestigial uplink; the parser requires Radix_Down/Radix_Up ==
+#   Oversubscribed 72  Oversubscribed (72/1 == 72). It carries no host<->host traffic, so the
+#                      host tier is 1:1 non-blocking (NOT 72:1 oversubscribed).
+# Tier-1 Radix_Down 1  the vestigial spine (unused; present only to satisfy Tiers >= 2).
+# Latency 100 / 30 ns  Switch_Latency_ns / Downlink_Latency_ns are ESTIMATES (NVIDIA discloses
+#                      no NVSwitch latency). ToR port count = 72 + 1 = 73 <= htsim's 96-port cap.
+Nodes 72
+Tiers 2
+Podsize 72
+
+Tier 0
+Downlink_speed_Gbps 7200
+Radix_Down 72
+Radix_Up 1
+Downlink_Latency_ns 30
+Switch_Latency_ns 100
+Oversubscribed 72
+
+Tier 1
+Downlink_speed_Gbps 7200
+Radix_Down 1
+Downlink_Latency_ns 30
+Switch_Latency_ns 100

@@ -1,0 +1,112 @@
+# intranode_linkspeed_sweep — INC vs baseline, trace-free Llama iteration
+
+Reproduces the shape of the *"Tuning Intranode Link Speed"* figure as a purely
+**synthetic** INC-vs-endpoint A/B (no captured trace, no GPU). For each
+parallelism config we synthesize one Llama-2-7B training iteration with the
+`simple_sim` analytical generator in two arms — **baseline** (the generator's
+decomposed collectives) and **INC** (node-contained TP collectives as first-class
+`coll` ops + a `.groups` sidecar) — compile to `.bin`, and sweep the scale-up
+(intranode) link speed while timing one iteration on the pcm-sdk two-tier sim.
+
+## What it measures
+
+- **x**: intranode link speed, `-intranode_linkspeed` (Mbps = Gbps×1000), log₂.
+- **y**: time / training iteration (s) = `makespan_ns / iters / 1e9`.
+- Two PNGs, split by pipeline degree; each has 2 configs × {baseline solid,
+  INC dashed} + the NVLink (3600 Gbps) reference line.
+
+| Plot | Configs (TP·DP·PP) |
+|------|--------------------|
+| `..._pp1.png` | TP4·DP4·PP1, TP2·DP8·PP1 |
+| `..._pp2.png` | TP4·DP2·PP2, TP2·DP4·PP2 |
+
+All 16 GPUs. Layout is **multi-domain**, derived by the generator:
+`gpus_per_node = TP`, `nodes = 16/TP`. TP collectives run intranode (the swept
+link); DP/PP cross nodes on the fixed scale-out fabric. Only TP goes INC
+(`INC_CONTEXTS=tp`), so DP/PP are the same fixed floor in both arms and the gap
+isolates TP data movement.
+
+## Model
+
+Zhiyi-matched Llama-2 7B **per-layer** dims (hidden 4096, FFN 11008, 32 MHA
+heads, seq 4096, micro-batch 1) so message sizes place the bandwidth→latency knee
+in the plotted range, with a **shallow stack** (default 2 layers): iteration time
+and the INC gap scale ~linearly in depth, so the trend extrapolates to full 7B
+(a conservative bound — larger messages only favour INC via congestion).
+`COMPUTE_MODEL=h100` sets a realistic compute floor (cancels in the INC gap).
+
+## Topology / the sweep knob
+
+**Intranode (scale-up, swept):** `scaleup_single_switch_<TP>_12800Gbps.topo` — a
+single-switch crossbar with exactly `TP` hosts (must equal `-num_gpus_per_node`),
+pinned at the sweep **max**; `-intranode_linkspeed` and the topo pipe are in-series
+limiters, so with flag ≤ topo the flag governs at every point.
+
+**Scale-out (DP/PP, fixed):** `tree16_nonblocking_100Gbps.topo` — 16 hosts on one
+**non-blocking** switch. The earlier 2:1-oversubscribed `tree16` penalised TP4 (its
+DP ring lands one-per-rack → 100 % cross-rack through the squeezed uplinks) and
+added ECMP routing noise; non-blocking removes both confounds without changing link
+speed (structure, not speed).
+
+**Congestion control (per-tier).** The two tiers model different fabrics, so they
+run different CC (see `AA-plan-Intranode-CC-Bypass`):
+
+- **Scale-out (DP/PP)** keeps **DCTCP** via PCM (`-pcm_enable` +
+  `pcm_cc_config_all_uec_dctcp_v2.json`, loading `libuec_dctcp_v2.so` from
+  `pcm/build/lib` via `LD_LIBRARY_PATH`). This fabric is lossy; without sender
+  pacing the decomposed baseline's ~33 MB collectives overflow the queue and the
+  makespan turns buffer-dependent (an artifact). DCTCP → 0 lossless violations / 0
+  retransmits.
+- **Intranode (scale-up)** is **CC-FREE** (`-intranode_cc none`): it models NVLink,
+  which has no end-to-end congestion control — only NIC line-rate serialization +
+  lossless PFC. The PFC pause threshold (`-lossless_high_pfc 1500`, resume `1200`,
+  ≈2.4× the 12800 Gbps BDP) sits below the 20 MB intranode queue so PAUSE fires
+  before overflow; validated drop-free across the sweep.
+
+**Fair INC endpoint.** The INC `coll` arm is paced through the **same intranode
+NIC** as the decomposed baseline (line-rate serialization, still ACK-less — no
+CWND/RTO/pull-pacer), so both arms pay identical per-GPU injection cost and the
+A/B isolates the in-switch fan-out/reduce saving. (Previously the INC arm dumped
+straight onto the fabric pipe, so its makespan was byte-identical at every speed —
+an unfair, misleading comparison.)
+
+`-nodes` = TOTAL GPUs (16); `-num_gpus_per_node` = TP; INC `.groups` are node-local.
+
+## Run (Docker)
+
+```bash
+docker build -f simulation-scripts/Dockerfile -t atlahs-sim .
+docker run --rm -v "$(pwd)":/workspace atlahs-sim build            # one-time
+docker run --rm -v "$(pwd)":/workspace atlahs-sim run intranode_linkspeed_sweep --validate
+docker run --rm -v "$(pwd)":/workspace atlahs-sim run intranode_linkspeed_sweep
+```
+
+Useful flags: `--speeds 100,3600,12800` (subset), `--layers N`, `--iters N`,
+`--no-plot`, `--only-plot` (re-render PNGs from an existing `sweep.csv`),
+`--validate` (build + check the 16-GPU/INC-group layout, no sim).
+
+## Output (`results/intranode_linkspeed_sweep/`)
+
+- `sweep.csv` — one row per (config, speed, arm); columns include
+  `time_per_iter_s`, `makespan_ns`, `drops`, `status`, `intranode_linkspeed_mbps`,
+  `compute_model`, and the full simulator `command`.
+- `intranode_linkspeed_pp1.png`, `intranode_linkspeed_pp2.png`.
+
+## Notes
+
+- Depends on the `simple_sim` generator (`goal_gen/ai/nccl_generator_v2`), driven
+  via CLI with `EMIT_INC=0/1`; the generator's core graph-build needs only
+  numpy/scipy/tqdm (its viz/aggregate stack is guarded out in
+  `simple_sim/__init__.py`), all in the sim image.
+- Sanity checks worth eyeballing: `drops == 0` (scale-out DCTCP + intranode
+  lossless PFC both holding); INC ≤ baseline at every speed; **both** arms slope
+  down with intranode link speed (the INC coll is now NIC-paced, so it is no
+  longer link-speed-insensitive — the fair A/B), converging toward a common floor
+  at high speed where the intranode link stops being the bottleneck and the fixed
+  scale-out DP/PP floor dominates.
+- Caveat (the honest framing): the makespan is ~90 % DP/PP communication over the
+  scale-out fabric (compute is ~5–10 %), so the intranode sweep — and hence the INC
+  gap — is a MODEST slice of the iteration. This is a "how much INC survives when DP
+  is in play" embedding, not an isolated-collective benefit (that's `scaleup_coll_ab`).
+  Any residual baseline wiggle is ECMP routing/schedule sensitivity (a few %), not
+  physical bandwidth-dependence.

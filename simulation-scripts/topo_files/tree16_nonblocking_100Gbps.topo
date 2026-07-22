@@ -1,0 +1,23 @@
+# tree16_nonblocking_100Gbps.topo
+# Diagnostic scale-out fabric: all 16 hosts on ONE non-blocking switch (Podsize==
+# Nodes==Radix_Down => 1 ToR, every pair one hop, no oversubscription). Same 100
+# Gbps per-host link as tree16.topo, but removes the 4-ToR / 2:1-oversubscribed
+# structure — used to isolate whether TP4-vs-TP2 differences come from the tree's
+# oversubscription + DP-ring locality rather than raw bandwidth.
+Nodes 16
+Tiers 2
+Podsize 16
+
+Tier 0
+Downlink_speed_Gbps 100
+Radix_Down 16
+Radix_Up 1
+Downlink_Latency_ns 1
+Switch_Latency_ns 0
+Oversubscribed 16
+
+Tier 1
+Downlink_speed_Gbps 100
+Radix_Down 1
+Downlink_Latency_ns 1
+Switch_Latency_ns 0
