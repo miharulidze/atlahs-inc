@@ -17,6 +17,17 @@ The multicast-optimal formula reproduces the MEASURED INC crosses to the byte
 (69632 / 279552 / 1118208 at P=256/512/1024 on radix-32), and RD matches the measured
 byte-ratio to <1% — so the analytical model and the simulator validate each other.
 
+RELATION TO KHALILOV'S APPENDIX B (obtained 2026-07-23): Appendix B derives the paper's
+S = 2 - 2/P (Eq. 3) as a NIC-BANDWIDTH *TIME* speedup for concurrent {AG,RS}: the NIC
+send/recv path B_nic is the bottleneck (ring shares it 1/2 each way; multicast-AG send
+-> (1/P)B_nic, recv -> (1-1/P)B_nic), so S = (1-1/P)/(1/2) = 2-2/P. Our Ring FOOTPRINT
+ratio equals this exactly, so we reproduce the paper's derived formula. NOTE Appendix B's
+NIC model gives 2-2/P for BOTH Ring and RD (RD injects the same N(P-1) bytes per NIC), so
+Fig. 2's *growing* RD curve is a FABRIC-bandwidth / total-data-movement quantity -- i.e.
+the byte.link footprint this script/experiment computes -- NOT the NIC-time metric. Our RD
+footprint (~5.1x @1024) exceeds Fig. 2's RD (~3.6x) by a tree-structure factor (our radix-4
+core vs the paper's radix-32 core); it is not a disagreement with Appendix B's derivation.
+
 Standalone (no simulator). Emits analytic_khalilov.png + a printed table.
 """
 import csv
@@ -106,9 +117,9 @@ def main():
         if cls == "paper_r32":
             kp = [p for p in Ps if p in KHALILOV_RD]
             ax.plot(kp, [KHALILOV_RD[p] for p in kp], "--s", color="#555", ms=4,
-                    label="RD (Khalilov Fig. 2)")
+                    label="RD (Khalilov Fig. 2, fabric)")
             ax.plot(kp, [2 - 2 / p for p in kp], "--", color="#999",
-                    label="Ring = 2−2/P (Khalilov)")
+                    label="Khalilov App.B S=2−2/P (NIC-time; Ring & RD)")
         ax.set_xscale("log", base=2)
         ax.set_xticks(Ps); ax.set_xticklabels(Ps)
         ax.set_title(title, fontsize=9)

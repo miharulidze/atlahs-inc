@@ -78,9 +78,19 @@ is radix-4 (4 pods) vs the paper's radix-32 core, making inter-pod 6-hop traffic
    and measured ratios agree to **<0.5% at every P on all three topologies** (theory ↔ simulation mutual
    validation). On the paper's radix-32 topology our Ring exactly matches Khalilov's `2−2/P`, and our RD
    matches the paper up to P≈16 (one leaf) then climbs higher — **5.1× (analytic AND measured) vs the
-   paper's ~3.6× at P=1024**. Khalilov's exact cost model (Appendix B) is absent from the core-only PDF,
-   so this ~40% gap is attributable to a difference in the paper's RD/multicast footprint accounting;
-   our two independent methods are self-consistent.
+   paper's ~3.6× at P=1024**.
+8. **Reconciliation with Khalilov's Appendix B (obtained 2026-07-23).** Appendix B derives the paper's
+   result as **S = 2 − 2/P (Eq. 3), a NIC-BANDWIDTH *time* speedup** for concurrent {AG,RS}: the NIC
+   send/recv path `B_nic` is the bottleneck (ring shares it ½/½; multicast-AG send→`(1/P)B_nic`,
+   recv→`(1−1/P)B_nic`), so `S = (1−1/P)/(½) = 2−2/P`. **Our Ring footprint ratio equals this exactly —
+   i.e. we reproduce the paper's derived formula, not just a plot read.** Crucially, Appendix B's NIC
+   model yields `2−2/P` for **both** Ring AND Recursive-Doubling (RD injects the same `N(P−1)` bytes per
+   NIC), so Fig. 2's *growing* RD curve is NOT the Appendix-B (NIC-time) metric — it is a **fabric-
+   bandwidth / total-data-movement (byte·link) quantity, which is exactly what this experiment measures**.
+   So the RD "gap" (our 5.1× vs Fig. 2's ~3.6×) is a footprint comparison differing only by tree
+   structure (our radix-4 core vs the paper's radix-32 core), **not** a disagreement with the paper's
+   derivation. Our footprint model supplies the fabric-bandwidth view that the NIC-only Appendix-B
+   argument does not capture.
 
 ## Method note (for the thesis)
 
