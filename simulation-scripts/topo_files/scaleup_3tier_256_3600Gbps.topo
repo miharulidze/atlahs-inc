@@ -1,0 +1,58 @@
+# scaleup_3tier_256_3600Gbps.topo
+#
+# A 3-TIER scale-up fat-tree of 256 hosts, minted for the multicast bandwidth-
+# usage-reduction (network-footprint) experiment (simulation-scripts/experiments/
+# scaleup_coll_footprint). Its job is to expose the Ring-vs-Recursive-Doubling
+# footprint divergence, which is a MULTI-TIER effect: on a single switch every
+# pair is 2 hops so Ring and RD are identical; only a tree with several hop-
+# distance regimes lets RD's large late-step messages travel farther and diverge.
+#
+# WHY 3 TIERS (not 2): a 2-tier tree has only two hop regimes (2 hops intra-leaf,
+# 4 hops cross-leaf), so RD saturates as soon as the group exceeds one leaf. A
+# 3-tier tree adds a third regime (6 hops inter-pod) so RD keeps climbing with the
+# group size P — reproducing the paper's shape (Khalilov et al. SC24, Fig. 2, whose
+# own topology is a radix-32 THREE-tier fat-tree; 2-tier radix-32 caps at 512).
+#
+# HOP-DISTANCE REGIMES (contiguous rank->host placement, host i = rank i):
+#   same leaf   (|i-j| < 4)        : host -> leaf -> host                 = 2 hops
+#   same pod    (4 <= |i-j| < 16)  : host -> leaf -> agg -> leaf -> host   = 4 hops
+#   diff pod    (|i-j| >= 16)      : host -> leaf -> agg -> core -> ...    = 6 hops
+# So a group of size P sweeps: P<=16 stays intra-pod (RD ~= Ring); P>=32 spans
+# pods and RD begins to diverge; P in {64,128,256} = 4/8/16 pods.
+#
+# STRUCTURE (4 hosts/leaf x 4 leaves/pod x 16 pods = 256; all switches < 96 ports):
+#   Tier 0 (leaf): Radix_Down 4 (hosts), Radix_Up 4.  #leaves = 256/4 = 64. ports 8.
+#   Tier 1 (agg) : Radix_Down 4 (leaves/pod), Radix_Up 4. agg/pod = 4; #agg = 16x4 = 64. ports 8.
+#   Tier 2 (core): Radix_Down 16 (= #pods).  #core = leaf_up x agg_up = 4x4 = 16. ports 16.
+#   Full bisection / 1:1 oversubscription at every tier (up-bw == down-bw).
+#
+# BANDWIDTH / LATENCY: footprint (link-crosses) is INDEPENDENT of link speed and
+# latency, so these values do not affect the metric. Downlink_speed_Gbps 3600 matches
+# the sibling scaleup_single_switch_64_3600Gbps.topo (NVLink-4-class, per the locked
+# bidir-GB/s x4 convention); idealized 500 ns link / 300 ns switch (as in the SUE
+# nonblocking file) for cross-topology comparability.
+Nodes 256
+Tiers 3
+Podsize 16
+
+Tier 0
+Downlink_speed_Gbps 3600
+Radix_Down 4
+Radix_Up 4
+Downlink_Latency_ns 500
+Switch_Latency_ns 300
+Oversubscribed 1
+
+Tier 1
+Downlink_speed_Gbps 3600
+Radix_Down 4
+Radix_Up 4
+Downlink_Latency_ns 500
+Switch_Latency_ns 300
+Oversubscribed 1
+
+Tier 2
+Downlink_speed_Gbps 3600
+Radix_Down 16
+Downlink_Latency_ns 500
+Switch_Latency_ns 300

@@ -59,6 +59,65 @@ def run_sim(binpath, so_topo, su_topo, nodes, gpus_per_node, groups=None,
     return parse_makespan(p.stdout), drops, status, " ".join(cmd)
 
 
+def _read_link_crosses(path):
+    """Read the one-row footprint CSV emitted by -link_crosses_csv
+    ('total_link_crosses,total_link_bytes' header + one int,int row).
+    Returns (link_crosses, link_bytes) or (None, None)."""
+    try:
+        with open(path) as f:
+            rows = [ln.strip() for ln in f if ln.strip()]
+        cols = rows[1].split(",")
+        return int(cols[0]), int(cols[1])
+    except (OSError, IndexError, ValueError):
+        return None, None
+
+
+def run_sim_footprint(binpath, so_topo, su_topo, nodes, gpus_per_node, groups=None,
+                      reduce_compute=0, timeout=600,
+                      intranode_linkspeed=INTRANODE_LINKSPEED_DEFAULT, end=100000000,
+                      mtu=None):
+    """One footprint run: like run_sim() but adds -link_crosses_csv and reads the
+    per-link-cross totals back. Returns
+    (makespan_ns|None, link_crosses|None, link_bytes|None, drop_count, status, command).
+
+    NOTE gpus_per_node is the SCALE-UP TOPO WIDTH (pinned by the caller), decoupled
+    from the group size N (which lives in the trace); idle hosts register zero
+    crosses, so one fixed-width topo serves the whole N sweep."""
+    import tempfile
+    fd, lc_path = tempfile.mkstemp(prefix="lc_", suffix=".csv")
+    os.close(fd)
+    cmd = [paths.PCM_APP_HTSIM_ATLAHS_EXEC_PATH, "-goal", binpath,
+           "-nodes", str(nodes), "-num_gpus_per_node", str(gpus_per_node),
+           "-topo", so_topo, "-intranode_topo", su_topo,
+           "-intranode_linkspeed", str(intranode_linkspeed),
+           "-end", str(end), "-sender_cc_only",
+           "-intranode_queue_type", "lossless_input",
+           "-link_crosses_csv", lc_path]
+    if mtu:
+        cmd += ["-mtu", str(mtu)]
+    if groups:
+        cmd += ["-groups", groups]
+    if reduce_compute:
+        cmd += ["-reduce_compute_latency", str(reduce_compute)]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.remove(lc_path)
+        except OSError:
+            pass
+        return None, None, None, -1, "timeout", " ".join(cmd)
+    combined = p.stdout + "\n" + p.stderr
+    drops = len(DROP.findall(combined))
+    status = "ok" if p.returncode == 0 else f"rc={p.returncode}"
+    crosses, lbytes = _read_link_crosses(lc_path)
+    try:
+        os.remove(lc_path)
+    except OSError:
+        pass
+    return parse_makespan(p.stdout), crosses, lbytes, drops, status, " ".join(cmd)
+
+
 def require_simulator():
     """Loud preflight: the pcm binary must be built and executable."""
     if not (os.path.isfile(paths.PCM_APP_HTSIM_ATLAHS_EXEC_PATH)
