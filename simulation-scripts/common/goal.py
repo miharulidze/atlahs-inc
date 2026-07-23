@@ -4,8 +4,8 @@ Two writers, matching the AA-plan-Scaleup-Baselines A/B design:
   * gen_baseline_goal — endpoint arm via the GENERATOR's OWN decomposition
     (goal_gen/ai/nccl_generator_v2/communication.py; Ring / Recursive-doubling
     per Demystifying-NCCL Tables V-VII). NOT hand-rolled.
-  * gen_inc_goal — INC arm: one rootless first-class `coll <kind>` op per rank
-    + a .groups sidecar.
+  * gen_inc_goal — INC arm: one first-class `coll <kind>` op per rank + a .groups
+    sidecar; rooted (bcast/reduce) or rootless (allreduce/reduce_scatter/allgather).
 
 The generator import is lazy so `common` stays importable without the
 generator materialized; the first writer call fails loudly if it is missing.
@@ -23,7 +23,8 @@ _GEN = None  # (communication, goal) module pair, cached after first import
 # generator (module imports but is missing a symbol — the known submodule-
 # provenance landmine) fails with the actionable message, not a raw AttributeError
 # deep in a writer call.
-_REQ_COMM = ("Communicator", "CollDevice", "AllReduce", "ReduceScatter", "AllGather", "CollAlgo")
+_REQ_COMM = ("Communicator", "CollDevice", "AllReduce", "ReduceScatter", "AllGather",
+             "Broadcast", "Reduce", "CollAlgo")
 _REQ_GOAL = ("GoalOpAtom", "GoalSend", "GoalRecv", "GoalCalc", "GoalCollective")
 
 
@@ -55,14 +56,19 @@ def require_generator():
 
 
 def coll_classes():
-    """kind -> generator collective class, for the kinds the INC datapath supports."""
+    """kind -> generator collective class (the endpoint decomposition). Includes the two
+    rooted collectives bcast/reduce, whose rooted pipelined-ring decomposition drives the
+    Broadcast/Reduce baseline arms; their comm-local `root` is supplied by gen_baseline_goal
+    (default 0). Rootless kinds (allreduce/reduce_scatter/allgather) take no root."""
     communication, gen_goal = _generator()
     classes = {"allreduce": communication.AllReduce,
                "reduce_scatter": communication.ReduceScatter,
-               "allgather": communication.AllGather}
+               "allgather": communication.AllGather,
+               "bcast": communication.Broadcast,
+               "reduce": communication.Reduce}
     for k in classes:
-        # TODO guardrail: kinds must be first-class, argument-free GOAL collectives.
-        assert k in gen_goal.GoalCollective.KINDS and not gen_goal.GoalCollective.KINDS[k], k
+        # TODO guardrail: every baseline kind must be a known coll-grammar kind.
+        assert k in gen_goal.GoalCollective.KINDS, k
     return classes
 
 
@@ -80,16 +86,21 @@ def _reset_goal_state():
     gen_goal.GoalRecv.recv_message_id.clear()
 
 
-def gen_baseline_goal(path, n, size, collective, algo_name, tail_ns):
+def gen_baseline_goal(path, n, size, collective, algo_name, tail_ns, root=0):
     """Endpoint baseline via the generator's OWN decomposition. Flush-left labels
     (txt2bin rejects indented `l0:`); no reduction calc (charge-neither); each
-    rank ends in a dependent `calc tail_ns` so both arms share the same tail."""
+    rank ends in a dependent `calc tail_ns` so both arms share the same tail.
+    `root` (comm-local rank) is used only by the rooted collectives (bcast/reduce);
+    it is ignored for the rootless AllReduce/ReduceScatter/AllGather."""
     communication, gen_goal = _generator()
     _reset_goal_state()
     devices = [communication.CollDevice(("gpu", i)) for i in range(n)]
     comm = communication.Communicator(devices, "scaleup_ab")
     device2goal_rank = {d: i for i, d in enumerate(devices)}
-    op = coll_classes()[collective](comm, size=size, context=0, algo=algo(algo_name))
+    kwargs = dict(size=size, context=0, algo=algo(algo_name))
+    if collective in ("bcast", "reduce"):   # rooted collectives take a comm-local root
+        kwargs["root"] = root
+    op = coll_classes()[collective](comm, **kwargs)
     with open(path, "w") as f:
         f.write(f"num_ranks {n}\n\n")
         for device, rank in device2goal_rank.items():
@@ -109,43 +120,86 @@ def gen_baseline_goal(path, n, size, collective, algo_name, tail_ns):
             f.write("}\n\n")
 
 
-def gen_inc_goal(path, groups_path, n, size, kind, tail_ns):
-    """INC arm: one rootless first-class `coll <kind>` per rank + .groups sidecar."""
+def gen_inc_goal(path, groups_path, n, size, kind, tail_ns, root=-1):
+    """INC arm: one first-class `coll` op per rank (+ .groups sidecar); rooted for
+    bcast/reduce (root = a GLOBAL goal rank >= 0), rootless (root = -1) otherwise.
+
+    `kind` is a coll-grammar kind (bcast/reduce/reduce_scatter/allgather/allreduce),
+    OR the pseudo-kind "allreduce_rs_ag": an NVLS-style AllReduce COMPOSED from a
+    ReduceScatter followed by a dependent AllGather, emitted as two coll ops (same
+    group, distinct op_flow_id instances 0 and 1). This is a trace-gen-time
+    decomposition -- the engine runs it as a standalone RS then a standalone AG,
+    with no engine changes; the apex `allreduce` primitive is left untouched.
+
+    coll-line grammar (generator goal.py:213): `coll <kind> <size>b <group>
+    <instance> <root> cpu <c> nic <n>`; group 0 indexes the single .groups line,
+    root -1 = rootless (ANYSOURCE), a rooted kind carries the root's global goal rank,
+    instance = op_flow_id (shared across a collective's ranks)."""
     _, gen_goal = _generator()
+    KINDS = gen_goal.GoalCollective.KINDS
     # TODO guardrail: refuse kinds the coll grammar / INC datapath doesn't know.
-    assert kind in gen_goal.GoalCollective.KINDS and not gen_goal.GoalCollective.KINDS[kind]
+    if kind == "allreduce_rs_ag":
+        for k in ("reduce_scatter", "allgather"):
+            assert k in KINDS and not KINDS[k], f"composite AR needs rootless {k}"
+        body = [f"l1: coll reduce_scatter {size}b 0 0 -1 cpu 1 nic 1",
+                f"l2: coll allgather {size}b 0 1 -1 cpu 1 nic 1",
+                f"l3: calc {tail_ns} cpu 0",
+                "l2 requires l1",   # AllGather waits for the ReduceScatter to finish
+                "l3 requires l2"]   # tail calc waits for the AllGather
+    else:
+        assert kind in KINDS, f"unknown coll kind {kind!r}"
+        if KINDS[kind]:                       # rooted (bcast/reduce): root is a GLOBAL goal rank
+            assert 0 <= root < n, (f"rooted kind {kind!r} root must be a group member in "
+                                   f"[0, {n}) (global goal rank); got {root}")
+            root_field = root
+        else:                                 # rootless: -1 == ANYSOURCE
+            assert root == -1, f"rootless kind {kind!r} needs root=-1; got {root}"
+            root_field = -1
+        body = [f"l1: coll {kind} {size}b 0 0 {root_field} cpu 1 nic 1",
+                f"l2: calc {tail_ns} cpu 0",
+                "l2 requires l1"]
     with open(path, "w") as f:
         f.write(f"num_ranks {n}\n\n")
         for r in range(n):
             f.write(f"rank {r} {{\n")
-            f.write(f"l1: coll {kind} {size}b 0 0 -1 cpu 1 nic 1\n")
-            f.write(f"l2: calc {tail_ns} cpu 0\n")
-            f.write("l2 requires l1\n")
+            for ln in body:
+                f.write(ln + "\n")
             f.write("}\n\n")
     with open(groups_path, "w") as f:
         f.write(" ".join(str(i) for i in range(n)) + "\n")
 
 
 def expected_steps(collective, n, algo_name):
-    """Parallel send/recv rounds per rank (Demystifying-NCCL Tables V-VII)."""
+    """Busiest rank's send-op count (== count_steps). Rootless ring = n-1, rdouble =
+    2*log2(n) or 2*(n-1) per Demystifying-NCCL Tables V-VII. The rooted pipelined-ring
+    Broadcast/Reduce split the message into n chunks streamed along the chain, so the
+    root (bcast) / tail (reduce) -- the busiest sender -- emits all n."""
     if collective == "allreduce":
         return 2 * (n.bit_length() - 1) if algo_name == "rdouble" else 2 * (n - 1)
+    if collective in ("bcast", "reduce"):
+        return n
     return n - 1
 
 
 def count_steps(goal_path):
-    """Count rank 0's send ops in a .goal text file (= its send/recv rounds)."""
-    sends, in_rank0 = 0, False
+    """Busiest rank's send-op count in a .goal text file. Every rank sends the same
+    number for the symmetric collectives (so this equals the old 'rank 0 sends'); for
+    the rooted Broadcast/Reduce the root is NOT the busiest sender, so take the max
+    over all ranks."""
+    per_rank = {}
+    cur = None
     with open(goal_path) as f:
         for line in f:
             s = line.strip()
-            if s.startswith("rank 0 {"):
-                in_rank0 = True
-            elif in_rank0 and s == "}":
-                break
-            elif in_rank0 and re.search(r":\s*send ", s):
-                sends += 1
-    return sends
+            m = re.match(r"rank (\d+)\s*\{", s)
+            if m:
+                cur = int(m.group(1))
+                per_rank.setdefault(cur, 0)
+            elif s == "}":
+                cur = None
+            elif cur is not None and re.search(r":\s*send ", s):
+                per_rank[cur] += 1
+    return max(per_rank.values()) if per_rank else 0
 
 
 def compile_goal(goal_path, binout):

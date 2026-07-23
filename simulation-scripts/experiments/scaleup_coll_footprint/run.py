@@ -77,6 +77,8 @@ COLL_CASES = [
     {"collective": "allgather",      "algos": ["ring", "rdouble"]},  # the paper's Fig. 2 collective
     {"collective": "allreduce",      "algos": ["ring", "rdouble"]},
     {"collective": "reduce_scatter", "algos": ["ring", "rdouble"]},
+    {"collective": "bcast",          "algos": ["ring"]},  # rooted; ring-only baseline vs INC mcast
+    {"collective": "reduce",         "algos": ["ring"]},  # rooted; ring-only baseline vs INC aggregation
 ]
 
 INTRANODE_LINKSPEED = sim.INTRANODE_LINKSPEED_DEFAULT
@@ -127,11 +129,12 @@ def run_exp(topos, collectives, size_mults, tmpdir, timeout):
                     size = p * PAYLOAD * mult  # per-rank chunk = mult full packets
                     for case in cases:
                         coll = case["collective"]
+                        inc_root = 0 if coll in ("bcast", "reduce") else -1  # rooted INC arm
                         report.print_info(f"=== {cls} P={p} size={size} {coll} ===")
                         # INC arm (once; shared denominator across baseline algos)
                         inc = os.path.join(tmpdir, f"inc_{cls}_{coll}_{p}_{mult}.goal")
                         grp = inc[:-5] + ".groups"
-                        goal.gen_inc_goal(inc, grp, p, size, coll, TAIL_NS)
+                        goal.gen_inc_goal(inc, grp, p, size, coll, TAIL_NS, root=inc_root)
                         goal.compile_goal(inc, inc[:-5] + ".bin")
                         imk, ic, ib, idr, ist, icmd = sim.run_sim_footprint(
                             inc[:-5] + ".bin", so_topo, su_topo,
@@ -180,8 +183,9 @@ def validate(tmpdir):
     p, size = 8, 8 * PAYLOAD
     for case in COLL_CASES:
         coll = case["collective"]
+        inc_root = 0 if coll in ("bcast", "reduce") else -1
         inc = os.path.join(tmpdir, f"v_inc_{coll}.goal")
-        goal.gen_inc_goal(inc, inc[:-5] + ".groups", p, size, coll, TAIL_NS)
+        goal.gen_inc_goal(inc, inc[:-5] + ".groups", p, size, coll, TAIL_NS, root=inc_root)
         goal.compile_goal(inc, inc[:-5] + ".bin")
         for algo in case["algos"]:
             base = os.path.join(tmpdir, f"v_base_{coll}_{algo}.goal")
@@ -200,7 +204,7 @@ def main():
     ap.add_argument("--topos", default="single_switch,fat3tier,paper_r32",
                     help="comma list of topology classes to run (paper_r32 = radix-32 1024-host "
                          "reproduction; its ring baseline at P=1024 is slow)")
-    ap.add_argument("--collectives", default="allgather,allreduce,reduce_scatter")
+    ap.add_argument("--collectives", default="allgather,allreduce,reduce_scatter,bcast,reduce")
     ap.add_argument("--size-mults", default="1",
                     help="comma list of per-rank chunk sizes in packets (1 = P*4096 B)")
     ap.add_argument("--max-p", type=int, default=None, help="cap group size (debug)")

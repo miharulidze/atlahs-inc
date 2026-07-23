@@ -47,12 +47,19 @@ SO_TOPO_DEFAULT = "tree16_bw200Gbps.topo"
 # reported rate can never drift from the one actually simulated.
 INTRANODE_LINKSPEED = sim.INTRANODE_LINKSPEED_DEFAULT
 
-# (collective, baseline algorithm). AllReduce runs both; RS/AG ring-only.
+# (collective, baseline algorithm[, inc_kind]). AllReduce runs both baselines;
+# RS/AG ring-only. Optional `inc_kind` overrides the INC-arm coll kind while the
+# baseline stays `collective` -- used for the NVLS-style AllReduce that the INC
+# arm runs as ReduceScatter+AllGather (`allreduce_rs_ag`), compared against the
+# same endpoint AllReduce baseline. The apex INC AllReduce (rows 1-2) is kept.
 COLL_CASES = [
     {"collective": "allreduce",      "algo": "ring"},
     {"collective": "allreduce",      "algo": "rdouble"},
+    {"collective": "allreduce",      "algo": "ring", "inc_kind": "allreduce_rs_ag"},
     {"collective": "reduce_scatter", "algo": "ring"},
     {"collective": "allgather",      "algo": "ring"},
+    {"collective": "bcast",          "algo": "ring"},   # rooted; INC = mcast, baseline = pipelined-ring
+    {"collective": "reduce",         "algo": "ring"},   # rooted; INC = aggregation, baseline = pipelined-ring
 ]
 DEFAULT_N     = 8
 DEFAULT_SIZES = [4096, 16384, 65536, 262144, 1048576, 4194304]
@@ -72,19 +79,24 @@ def validate(n, size, tmpdir):
     all_ok = True
     for case in COLL_CASES:
         coll, algo = case["collective"], case["algo"]
+        inc_kind = case.get("inc_kind", coll)
+        inc_root = 0 if inc_kind in ("bcast", "reduce") else -1  # rooted INC arm (bcast/reduce)
+        label = inc_kind
         if algo == "rdouble" and (n & (n - 1)):
-            print(f"{coll:>16} {algo:>8}    skip (N not power of 2)")
+            print(f"{label:>18} {algo:>8}    skip (N not power of 2)")
             continue
-        base = os.path.join(tmpdir, f"base_{coll}_{algo}_{n}_{size}.goal")
-        inc = os.path.join(tmpdir, f"inc_{coll}_{n}_{size}.goal")
+        base = os.path.join(tmpdir, f"base_{label}_{algo}_{n}_{size}.goal")
+        inc = os.path.join(tmpdir, f"inc_{label}_{n}_{size}.goal")
         goal.gen_baseline_goal(base, n, size, coll, algo, TAIL_NS)
-        goal.gen_inc_goal(inc, inc[:-5] + ".groups", n, size, coll, TAIL_NS)
+        goal.gen_inc_goal(inc, inc[:-5] + ".groups", n, size, inc_kind, TAIL_NS, root=inc_root)
+        # Step-count check is on the endpoint baseline (coll/algo); the INC arm's
+        # composite (allreduce_rs_ag) has no single "steps" count, so only compile-check it.
         got, exp = goal.count_steps(base), goal.expected_steps(coll, n, algo)
         goal.compile_goal(base, base[:-5] + ".bin")
         goal.compile_goal(inc, inc[:-5] + ".bin")
         ok = (got == exp)
         all_ok &= ok
-        print(f"{coll:>16} {algo:>8} {got:>6} {exp:>7} {'OK' if ok else 'MISMATCH':>8}")
+        print(f"{label:>18} {algo:>8} {got:>6} {exp:>7} {'OK' if ok else 'MISMATCH':>8}")
     print("validation:", "PASS" if all_ok else "FAIL")
     return 0 if all_ok else 1
 
@@ -96,22 +108,25 @@ def run_exp(n, sizes, su_topo, so_topo, reduce_compute, tmpdir, timeout):
     with report.CsvAppender(csv_path, CSV_FIELDS) as out:
         for case in COLL_CASES:
             coll, algo = case["collective"], case["algo"]
+            inc_kind = case.get("inc_kind", coll)  # INC-arm coll kind (composite = allreduce_rs_ag)
+            inc_root = 0 if inc_kind in ("bcast", "reduce") else -1  # rooted INC arm (bcast/reduce)
+            label = inc_kind                        # distinct output name; baseline still uses `coll`/`algo`
             if algo == "rdouble" and (n & (n - 1)):
-                report.print_warning(f"{coll}/{algo}: skip (N={n} not power of 2)")
+                report.print_warning(f"{label}/{algo}: skip (N={n} not power of 2)")
                 continue
-            report.print_info(f"=== {coll} baseline={algo} N={n} su={os.path.basename(su_topo)} ===")
+            report.print_info(f"=== {label} baseline={algo} N={n} su={os.path.basename(su_topo)} ===")
             for s in sizes:
                 if s % n:
                     report.print_warning(f"{s}: skip (not divisible by N)")
                     continue
-                base = os.path.join(tmpdir, f"base_{coll}_{algo}_{s}.goal")
-                inc = os.path.join(tmpdir, f"inc_{coll}_{s}.goal")
+                base = os.path.join(tmpdir, f"base_{label}_{algo}_{s}.goal")
+                inc = os.path.join(tmpdir, f"inc_{label}_{s}.goal")
                 grp = inc[:-5] + ".groups"
                 goal.gen_baseline_goal(base, n, s, coll, algo, TAIL_NS)
-                goal.gen_inc_goal(inc, grp, n, s, coll, TAIL_NS)
+                goal.gen_inc_goal(inc, grp, n, s, inc_kind, TAIL_NS, root=inc_root)
                 goal.compile_goal(base, base[:-5] + ".bin")
                 goal.compile_goal(inc, inc[:-5] + ".bin")
-                log = os.path.join(OUTPUT_DIR, f"{coll}_{algo}_{n}_{s}.log")
+                log = os.path.join(OUTPUT_DIR, f"{label}_{algo}_{n}_{s}.log")
                 ifin, idrop, ist, icmd = sim.run_sim(inc[:-5] + ".bin", so_topo, su_topo,
                                                      nodes=n, gpus_per_node=n, groups=grp,
                                                      reduce_compute=reduce_compute,
@@ -127,7 +142,7 @@ def run_exp(n, sizes, su_topo, so_topo, reduce_compute, tmpdir, timeout):
                 with open(log, "w") as lf:
                     lf.write(icmd + "\n")
                 out.write({
-                    "collective": coll, "baseline_algo": algo, "group_size": n,
+                    "collective": label, "baseline_algo": algo, "group_size": n,
                     "msg_bytes": s, "inc_ns": inc_ns or "", "base_ns": base_ns or "",
                     "speedup": f"{speedup:.3f}" if speedup else "",
                     "inc_makespan_ns": ifin or "", "base_makespan_ns": bfin or "",
