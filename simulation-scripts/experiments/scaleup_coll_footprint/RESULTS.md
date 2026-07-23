@@ -71,6 +71,16 @@ is radix-4 (4 pods) vs the paper's radix-32 core, making inter-pod 6-hop traffic
    `LosslessOutputQueue` at the 1024-host heap layout; benign at 256, hence the fabric/arm-dependent
    look). **Fix: `= nullptr` on both members.** pcm-side only (the htsim-backend fork has no such
    member); distinct from the fork's traffic-driven >512-node `compositequeue` crash.
+7. **Analytical cost model (Khalilov's method) validates the sim and quantifies the gap to the paper.**
+   `analytic_khalilov.py` computes the theoretical byte·link footprint from first principles:
+   Ring = `2−2/P`; RD = `Σ_j P·2^(j−1)·hop(2^(j−1))`; multicast-optimal = `P·(P+⌈P/L⌉+⌈P/Q⌉)` — which
+   reproduces the MEASURED INC crosses to the byte (69632/279552/1118208 @ P=256/512/1024). Analytic
+   and measured ratios agree to **<0.5% at every P on all three topologies** (theory ↔ simulation mutual
+   validation). On the paper's radix-32 topology our Ring exactly matches Khalilov's `2−2/P`, and our RD
+   matches the paper up to P≈16 (one leaf) then climbs higher — **5.1× (analytic AND measured) vs the
+   paper's ~3.6× at P=1024**. Khalilov's exact cost model (Appendix B) is absent from the core-only PDF,
+   so this ~40% gap is attributable to a difference in the paper's RD/multicast footprint accounting;
+   our two independent methods are self-consistent.
 
 ## Method note (for the thesis)
 
