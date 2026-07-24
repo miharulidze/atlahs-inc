@@ -22,7 +22,7 @@ rm -f "$REPO_ROOT/simulation-scripts/results/scaleup_coll_ab_groupsweep/scaleup_
 for n in $GROUP_SIZES; do
   echo "[groupsweep] |G|=$n  single-switch-64"
   docker run --rm -v "$REPO_ROOT":/workspace -e SCALEUP_OUTPUT_DIR="$OUT" "$IMG" \
-    run scaleup_coll_ab --n "$n" --su-topo scaleup_single_switch_64_3600Gbps.topo --sizes "$SIZES"
+    run scaleup_coll_ab --n "$n" --su-topo scaleup_single_switch_64_4000Gbps.topo --sizes "$SIZES"
 done
 
 echo "[groupsweep] done -> simulation-scripts/results/scaleup_coll_ab_groupsweep/scaleup_coll_ab.csv"

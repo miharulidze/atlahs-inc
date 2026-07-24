@@ -1,4 +1,4 @@
-# scaleup_ft_radix32_1024_3600Gbps.topo
+# scaleup_ft_radix32_1024_4000Gbps.topo
 #
 # DIRECT reproduction of the topology in Khalilov et al. SC24 Fig. 2:
 # "a 1024-node cluster connected with a Fat-Tree topology using radix 32 switches."
@@ -30,14 +30,15 @@
 # footprint RATIO -- which depends only on the leaf(16)/pod(256) regime thresholds -- is
 # unaffected. (Same style of documented cap/size artifact as the SUE 4096 file.)
 #
-# BANDWIDTH/LATENCY: footprint (link-crosses) is speed/latency-independent; 3600 Gbps &
-# idealized 500 ns link / 300 ns switch chosen for cross-topology comparability.
+# BANDWIDTH/LATENCY: footprint (link-crosses) is speed/latency-independent; 4000 Gbps
+# (exactly 2 ps/B, matching the -intranode_linkspeed 4000000 NIC rate; 3600 rounds to the
+# same) & idealized 500 ns link / 300 ns switch chosen for cross-topology comparability.
 Nodes 1024
 Tiers 3
 Podsize 256
 
 Tier 0
-Downlink_speed_Gbps 3600
+Downlink_speed_Gbps 4000
 Radix_Down 16
 Radix_Up 16
 Downlink_Latency_ns 500
@@ -45,7 +46,7 @@ Switch_Latency_ns 300
 Oversubscribed 1
 
 Tier 1
-Downlink_speed_Gbps 3600
+Downlink_speed_Gbps 4000
 Radix_Down 16
 Radix_Up 16
 Downlink_Latency_ns 500
@@ -53,7 +54,7 @@ Switch_Latency_ns 300
 Oversubscribed 1
 
 Tier 2
-Downlink_speed_Gbps 3600
+Downlink_speed_Gbps 4000
 Radix_Down 4
 Downlink_Latency_ns 500
 Switch_Latency_ns 300

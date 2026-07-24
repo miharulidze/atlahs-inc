@@ -38,8 +38,8 @@ fork / default-`COMPOSITE`-queue bug, off this lossless path.
 
 | class | topo file | P sweep | what it shows |
 |---|---|---|---|
-| `single_switch` | `scaleup_single_switch_64_3600Gbps.topo` | 2,4,8,16,32,64 | every pair 2 hops → Ring≡RD, flat `2−2/P` |
-| `fat3tier` | `scaleup_3tier_256_3600Gbps.topo` (4×4×16) | 2,4,8,…,256 | 2/4/6-hop regimes → RD diverges & climbs |
+| `single_switch` | `scaleup_single_switch_64_4000Gbps.topo` | 2,4,8,16,32,64 | every pair 2 hops → Ring≡RD, flat `2−2/P` |
+| `fat3tier` | `scaleup_3tier_256_4000Gbps.topo` (4×4×16) | 2,4,8,…,256 | 2/4/6-hop regimes → RD diverges & climbs |
 
 ## Run
 

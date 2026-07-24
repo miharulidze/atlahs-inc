@@ -41,7 +41,7 @@ TAIL_NS = 100
 
 OUTPUT_DIR = os.environ.get("SCALEUP_OUTPUT_DIR", paths.results_dir(EXP_NAME))
 
-SU_TOPO = "scaleup_3tier_256_3600Gbps.topo"   # multi-core 3-tier (pinning is meaningful)
+SU_TOPO = "scaleup_3tier_256_4000Gbps.topo"   # multi-core 3-tier (pinning is meaningful)
 SO_TOPO = "tree16_bw200Gbps.topo"             # idle scale-out (mode Z)
 WIDTH = 256           # scale-up topo host width -> gpus_per_node
 HOSTS_PER_POD = 16    # 3-tier 256: 16 hosts/pod x 16 pods

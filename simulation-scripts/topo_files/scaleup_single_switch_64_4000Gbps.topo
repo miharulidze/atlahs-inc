@@ -1,8 +1,12 @@
-# scaleup_single_switch_64_3600Gbps.topo
+# scaleup_single_switch_64_4000Gbps.topo
 #
 # Models an NVLink-class SCALE-UP domain as a single non-blocking crossbar:
 # 64 hosts (GPUs) all attached to ONE ToR switch, every pair exactly one hop apart.
-# Per-host link = 3600 Gbps (NVLink-aggregate class); switch latency 300 ns, link 500 ns.
+# Per-host link = 4000 Gbps; switch latency 300 ns, link 500 ns. 4000 Gbps is exactly
+# 2 ps/B, chosen so the fabric link rate coincides with the receiver-NIC rate
+# (-intranode_linkspeed 4000000) by construction, rather than leaning on htsim's
+# integer-picosecond-per-byte rounding -- which also collapses 3600 Gbps (2.22 ps/B)
+# to 2 ps/B. NVLink-aggregate class is ~3600-4000 Gbps; the two give identical timing.
 #
 # Encoding note: htsim's FatTree parser rejects Tiers=1 (fat_tree_topology.cpp), so a
 # single switch is expressed as a DEGENERATE 2-tier fat-tree: Podsize == Nodes and
@@ -10,14 +14,13 @@
 # (Radix_Up 1) is vestigial and carries no host<->host traffic (all pairs are same-ToR,
 # one hop). Oversubscribed == Nodes keeps radix_down/radix_up == oversub (parser check).
 #
-# Sibling of scaleup_single_switch_16_3600Gbps.topo, scaled to 64 hosts for the
-# INC-vs-ring speedup-vs-N sweep (D3).
+# Scaled to 64 hosts for the INC-vs-ring speedup-vs-N sweep (D3).
 Nodes 64
 Tiers 2
 Podsize 64
 
 Tier 0
-Downlink_speed_Gbps 3600
+Downlink_speed_Gbps 4000
 Radix_Down 64
 Radix_Up 1
 Downlink_Latency_ns 500
@@ -25,7 +28,7 @@ Switch_Latency_ns 300
 Oversubscribed 64
 
 Tier 1
-Downlink_speed_Gbps 3600
+Downlink_speed_Gbps 4000
 Radix_Down 1
 Downlink_Latency_ns 500
 Switch_Latency_ns 300

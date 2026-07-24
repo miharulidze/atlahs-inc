@@ -13,7 +13,7 @@ rm -f "$REPO_ROOT/simulation-scripts/results/scaleup_ar_bandwidth/scaleup_ar_ban
 
 echo "[run_thesis] M-C E1: apex vs composed RS+AG, |G|=64 single-switch"
 docker run --rm -v "$REPO_ROOT":/workspace "$IMG" run scaleup_ar_bandwidth \
-  --n 64 --su-topo scaleup_single_switch_64_3600Gbps.topo
+  --n 64 --su-topo scaleup_single_switch_64_4000Gbps.topo
 
 echo "[run_thesis] done -> simulation-scripts/results/scaleup_ar_bandwidth/scaleup_ar_bandwidth.csv"
 echo "[run_thesis] plot: docker run --rm -v \$(pwd):/workspace --entrypoint python3 $IMG \\"

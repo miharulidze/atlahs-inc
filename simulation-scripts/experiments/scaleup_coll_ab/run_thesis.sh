@@ -18,9 +18,9 @@ echo "[run_thesis] clearing old CSV for a fresh regeneration"
 rm -f "$REPO_ROOT/simulation-scripts/results/scaleup_coll_ab/scaleup_coll_ab.csv"
 
 echo "[run_thesis] M-A single-switch-64 (one-hop headline)"
-run --n 64 --su-topo scaleup_single_switch_64_3600Gbps.topo --sizes "$SIZES"
+run --n 64 --su-topo scaleup_single_switch_64_4000Gbps.topo --sizes "$SIZES"
 
 echo "[run_thesis] M-A 3-tier fat-tree 256-host (multi-tier)"
-run --n 64 --su-topo scaleup_3tier_256_3600Gbps.topo --sizes "$SIZES"
+run --n 64 --su-topo scaleup_3tier_256_4000Gbps.topo --sizes "$SIZES"
 
 echo "[run_thesis] done -> simulation-scripts/results/scaleup_coll_ab/scaleup_coll_ab.csv"

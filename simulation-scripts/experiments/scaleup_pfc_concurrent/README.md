@@ -31,7 +31,7 @@ pinned core the *sole* contended resource (clean attribution).
 | parameter | value |
 |---|---|
 | engine | pcm-sdk (`htsim_flow_app_atlahs`, **rebuilt with `-mcast_pin`**) |
-| topology | `scaleup_3tier_256_3600Gbps.topo` (multi-core; pinning meaningful) |
+| topology | `scaleup_3tier_256_4000Gbps.topo` (multi-core; pinning meaningful) |
 | group geometry | 8-host groups, one per pod over pods 0–7 |
 | N sweep | 1, 2, 4, 8, 12, 16 concurrent disjoint groups |
 | message | 64 KiB AllReduce (apex) per group |

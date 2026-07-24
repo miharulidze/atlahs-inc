@@ -27,7 +27,7 @@ composed RS+AG = NVLS-multimem / MSCCL++ (needs an `mscclpp` bib entry -- absent
 
 Reproduce (local; binaries built in-tree):
   python3 experiments/scaleup_ar_bandwidth/run.py --validate            # generate+compile, NO sim
-  python3 experiments/scaleup_ar_bandwidth/run.py --su-topo scaleup_single_switch_64_3600Gbps.topo
+  python3 experiments/scaleup_ar_bandwidth/run.py --su-topo scaleup_single_switch_64_4000Gbps.topo
   python3 experiments/scaleup_ar_bandwidth/plot.py
 """
 import argparse
@@ -143,7 +143,7 @@ def main():
                     help="comma-separated message sizes in bytes (full gathered vector)")
     ap.add_argument("--su-topo", default=None,
                     help="scale-up .topo basename in TOPO_FILES_PATH "
-                         "(e.g. scaleup_single_switch_64_3600Gbps.topo)")
+                         "(e.g. scaleup_single_switch_64_4000Gbps.topo)")
     ap.add_argument("--so-topo", default=SO_TOPO_DEFAULT,
                     help="scale-out .topo basename (carries no traffic under single-domain isolation)")
     ap.add_argument("--reduce-compute", type=int, default=0,
@@ -164,7 +164,7 @@ def main():
     sim.require_simulator()
     if args.su_topo is None:
         sys.exit("--su-topo required for a sim run (e.g. "
-                 "scaleup_single_switch_64_3600Gbps.topo); or use --validate for the no-sim check")
+                 "scaleup_single_switch_64_4000Gbps.topo); or use --validate for the no-sim check")
     run_exp(args.n, sizes, paths.topo(args.su_topo), paths.topo(args.so_topo),
             args.reduce_compute, args.tmpdir, args.timeout)
 

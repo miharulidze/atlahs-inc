@@ -35,7 +35,7 @@ held per instruction, not because the comparison is unsound.
 |---|---|
 | engine | pcm-sdk (`htsim_flow_app_atlahs`) |
 | \|G\| = N | 64 (`--n`) |
-| scale-up topo | `scaleup_single_switch_64_3600Gbps.topo` (`--su-topo`, one-hop crossbar) |
+| scale-up topo | `scaleup_single_switch_64_4000Gbps.topo` (`--su-topo`, one-hop crossbar) |
 | scale-out topo | `tree16_bw200Gbps.topo` (carries no traffic under single-domain isolation) |
 | sizes | 4 KiB … 256 MiB, 9-point log grid, all divisible by N (`--sizes`) |
 | reduce_compute | 0 = charge-neither (`--reduce-compute`; >0 = sensitivity) |
@@ -64,7 +64,7 @@ sweep here is the figure; these 3 points are the cross-check.
 python3 experiments/scaleup_ar_bandwidth/run.py --validate
 
 # full sweep (RUN ONLY AFTER the B_inc!=B_ring fix lands):
-python3 experiments/scaleup_ar_bandwidth/run.py --su-topo scaleup_single_switch_64_3600Gbps.topo
+python3 experiments/scaleup_ar_bandwidth/run.py --su-topo scaleup_single_switch_64_4000Gbps.topo
 
 # plot (needs matplotlib; container):
 python3 experiments/scaleup_ar_bandwidth/plot.py

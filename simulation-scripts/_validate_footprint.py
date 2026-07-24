@@ -25,7 +25,7 @@ TAIL, MTU, PAYLOAD = 100, 4160, 4096
 SW = {2: "scaleup_single_switch_2_12800Gbps.topo",
       4: "scaleup_single_switch_4_12800Gbps.topo",
       8: "scaleup_single_switch_8_12800Gbps.topo",
-      64: "scaleup_single_switch_64_3600Gbps.topo"}
+      64: "scaleup_single_switch_64_4000Gbps.topo"}
 SO_SMALL = "tree16_bw200Gbps.topo"           # >=16 hosts
 SO_BIG = "tree128_nonblocking_400Gbps.topo"  # >=128 hosts
 

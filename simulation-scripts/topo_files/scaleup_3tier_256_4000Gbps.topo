@@ -1,4 +1,4 @@
-# scaleup_3tier_256_3600Gbps.topo
+# scaleup_3tier_256_4000Gbps.topo
 #
 # A 3-TIER scale-up fat-tree of 256 hosts, minted for the multicast bandwidth-
 # usage-reduction (network-footprint) experiment (simulation-scripts/experiments/
@@ -27,16 +27,18 @@
 #   Full bisection / 1:1 oversubscription at every tier (up-bw == down-bw).
 #
 # BANDWIDTH / LATENCY: footprint (link-crosses) is INDEPENDENT of link speed and
-# latency, so these values do not affect the metric. Downlink_speed_Gbps 3600 matches
-# the sibling scaleup_single_switch_64_3600Gbps.topo (NVLink-4-class, per the locked
-# bidir-GB/s x4 convention); idealized 500 ns link / 300 ns switch (as in the SUE
-# nonblocking file) for cross-topology comparability.
+# latency, so these values do not affect the metric. Downlink_speed_Gbps 4000 matches
+# the sibling scaleup_single_switch_64_4000Gbps.topo: 4000 Gbps is exactly 2 ps/B, so
+# the fabric rate equals the receiver-NIC rate (-intranode_linkspeed 4000000) by
+# construction instead of via integer-ps rounding (which maps 3600 -> 2 ps/B too).
+# Idealized 500 ns link / 300 ns switch (as in the SUE nonblocking file) for
+# cross-topology comparability.
 Nodes 256
 Tiers 3
 Podsize 16
 
 Tier 0
-Downlink_speed_Gbps 3600
+Downlink_speed_Gbps 4000
 Radix_Down 4
 Radix_Up 4
 Downlink_Latency_ns 500
@@ -44,7 +46,7 @@ Switch_Latency_ns 300
 Oversubscribed 1
 
 Tier 1
-Downlink_speed_Gbps 3600
+Downlink_speed_Gbps 4000
 Radix_Down 4
 Radix_Up 4
 Downlink_Latency_ns 500
@@ -52,7 +54,7 @@ Switch_Latency_ns 300
 Oversubscribed 1
 
 Tier 2
-Downlink_speed_Gbps 3600
+Downlink_speed_Gbps 4000
 Radix_Down 16
 Downlink_Latency_ns 500
 Switch_Latency_ns 300

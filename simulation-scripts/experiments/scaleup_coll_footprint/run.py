@@ -61,13 +61,13 @@ OUTPUT_DIR = os.environ.get("FOOTPRINT_OUTPUT_DIR", paths.results_dir(EXP_NAME))
 
 # One fixed topology per class; P swept via the trace (partial population).
 TOPOS = [
-    {"cls": "single_switch", "topo": "scaleup_single_switch_64_3600Gbps.topo",
+    {"cls": "single_switch", "topo": "scaleup_single_switch_64_4000Gbps.topo",
      "width": 64, "P": [2, 4, 8, 16, 32, 64]},
-    {"cls": "fat3tier", "topo": "scaleup_3tier_256_3600Gbps.topo",
+    {"cls": "fat3tier", "topo": "scaleup_3tier_256_4000Gbps.topo",
      "width": 256, "P": [2, 4, 8, 16, 32, 64, 128, 256]},
     # Direct reproduction of Khalilov Fig. 2's topology: radix-32 3-tier, 1024 hosts
     # (leaf=16, pod=256). Ring -> ~2x, RD -> ~3.6x at P=1024, per the paper.
-    {"cls": "paper_r32", "topo": "scaleup_ft_radix32_1024_3600Gbps.topo",
+    {"cls": "paper_r32", "topo": "scaleup_ft_radix32_1024_4000Gbps.topo",
      "width": 1024, "P": [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]},
 ]
 
