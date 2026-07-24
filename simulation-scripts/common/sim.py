@@ -37,8 +37,13 @@ def parse_makespan(stdout):
 
 def run_sim(binpath, so_topo, su_topo, nodes, gpus_per_node, groups=None,
             reduce_compute=0, timeout=600,
-            intranode_linkspeed=INTRANODE_LINKSPEED_DEFAULT, end=100000000):
-    """One simulator run. Returns (makespan_ns|None, drop_count, status, command)."""
+            intranode_linkspeed=INTRANODE_LINKSPEED_DEFAULT, end=100000000,
+            mcast_pin=-1):
+    """One simulator run. Returns (makespan_ns|None, drop_count, status, command).
+
+    mcast_pin: -1 (default) = round-robin INC tree placement; >=0 pins every tree onto
+    one aggregation position + core (the PFC/backpressure experiment knob). Only appended
+    when >=0, so it needs a pcm binary built with the -mcast_pin flag (else it errors)."""
     cmd = [paths.PCM_APP_HTSIM_ATLAHS_EXEC_PATH, "-goal", binpath,
            "-nodes", str(nodes), "-num_gpus_per_node", str(gpus_per_node),
            "-topo", so_topo, "-intranode_topo", su_topo,
@@ -49,6 +54,8 @@ def run_sim(binpath, so_topo, su_topo, nodes, gpus_per_node, groups=None,
         cmd += ["-groups", groups]
     if reduce_compute:
         cmd += ["-reduce_compute_latency", str(reduce_compute)]
+    if mcast_pin >= 0:
+        cmd += ["-mcast_pin", str(mcast_pin)]
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:

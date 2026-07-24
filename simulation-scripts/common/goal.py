@@ -169,6 +169,47 @@ def gen_inc_goal(path, groups_path, n, size, kind, tail_ns, root=-1):
         f.write(" ".join(str(i) for i in range(n)) + "\n")
 
 
+def gen_multigroup_inc_goal(path, groups_path, num_ranks, groups, size, kind, tail_ns):
+    """PFC/backpressure trace: N DISJOINT concurrent INC collectives, one per group.
+
+    `groups` is a list of member-rank lists (one per group); the groups must be disjoint.
+    Each group g runs an independent rootless `coll <kind>` op (group index g into the
+    .groups sidecar; op_flow_id g so the N collectives stay independent/concurrent). Ranks
+    in no group emit a lone tail `calc` (idle filler keeping the rank space dense over
+    0..num_ranks-1; a filler finishes ~tail_ns, far below any collective, so the makespan
+    stays = the slowest group). Used by scaleup_pfc_concurrent to show PFC serialisation
+    when all trees are pinned to one core (-mcast_pin 0) vs. spread round-robin.
+
+    Rootless kinds only (allreduce/reduce_scatter/allgather): the disjoint-group core-
+    contention story is about the multicast/aggregation fan-out, not a rooted delivery."""
+    _, gen_goal = _generator()
+    KINDS = gen_goal.GoalCollective.KINDS
+    assert kind in KINDS and not KINDS[kind], (
+        f"gen_multigroup_inc_goal needs a rootless coll kind; got {kind!r}")
+    rank_group = {}
+    for gi, members in enumerate(groups):
+        for r in members:
+            assert 0 <= r < num_ranks, f"group {gi} member {r} out of range [0,{num_ranks})"
+            assert r not in rank_group, (f"groups must be DISJOINT (rank {r} in groups "
+                                         f"{rank_group[r]} and {gi})")
+            rank_group[r] = gi
+    with open(path, "w") as f:
+        f.write(f"num_ranks {num_ranks}\n\n")
+        for r in range(num_ranks):
+            f.write(f"rank {r} {{\n")
+            gi = rank_group.get(r)
+            if gi is not None:
+                f.write(f"l1: coll {kind} {size}b {gi} {gi} -1 cpu 1 nic 1\n")
+                f.write(f"l2: calc {tail_ns} cpu 0\n")
+                f.write("l2 requires l1\n")
+            else:
+                f.write(f"l1: calc {tail_ns} cpu 0\n")   # idle filler (non-empty rank block)
+            f.write("}\n\n")
+    with open(groups_path, "w") as f:
+        for members in groups:
+            f.write(" ".join(str(r) for r in members) + "\n")
+
+
 def expected_steps(collective, n, algo_name):
     """Busiest rank's send-op count (== count_steps). Rootless ring = n-1, rdouble =
     2*log2(n) or 2*(n-1) per Demystifying-NCCL Tables V-VII. The rooted pipelined-ring
