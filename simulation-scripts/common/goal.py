@@ -213,8 +213,11 @@ def gen_multigroup_inc_goal(path, groups_path, num_ranks, groups, size, kind, ta
 def expected_steps(collective, n, algo_name):
     """Busiest rank's send-op count (== count_steps). Rootless ring = n-1, rdouble =
     2*log2(n) or 2*(n-1) per Demystifying-NCCL Tables V-VII. The rooted pipelined-ring
-    Broadcast/Reduce split the message into n chunks streamed along the chain, so the
-    root (bcast) / tail (reduce) -- the busiest sender -- emits all n."""
+    Broadcast/Reduce chop the message into K = max(n, size//SEG_BYTES) chunks streamed
+    along the chain (communication.py), so the busiest sender -- root (bcast) / tail
+    (reduce) -- emits all K. That count is SIZE-dependent, so the n returned here is only
+    the small-message case (K == n); callers compile-check those two instead of
+    comparing counts (see experiments/scaleup_coll_ab/run.py)."""
     if collective == "allreduce":
         return 2 * (n.bit_length() - 1) if algo_name == "rdouble" else 2 * (n - 1)
     if collective in ("bcast", "reduce"):
