@@ -34,3 +34,11 @@ sim/htsim-backend/sim/datacenter/make_multicoll_test
 sim/htsim-backend/sim/datacenter/make_sr_test
 sim/htsim-backend/sim/lgs/txt2bin
 sim/htsim-backend/sim/datacenter/llama3_ab_pcm/*.err
+
+# locally built coll-extended LogGOPSim txt2bin (build_sim.py curls + patches it;
+# the recipe lives in tools/loggopsim-coll/{README.md,coll.patch}, which ARE tracked)
+tools/loggopsim-coll/LogGOPSim-1.1/
+tools/loggopsim-coll/LogGOPSim-1.1.tgz
+# editor / tool caches
+.cache/
+.idea/scopes/
