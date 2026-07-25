@@ -13,12 +13,12 @@ Tier 0
 Downlink_speed_Gbps 12800
 Radix_Down 4
 Radix_Up 1
-Downlink_Latency_ns 500
+Downlink_Latency_ns 50
 Switch_Latency_ns 300
 Oversubscribed 4
 
 Tier 1
 Downlink_speed_Gbps 12800
 Radix_Down 1
-Downlink_Latency_ns 500
+Downlink_Latency_ns 50
 Switch_Latency_ns 300
