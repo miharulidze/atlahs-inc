@@ -29,6 +29,7 @@ SWEEP= f"{WS}/simulation-scripts/results/scaleup_coll_ab_groupsweep/scaleup_coll
 OUT  = f"{WS}/simulation-scripts/results/scaleup_coll_ab/thesis_figs"
 
 SS = "scaleup_single_switch_64_4000Gbps.topo"
+FT = "scaleup_3tier_256_4000Gbps.topo"
 
 # Tableau-10, the house palette
 C = {"bcast": "#1f77b4", "reduce": "#17becf", "allreduce": "#d62728",
@@ -132,6 +133,31 @@ def fig_time(main, coll, fname, extra=()):
     plt.close(fig)
 
 
+def fig_speedup_two_fabrics(main, coll, fname, title):
+    """Speed-up vs message size for ONE collective on BOTH fabrics.
+
+    Replaces the absolute-time plot: the absolute curves are two near-parallel lines
+    whose interesting content (the ratio) the reader has to compute by eye, and the
+    numbers are already in the validation table. The ratio is the quantity the section
+    argues about, and putting both fabrics on one axis shows what changes with depth."""
+    fig, ax = plt.subplots(figsize=(7, 4.6))
+    for topo, label, colour, mk, ls in (
+            (SS, r"single switch ($d{=}1$)", "#1f77b4", "o", "-"),
+            (FT, r"three-tier ($d{=}3$)",    "#d62728", "^", "--")):
+        s_ = series(main, coll, topo=topo)
+        if not s_:
+            continue
+        ax.plot([x[0] for x in s_], [x[2]/x[1] for x in s_],
+                marker=mk, ms=4.5, ls=ls, color=colour, label=label)
+    ax.axhline(1.0, color="k", lw=0.8, ls=":")
+    style(ax, ylabel=r"speed-up  (endpoint $/$ in-network)")
+    ax.set_title(title)
+    ax.legend(fontsize=8.5)
+    fig.tight_layout()
+    fig.savefig(f"{OUT}/{fname}")
+    plt.close(fig)
+
+
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
     main, sweep = load(MAIN), load(SWEEP)
@@ -141,6 +167,8 @@ if __name__ == "__main__":
                     ("allreduce_rs_ag", r"in-network, composed RS$\circ$AG", "#8c564b", "--")])
     fig_time(main, "reduce_scatter", "inc_reduce_scatter_time.pdf")
     fig_time(main, "allgather", "inc_allgather_time.pdf")
+    fig_speedup_two_fabrics(main, "bcast", "inc_bcast_speedup.pdf",
+                            r"Broadcast, $|G|=64$")
     fig_time(main, "bcast", "inc_bcast_time.pdf")
     fig_time(main, "reduce", "inc_reduce_time.pdf")
     print(f"wrote figures to {OUT}")

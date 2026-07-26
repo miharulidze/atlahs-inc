@@ -18,6 +18,16 @@ from common import paths
 # realised 2 ps/B (492.3 payload-B/ns).
 INTRANODE_LINKSPEED_DEFAULT = 4000000
 
+# Wire MTU, passed as -mtu so the PAYLOAD MSS is a round 4096 B (MSS = MTU - 64).
+#
+# The pcm driver defaults to 4150, giving MSS = 4086, which leaves the two halves of
+# the engine inconsistent: the LogGOPS per-message gap in logsim-interface.cpp:959-961
+# computes its own packetisation with packet_size = 4096 and a 4160 B frame, so the gap
+# model assumes MSS = 4096 while the wire carries 4086. 4160 makes them agree.
+# It also makes f_w linear on the swept sizes -- every message size here is a power of
+# two, so 4096 divides them exactly and the ceiling in f_w never rounds.
+MTU_DEFAULT = 4160
+
 # Primary metric: the makespan summary line (verified emitted by
 # htsim_flow_app_atlahs). Fallback: max over per-host "Host N: t" lines (only
 # printed for <=16 ranks).
@@ -38,7 +48,7 @@ def parse_makespan(stdout):
 def run_sim(binpath, so_topo, su_topo, nodes, gpus_per_node, groups=None,
             reduce_compute=0, timeout=600,
             intranode_linkspeed=INTRANODE_LINKSPEED_DEFAULT, end=100000000,
-            mcast_pin=-1):
+            mcast_pin=-1, mtu=MTU_DEFAULT):
     """One simulator run. Returns (makespan_ns|None, drop_count, status, command).
 
     mcast_pin: -1 (default) = round-robin INC tree placement; >=0 pins every tree onto
@@ -50,6 +60,8 @@ def run_sim(binpath, so_topo, su_topo, nodes, gpus_per_node, groups=None,
            "-intranode_linkspeed", str(intranode_linkspeed),
            "-end", str(end), "-sender_cc_only",
            "-intranode_queue_type", "lossless_input"]
+    if mtu:
+        cmd += ["-mtu", str(mtu)]
     if groups:
         cmd += ["-groups", groups]
     if reduce_compute:
@@ -86,7 +98,7 @@ def _read_link_crosses(path):
 def run_sim_footprint(binpath, so_topo, su_topo, nodes, gpus_per_node, groups=None,
                       reduce_compute=0, timeout=600,
                       intranode_linkspeed=INTRANODE_LINKSPEED_DEFAULT, end=100000000,
-                      mtu=None):
+                      mtu=MTU_DEFAULT):
     """One footprint run: like run_sim() but adds -link_crosses_csv and reads the
     per-link-cross totals back. Returns
     (makespan_ns|None, link_crosses|None, link_bytes|None, drop_count, status, command).
@@ -110,6 +122,8 @@ def run_sim_footprint(binpath, so_topo, su_topo, nodes, gpus_per_node, groups=No
         cmd += ["-groups", groups]
     if reduce_compute:
         cmd += ["-reduce_compute_latency", str(reduce_compute)]
+    if os.environ.get("SIM_EXTRA_FLAGS"):
+        cmd += os.environ["SIM_EXTRA_FLAGS"].split()
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:

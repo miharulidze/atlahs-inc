@@ -12,9 +12,11 @@ Fabric constants
   t_l  = 50 ns             .topo Downlink_Latency_ns
   t_sw = 300 ns            .topo Switch_Latency_ns
   H    = 64 B              UecSrc::_hdr_size                       (uec.cpp:47)
-  MSS  = 4086 B payload    _mss = _mtu - _hdr_size = 4150 - 64     (uec.cpp:47-49)
-         NOTE: the chapter's notation block says 4096; it is 4086, and using the
-         true value is what takes the in-network residual under 1 ns.
+  MSS  = 4096 B payload    the harness passes -mtu 4160, so _mss = 4160 - 64 = 4096
+         (common/sim.py MTU_DEFAULT). The pcm driver's own default is 4150, which
+         would give 4086 -- inconsistent with the engine's LogGOPS gap accounting
+         (logsim-interface.cpp:959-961), which packetises at 4096 with a 4160 B frame.
+         With 4096 every swept size is an exact multiple, so f_w is linear.
 
 Models
   b       = S/N                                     per-rank block
@@ -43,7 +45,7 @@ import csv, math, os
 ROOT = "/Users/wstaempfli/CLionProjects/atlahs"
 OUT  = os.environ.get("RSAG_OUT",
        os.path.expanduser("~/CLionProjects/thesis-skeleton/figures"))
-T_L, T_SW, B, H, MSS = 50.0, 300.0, 500.0, 64, 4086
+T_L, T_SW, B, H, MSS = 50.0, 300.0, 500.0, 64, 4096
 FRAME = MSS + H
 
 # 64 contiguous ranks on the 3-tier fabric (4 hosts/leaf, 16/pod): foreign peers by depth
@@ -81,12 +83,17 @@ def sizetag(S):
 def num(x):  return f"{round(x):,}".replace(",", "{,}")
 def load(p): return list(csv.DictReader(open(p)))
 
-def wrap(colspec, header, body):
+def wrap(colspec, header, body, rules=None):
     """A COMPLETE tabular.  Row bodies must not be \\input into a tabular from outside:
     \\input is not expandable, so TeX has already opened a cell by the time the fragment
-    is read and the following \\hline dies with 'Misplaced \\noalign'."""
-    return ("  \\begin{tabular}{%s}\n    \\hline\n%s\n    \\hline\n%s\n    \\hline\n"
-            "  \\end{tabular}" % (colspec, header, body))
+    is read and the following rule dies with 'Misplaced \\noalign'.
+
+    booktabs rules (the chapter loads booktabs): \\toprule / \\midrule / \\bottomrule,
+    no vertical rules, which is the standard for numeric tables. `rules` is an optional
+    \\cmidrule line placed under the spanning header."""
+    cmid = f"\n{rules}" if rules else ""
+    return ("  \\begin{tabular}{%s}\n    \\toprule\n%s%s\n    \\midrule\n%s\n"
+            "    \\bottomrule\n  \\end{tabular}" % (colspec, header, cmid, body))
 
 MAIN  = os.path.join(ROOT, 'simulation-scripts/results/scaleup_coll_ab/scaleup_coll_ab.csv')
 SWEEP = os.path.join(ROOT, 'simulation-scripts/results/scaleup_coll_ab_groupsweep/scaleup_coll_ab.csv')
@@ -171,6 +178,81 @@ def table_3tier_ring():
            "    size & measured (ns) & model & err.\\ [\\%] & model & err.\\ [\\%]\\\\")
     return wrap("r r rr rr", hdr, "\n".join(out)), sum_lam
 
+# ── Table 0: Broadcast (== Reduce) validation, single switch ────────────────
+SEG = 512 * 1024
+PICK = (4096, 262144, 67108864)          # one small, one mid, one large
+
+def ring_chain(S, N, dmax=None, cen=None):
+    """Rooted pipelined chain: K chunks, fill the N-1 stages then drain the rest.
+    On a multi-tier fabric only ONE step is active at a time, so each is charged at its
+    own depth: pass the per-depth step census. On the crossbar every step is d=1."""
+    K = max(N, math.ceil(S / SEG)); c = S // K
+    lat = (N - 1) * lam(dmax) if cen is None else sum(n * lam(d) for d, n in cen.items())
+    return lat + (N + K - 2) * wire(c) / B
+
+def table_duality():
+    """Broadcast and Reduce side by side, ABSOLUTE measured completion times, both arms
+    on both fabrics, so equality reads down each adjacent pair."""
+    rows = load(MAIN)
+    def t(coll, topo, S, col):
+        x = [r for r in rows if r['collective'] == coll and topo in r['su_topo']
+             and int(r['msg_bytes']) == S and r['baseline_algo'] == 'ring']
+        return float(x[0][col]) if x else None
+    out, worst = [], 0.0
+    for S in sorted(set(int(r['msg_bytes']) for r in rows)):
+        cells = []
+        for topo in ('single_switch', '3tier'):
+            for col in ('inc_ns', 'base_ns'):
+                b, d = t('bcast', topo, S, col), t('reduce', topo, S, col)
+                if b is None or d is None:
+                    cells += ['---', '---']; continue
+                worst = max(worst, abs(100 * (d - b) / b))
+                cells.append(num(b))
+                cells.append(num(d) if d == b else f"\\textit{{{num(d)}}}")
+        out.append(f"    {sizetag(S)} & " + " & ".join(cells) + "\\\\")
+    hdr = ("    & \\multicolumn{4}{c}{single switch} & \\multicolumn{4}{c}{three-tier}\\\\\n"
+           "    \\cmidrule(lr){2-5} \\cmidrule(lr){6-9}\n"
+           "    & \\multicolumn{2}{c}{in-network} & \\multicolumn{2}{c}{endpoint}\n"
+           "    & \\multicolumn{2}{c}{in-network} & \\multicolumn{2}{c}{endpoint}\\\\\n"
+           "    \\cmidrule(lr){2-3} \\cmidrule(lr){4-5} \\cmidrule(lr){6-7} \\cmidrule(lr){8-9}\n"
+           "    size & Bc. & Rd. & Bc. & Rd. & Bc. & Rd. & Bc. & Rd.\\\\")
+    return wrap("r rr rr rr rr", hdr, "\n".join(out)), worst
+
+def table_bcast_both():
+    """Broadcast on BOTH fabrics in one table, at three message sizes.
+
+    Three sizes rather than nine: one latency-bound (4 KB), one in the knee (256 KB) and
+    one bandwidth-bound (64 MB) is enough to pin two models on two fabrics without
+    burying the reader in near-identical digits. The two fabrics differ in exactly two
+    constants -- t_INC(1) vs t_INC(3) for the tree, and (N-1)lambda vs the step census
+    sum_i lambda_i for the chain -- so putting them side by side is what makes the
+    comparison legible."""
+    rows = [r for r in load(MAIN) if r['collective'] == 'bcast'
+            and r['baseline_algo'] == 'ring']
+    cen = census(64)
+    out, worst_i, worst_b = [], 0.0, 0.0
+    for tag, key, d, c in (("single switch", 'single_switch', 1, None),
+                           ("three-tier", '3tier', 3, cen)):
+        out.append(f"    \\multicolumn{{6}}{{l}}{{\\itshape {tag}}}\\\\")
+        for S in PICK:
+            r = [x for x in rows if key in x['su_topo'] and int(x['msg_bytes']) == S]
+            if not r:
+                continue
+            r = r[0]; N = int(r['group_size'])
+            mi, mb = float(r['inc_ns']), float(r['base_ns'])
+            pi = inc_root(S, d)
+            pb = ring_chain(S, N, dmax=d, cen=c)
+            K = max(N, math.ceil(S / SEG))
+            worst_i = max(worst_i, abs(pi - mi))
+            worst_b = max(worst_b, abs(100 * (pb - mb) / mb))
+            out.append(f"    {sizetag(S)} & {K} & {num(mi)} & {num(pi)} & "
+                       f"{num(mb)} & {num(pb)}\\\\")
+    hdr = ("    & & \\multicolumn{2}{c}{$T_{\\mathrm{inc}}$ [ns]}\n"
+           "    & \\multicolumn{2}{c}{$T_{\\mathrm{ring}}^{(1)}$ [ns]}\\\\\n"
+           "    \\cmidrule(lr){3-4} \\cmidrule(lr){5-6}\n"
+           "    size & $K$ & meas. & model & meas. & model\\\\")
+    return wrap("r r rr rr", hdr, "\n".join(out)), worst_i, worst_b
+
 # ── Table 5: AllReduce, apex vs composed, both baselines ────────────────────
 def inc_root(S, d):
     """Bcast / Reduce / apex AllReduce: one source stream of S through a depth-d path."""
@@ -226,7 +308,11 @@ def table_podstep():
 
 if __name__ == '__main__':
     t1, worst = table_single_switch()
-    tables = [('tab_rsag_validation.tex', t1),
+    tb, wbi, wbb = table_bcast_both()
+    td, wd = table_duality()
+    tables = [('tab_duality.tex', td),
+              ('tab_bcast_validation.tex', tb),
+              ('tab_rsag_validation.tex', t1),
               ('tab_rsag_groupsweep.tex', table_groupsweep()),
               ('tab_rsag_3tier_inc.tex', table_3tier_inc())]
     t4, sum_lam = table_3tier_ring()
@@ -238,5 +324,7 @@ if __name__ == '__main__':
         open(os.path.join(OUT, name), 'w').write(body + "%\n")
     print(f"wrote {len(tables)} tables to {OUT}")
     print(f"worst single-switch in-network residual: {worst:.2f} ns")
+    print(f"duality: worst |Reduce - Broadcast| = {wd:.3f}% (in-network exactly 0 everywhere)")
+    print(f"Broadcast, both fabrics: in-network {wbi:.2f} ns, ring {wbb:+.2f}%")
     print(f"lambda: d=1 {lam(1):.1f}  d=2 {lam(2):.1f}  d=3 {lam(3):.1f}")
     print(f"sum_lambda(3-tier,N=64) = {sum_lam:,.0f}   63*lambda(3) = {63*lam(3):,.0f}")
