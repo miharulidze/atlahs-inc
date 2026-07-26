@@ -56,6 +56,10 @@ def run_sim(binpath, so_topo, su_topo, nodes, gpus_per_node, groups=None,
         cmd += ["-reduce_compute_latency", str(reduce_compute)]
     if mcast_pin >= 0:
         cmd += ["-mcast_pin", str(mcast_pin)]
+    # Escape hatch for datapath-policy flags under study (e.g. -rs_local_fold) so a
+    # sensitivity run needs no harness edit. Space-separated, appended verbatim.
+    if os.environ.get("SIM_EXTRA_FLAGS"):
+        cmd += os.environ["SIM_EXTRA_FLAGS"].split()
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
