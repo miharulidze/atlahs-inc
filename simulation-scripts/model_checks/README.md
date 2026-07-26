@@ -31,6 +31,61 @@ times on the crossbar and +0.75…+0.96 (converging on +5/6) on the three-tier f
 Nothing anywhere here is fitted. Every constant (`B`, `t_l`, `t_sw`, `H`, `MSS`) comes
 from the `.topo` files and the simulator's packet format.
 
+## The ring baseline's residual floor, decomposed
+
+The endpoint ring model over-predicts by a small, systematic amount that is flat in
+message size below a 64 KiB shard: −141 ns on the crossbar and −174 ns on the three-tier
+fabric at |G|=64. `floor_probe{,2,3,4}.sh` take it apart. It closes:
+
+```
+floor = (N-1) * [ 2d*H/B + q ],     q ~ 2.0 ns
+```
+
+**The 2d·H/B term is the ACK serialisation the model drops on purpose.** §4.1 says "the
+returning ACK is just 64 B, so its serialisation (≈0.13 ns per hop) is negligible", so
+λ(d) omits it. A round trip re-serialises the ACK once at the receiver's NIC and once at
+each of the 2d−1 switches, hence 2d hops. This term is the *entire* depth dependence:
+
+| | 2d·H/B | +q | = c | ×63 | predicted | observed |
+|---|---|---|---|---|---|---|
+| d=1 crossbar | 0.256 | 2.0 | 2.256 | 63 | 142.1 | 141.5 |
+| d=3 three-tier | 0.768 | 2.0 | 2.768 | 63 | 174.4 | 174.0 |
+
+**q ≈ 2.0 ns is the goal↔htsim interface's nanosecond grid.**
+`atlahs_htsim_api.h:144` reads the clock as `now() / 1000` — integer ps→ns truncation —
+and `null_event.cpp:27` converts back with `t * 1000`, so htsim can only be resumed on a
+1 ns boundary. A ring round crosses that boundary twice (the sender's send-completion and
+the receiver's recv-match, both via `MarkNodeAsDone` at a truncated `cpu_time`). Hand-
+deriving the round trip stage by stage at d=1, b=65,536 gives 941.696 ns against a
+measured 943.700: an excess of **2.004 ns**, i.e. two grid steps. The mechanism is located
+and the magnitude matches at both depths to under 0.01 ns; the sign of each individual
+snap has not been single-stepped.
+
+What the probes ruled out, each by moving one parameter and leaving the rest fixed:
+
+| probe | control | result |
+|---|---|---|
+| 1 | NIC send gate 4000 / 8000 / 16000 Gbps | completion times **bit-identical**; gate fully hidden |
+| 2 | t_ℓ and t_sw doubled (λ 808→1608) | floor unchanged, 1.00× — not latency |
+| 3 | N swept at **fixed** shard 65,536 B | floor exactly (N−1)×2.24 ns — strictly per-round |
+| 4A | MTU 4160→8320 (16→8 packets/round) | c unchanged at 2.248 — not per-packet, not frame-related |
+| 4B | gate 4000 vs 16000 Gbps at 16/64 MB | bit-identical — gate exonerated at large shards too |
+
+`logsim-interface.cpp:960` does charge the NIC send gate one frame *more* than the message
+needs, `(⌈b/4096⌉+1)·4160/B_nic`, which works out to exactly τ_b + one frame time. Probes 1
+and 4B show it never surfaces: it stays inside the ACK-gated round period at every rate and
+size we sweep.
+
+**Still open.** Above a 64 KiB shard a second, shard-size-dependent term appears on top of
+the floor: +0.5, +6.7 and +31.2 ns per round at shards of 256 KiB, 1 MiB and 4 MiB. It is
+not the send gate (probe 4B) and not GOAL-level chunking (`goal.py` chunks Broadcast and
+Reduce only, never the ring). Uncharacterised.
+
+**Confound to avoid.** Doubling the *fabric* rate while leaving `-intranode_linkspeed` at
+4000 makes the gate the bottleneck and the 4 MB floor blows out to −4,065 ns. That is why
+`scaleup_single_switch_64_4000Gbps.topo` matches the two rates by construction; probe 2's
+bw2x arm is only interpretable at a 4 KiB shard.
+
 ## Run recipes
 
 | script | what it does |
