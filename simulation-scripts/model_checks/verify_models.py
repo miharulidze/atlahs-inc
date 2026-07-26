@@ -258,6 +258,44 @@ def check_allreduce():
               f"moves the ring's own 2(N-1)/N bytes, exactly 1)")
 
 
+# ── 5b. shell symmetry: is one member's bound the collective's? ───────────────
+def check_shell_symmetry():
+    """Equation (rsag-inc-ag) is written for ONE member and compared with the whole
+    collective. That is only legitimate when every member sees the same shells, which
+    holds iff the group fills whole leaves and whole pods. Verified both ways: our
+    |G|=64 is symmetric, the pod-boundary sweep mostly is not, and taking a further
+    maximum over members predicts the asymmetric cases too."""
+    print("\n5b. Shell symmetry: when is one member's bound the collective's?")
+
+    def profile(members, h, per_leaf=4, per_pod=16):
+        return {1: sum(1 for x in members if x != h and x // per_leaf == h // per_leaf),
+                2: sum(1 for x in members if x // per_pod == h // per_pod
+                       and x // per_leaf != h // per_leaf),
+                3: sum(1 for x in members if x // per_pod != h // per_pod)}
+
+    main64 = {frozenset(profile(list(range(64)), h).items()) for h in range(64)}
+    check("the chapter's |G|=64 is symmetric: every member sees 3/12/48",
+          len(main64) == 1 and dict(next(iter(main64))) == {1: 3, 2: 12, 3: 48},
+          f"{len(main64)} distinct shell profile(s)")
+
+    if not os.path.exists(M.PODST):
+        print("  [SKIP] results/_podstep not present")
+        return
+    worst, asym = 0.0, 0
+    for r in rows_of(M.PODST, coll="allgather"):
+        N, S = int(r["group_size"]), int(r["msg_bytes"])
+        mem = list(range(N))
+        profs = {frozenset(profile(mem, h).items()) for h in mem}
+        asym += len(profs) > 1
+        # the straggler decides, so take a max over members as well as over shells
+        pred = max(M.inc_ag(S, N, {k: v for k, v in dict(pr).items() if v} or {1: 0})
+                   for pr in profs)
+        worst = max(worst, abs(pred - float(r["inc_ns"])))
+    check("max over members predicts the asymmetric groups too, under 1 ns",
+          worst < 1.0,
+          f"{asym} of 8 group sizes asymmetric, worst residual {worst:.2f} ns")
+
+
 # ── 6. Figure 4.8's shell arithmetic ─────────────────────────────────────────
 def check_shell_figure():
     """Re-derive every number drawn in the AllGather shell figure.
@@ -304,7 +342,7 @@ if __name__ == "__main__":
     print(f"Verifying the collective models against the committed CSVs under\n  {ROOT}")
     for fn in (check_single_switch, check_ring, check_podstep, check_naive_arm,
                check_fold_symmetry, check_three_tier, check_allreduce,
-               check_shell_figure):
+               check_shell_symmetry, check_shell_figure):
         fn()
     print()
     if FAILS:
