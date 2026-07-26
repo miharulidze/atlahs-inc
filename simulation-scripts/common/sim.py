@@ -12,6 +12,14 @@ import sys
 
 from common import paths
 
+# The scale-up domain is CC-FREE by construction (-intranode_cc none): it models an
+# NVLink-class fabric, where NIC line rate and lossless PFC govern and there is no
+# congestion-control window. Without the flag the driver leaves UecSrc::_sender_cc_algo at
+# its NSCC default (uec.cpp:63) -- which on a non-blocking crossbar with dedicated ports
+# per ring step never throttles, so the flag is numerically neutral here (verified
+# bit-identical, model_checks/floor_probe5.sh) -- but the default WOULD bite on a
+# contended or oversubscribed scale-up topology, and the chapter claims a CC-free scale-up
+# domain, so the command line should say so rather than rely on it not mattering.
 # The scale-up per-GPU NIC rate is MANDATORY (-intranode_linkspeed): the .topo
 # sets only fabric pipes; omitting the flag defaults to 200 Gbps COPY_ENG and
 # silently caps every p2p arm. 4000000 pins the NIC frame time to the pipes'
@@ -59,6 +67,7 @@ def run_sim(binpath, so_topo, su_topo, nodes, gpus_per_node, groups=None,
            "-topo", so_topo, "-intranode_topo", su_topo,
            "-intranode_linkspeed", str(intranode_linkspeed),
            "-end", str(end), "-sender_cc_only",
+           "-intranode_cc", "none",
            "-intranode_queue_type", "lossless_input"]
     if mtu:
         cmd += ["-mtu", str(mtu)]
@@ -114,6 +123,7 @@ def run_sim_footprint(binpath, so_topo, su_topo, nodes, gpus_per_node, groups=No
            "-topo", so_topo, "-intranode_topo", su_topo,
            "-intranode_linkspeed", str(intranode_linkspeed),
            "-end", str(end), "-sender_cc_only",
+           "-intranode_cc", "none",
            "-intranode_queue_type", "lossless_input",
            "-link_crosses_csv", lc_path]
     if mtu:
