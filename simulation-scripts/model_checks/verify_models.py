@@ -212,10 +212,11 @@ def check_three_tier():
     check("AllGather mixed-depth under 1 ns below 64 MB",
           all(abs(e) < 1.0 for _, e, _ in small),
           f"{len(small)} points, worst {max(abs(e) for _, e, _ in small):.2f} ns")
-    check("the two largest are conservative (measured SLOWER than ideal)",
+    check("the two largest run ABOVE the model (it is an optimistic bound there)",
           all(p < 0 for _, _, p in large),
           "; ".join(f"{s>>20} MB {p:+.2f}%" for s, _, p in large)
-          + "  -- unmodelled multicast admission threshold")
+          + "  -- cause NOT identified; it is not the shell hand-over, which has"
+            " already happened by 16 MB where the model is still exact")
 
 
 # ── 5. AllReduce: apex wins on bandwidth, composition forfeits it ─────────────
@@ -328,6 +329,38 @@ def check_busy_period():
                     for k, v in sorted(starts.items())))
 
 
+# ── 5d. the shell hand-over in closed form ────────────────────────────────────
+def check_handover():
+    """The chapter gives the hand-over between shells in closed form: each extra tier costs
+    a constant 2(t_l + t_sw + w/B), so shell s+1 overtakes shell s exactly when
+    |shell s| tau_b falls below that. Pins the constant and the predicted binding shell."""
+    print("\n5d. Shell hand-over: closed form vs the argmax")
+    w = M.MSS + M.H
+    tinc = {s: M.fill(s, w) - w / M.B for s in (1, 2, 3)}
+    step = 2 * (M.T_L + M.T_SW + w / M.B)
+    check("t_INC increment per tier is constant 2(t_l + t_sw + w/B)",
+          all(abs((tinc[s + 1] - tinc[s]) - step) < 0.01 for s in (1, 2)),
+          f"{tinc[2]-tinc[1]:.2f} and {tinc[3]-tinc[2]:.2f} ns against {step:.2f}")
+
+    sh, bad = M.SHELLS_3TIER, []
+    for r in rows_of(M.MAIN, FT, "allgather"):
+        S = int(r["msg_bytes"])
+        tb = M.wire(S // 64) / M.B
+        # deepest shell whose predecessor's blocks are cheaper than one tier
+        pred = 3 if sh[2] * tb < step else (2 if sh[1] * tb < step else 1)
+        argmax = max((1, 2, 3),
+                     key=lambda s: tinc[s] + sum(n for d, n in sh.items() if d >= s) * tb)
+        if pred != argmax:
+            bad.append((S, pred, argmax))
+    check("closed form picks the same shell as the argmax at every size", not bad,
+          f"{len(list(rows_of(M.MAIN, FT, 'allgather')))} sizes agree"
+          if not bad else f"mismatches: {bad}")
+    check("hand-over sizes are 1.8 MB and 7.3 MB as quoted",
+          abs(64 * (step / sh[2]) * M.B / 2**20 - 1.82) < 0.02
+          and abs(64 * (step / sh[1]) * M.B / 2**20 - 7.29) < 0.02,
+          f"{64*(step/sh[2])*M.B/2**20:.2f} MiB and {64*(step/sh[1])*M.B/2**20:.2f} MiB")
+
+
 # ── 6. Figure 4.8's shell arithmetic ─────────────────────────────────────────
 def check_shell_figure():
     """Re-derive every number drawn in the AllGather shell figure.
@@ -374,7 +407,8 @@ if __name__ == "__main__":
     print(f"Verifying the collective models against the committed CSVs under\n  {ROOT}")
     for fn in (check_single_switch, check_ring, check_podstep, check_naive_arm,
                check_fold_symmetry, check_three_tier, check_allreduce,
-               check_shell_symmetry, check_busy_period, check_shell_figure):
+               check_shell_symmetry, check_busy_period, check_handover,
+               check_shell_figure):
         fn()
     print()
     if FAILS:
