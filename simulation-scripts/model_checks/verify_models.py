@@ -212,11 +212,15 @@ def check_three_tier():
     check("AllGather mixed-depth under 1 ns below 64 MB",
           all(abs(e) < 1.0 for _, e, _ in small),
           f"{len(small)} points, worst {max(abs(e) for _, e, _ in small):.2f} ns")
-    check("the two largest run ABOVE the model (it is an optimistic bound there)",
-          all(p < 0 for _, _, p in large),
-          "; ".join(f"{s>>20} MB {p:+.2f}%" for s, _, p in large)
-          + "  -- cause NOT identified; it is not the shell hand-over, which has"
-            " already happened by 16 MB where the model is still exact")
+    # characterised by ag_probe1: multi-tier only, onset between a 512 KB and a 1 MB
+    # shard, magnitude about one block time. Cause not established.
+    tb = {s: M.wire(s // 64) / M.B for s, _, _ in large}
+    inblk = [(s, e / tb[s]) for s, e, _ in large]
+    check("above a 512 KB shard the three-tier measurement exceeds the bound by ~1 block",
+          all(0.7 < -x < 1.4 for _, x in inblk),
+          "; ".join(f"{s>>20} MB {-x:+.2f} tau_b" for s, x in inblk)
+          + "  -- multi-tier only (the crossbar is exact at every size, ag_probe1);"
+            " cause not established")
 
 
 # ── 5. AllReduce: apex wins on bandwidth, composition forfeits it ─────────────

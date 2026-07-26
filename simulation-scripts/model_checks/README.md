@@ -135,6 +135,35 @@ has no window. That is a modelling call, not bookkeeping.
 `scaleup_single_switch_64_4000Gbps.topo` matches the two rates by construction; probe 2's
 bw2x arm is only interpretable at a 4 KiB shard.
 
+## The in-network AllGather deviation
+
+Equation (4.8) is exact to under a nanosecond everywhere except the largest three-tier
+shards. `ag_probe1.sh` sweeps the onset with the crossbar as a control:
+
+| frames per shard | 64 | 128 | 256 | 512 | 1024 |
+|---|---|---|---|---|---|
+| three-tier (ns) | −0.6 | −0.8 | **+1,745** | **+5,276** | **+9,101** |
+| in τ_b | — | — | +0.82 | +1.24 | +1.07 |
+| crossbar (ns) | −0.6 | −0.8 | −0.3 | −0.2 | −0.2 |
+
+Three facts, and no more:
+
+1. **It needs a multi-tier fabric.** The crossbar is exact at every size up to a 4 MiB
+   shard (1024 frames), so it is not a large-message or frame-count effect as such.
+2. **The onset is between a 512 KiB and a 1 MiB shard** (128 → 256 frames).
+3. **The magnitude is about one block time** — 0.82 to 1.24 τ_b, not a growing fraction.
+
+Not fitted to a law: three non-zero points would support several, and this file already
+records three attributions that had to be retracted for outrunning their evidence
+(a start-up transient, a multicast admission threshold, and DCTCP). What the data carries
+is "about one block time, multi-tier only, onset located".
+
+**Lead, not a claim.** Both the magnitude and the multi-tier restriction match the
+Reduce-Scatter fold excess (+0.75…+0.96 τ_b, also three-tier only), which is likewise
+localised to a switch's egress ordering without being derived. A shared cause is plausible
+and unproven; the discriminator would be a two-tier fabric, which would separate "any
+shared uplink" from "depth 3 specifically".
+
 ## Run recipes
 
 | script | what it does |
