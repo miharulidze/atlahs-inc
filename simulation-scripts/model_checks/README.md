@@ -28,6 +28,7 @@ from the `.topo` files and the simulator's packet format.
 | script | what it does |
 |---|---|
 | `regen_all.sh` | Regenerates every dataset that touches the INC emitters, in order: `scaleup_coll_ab`, its group sweep, `scaleup_coll_footprint`, `scaleup_ar_bandwidth`. Run after any datapath change. ~2 h. |
+| `fold_placement_test.py` | Discriminates what governs `-rs_local_fold`'s payoff: tree depth, or which link binds. Four placements on one fabric; the two spread ones falsify the depth reading. |
 | `podstep.sh` | The pod-boundary experiment: sweeps \|G\| ∈ {12,14,15,16,17,18,20,24} on the three-tier fabric at 85,680 B. Writes `results/_podstep`. |
 
 `podstep.sh` uses 85,680 B deliberately — it is the LCM of every group size in the
@@ -65,6 +66,18 @@ only diffing against a reference run:
    Found by the lower bound in check 2, not by a test.
 2. **Reduce and AllReduce padded their tail frame**, which only became visible once the
    AllGather fix broke the Broadcast/Reduce duality (416 vs 424 ns).
-3. **The published figures came from a superseded dataset.** `_gen_thesis_plots.py` read
+3. **`-rs_local_fold` looked depth-governed and is not.** Contiguous placement pins four
+   members to every leaf, tying leaf occupancy to tree depth; the fold's effect then
+   tracks depth perfectly (−1.000 / +0.499 / +0.832 at d = 1/2/3) and invites a wrong
+   law. One member per leaf breaks the coupling: a depth-2 group then *saves* a full
+   block time and a depth-3 group costs the same +0.5 as a depth-2 contiguous one. What
+   governs it is whether a rate-matched shared uplink sits above the lowest tier holding
+   two or more members. `fold_placement_test.py` is that experiment.
+4. **A "drop" is not always a drop.** 639,474 reported drops in a fold-on run were
+   `LOSSLESS not working!` warnings, which the harness's `DROP` regex matches; the queue
+   enqueues the packet on the next line and nothing is discarded. Re-running with a
+   larger `-intranode_q` gives zero warnings and a bit-identical completion time.
+   Check the queue code before discarding a measurement over this.
+5. **The published figures came from a superseded dataset.** `_gen_thesis_plots.py` read
    a 2026-07-22 snapshot and drew a *fitted* `t0`; both are gone, replaced by
    `_gen_collective_plots.py`.
