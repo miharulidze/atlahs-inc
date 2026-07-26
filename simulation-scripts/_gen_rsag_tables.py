@@ -171,7 +171,39 @@ def table_3tier_ring():
            "    size & measured (ns) & model & err.\\ [\\%] & model & err.\\ [\\%]\\\\")
     return wrap("r r rr rr", hdr, "\n".join(out)), sum_lam
 
-# ── Table 5: the pod-boundary step ──────────────────────────────────────────
+# ── Table 5: AllReduce, apex vs composed, both baselines ────────────────────
+def inc_root(S, d):
+    """Bcast / Reduce / apex AllReduce: one source stream of S through a depth-d path."""
+    w = min(S, MSS) + H
+    return fill(d, w) + (wire(S) - w)/B
+
+def table_ar():
+    rows = [r for r in load(MAIN) if 'single_switch' in r['su_topo']]
+    def get(c, S, algo='ring'):
+        x = [r for r in rows if r['collective'] == c and int(r['msg_bytes']) == S
+             and r['baseline_algo'] == algo]
+        return x[0] if x else None
+    sizes = sorted(set(int(r['msg_bytes']) for r in rows))
+    out = []
+    for S in sizes:
+        ar, rd, comp = get('allreduce', S), get('allreduce', S, 'rdouble'), get('allreduce_rs_ag', S)
+        if not (ar and comp):
+            continue
+        N = 64
+        m_ring, m_rd = float(ar['base_ns']), (float(rd['base_ns']) if rd else float('nan'))
+        m_apex, m_comp = float(ar['inc_ns']), float(comp['inc_ns'])
+        p_ring = 2*ring(S, N, 1)
+        p_apex = inc_root(S, 1)
+        p_comp = inc_rs(S, N, 1) + inc_ag(S, N, {1: N-1})
+        out.append(f"    {sizetag(S)} & {num(m_ring)} & {num(m_rd)} & "
+                   f"{num(m_apex)} & {num(p_apex)} & {num(m_comp)} & {num(p_comp)} & "
+                   f"{m_ring/m_apex:.2f} & {m_ring/m_comp:.2f}\\\\")
+    hdr = ("    & \\multicolumn{2}{c}{endpoint (ns)} & \\multicolumn{2}{c}{apex in-net (ns)}\n"
+           "    & \\multicolumn{2}{c}{composed (ns)} & \\multicolumn{2}{c}{speed-up vs ring}\\\\\n"
+           "    size & ring & rec.\\ dbl. & meas. & model & meas. & model & apex & comp.\\\\")
+    return wrap("r rr rr rr rr", hdr, "\n".join(out))
+
+# ── Table 6: the pod-boundary step ──────────────────────────────────────────
 def table_podstep():
     if not os.path.exists(PODST):
         return None
@@ -199,6 +231,7 @@ if __name__ == '__main__':
               ('tab_rsag_3tier_inc.tex', table_3tier_inc())]
     t4, sum_lam = table_3tier_ring()
     tables.append(('tab_rsag_3tier_ring.tex', t4))
+    tables.append(('tab_ar_validation.tex', table_ar()))
     t5 = table_podstep()
     if t5: tables.append(('tab_rsag_podstep.tex', t5))
     for name, body in tables:
