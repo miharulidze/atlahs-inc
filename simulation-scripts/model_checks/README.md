@@ -76,10 +76,59 @@ needs, `(⌈b/4096⌉+1)·4160/B_nic`, which works out to exactly τ_b + one fra
 and 4B show it never surfaces: it stays inside the ACK-gated round period at every rate and
 size we sweep.
 
-**Still open.** Above a 64 KiB shard a second, shard-size-dependent term appears on top of
-the floor: +0.5, +6.7 and +31.2 ns per round at shards of 256 KiB, 1 MiB and 4 MiB. It is
-not the send gate (probe 4B) and not GOAL-level chunking (`goal.py` chunks Broadcast and
-Reduce only, never the ring). Uncharacterised.
+### The second term: a window, with an exact law
+
+Above a 64 KiB shard a second term appears on top of the flat floor. `floor_probe6.sh`
+sweeps the shard finely at fixed N (so only bytes-per-round move) and it fits exactly:
+
+```
+excess = 0.0320 ns per round per frame beyond 48 frames,   0 at or below 48
+```
+
+| frames/round | 2 | 4 | 8 | 16 | 32 | 64 | 128 | 256 | 512 | 1024 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| measured excess | 0 | 0 | 0 | 0 | 0 | 0.513 | 2.572 | 6.660 | 14.851 | 31.233 |
+| 0.0320·(fr−48) | 0 | 0 | 0 | 0 | 0 | 0.512 | 2.560 | 6.656 | 14.848 | 31.232 |
+
+Marginal cost constant to 0.5% over five doublings; the fit is 0.06% at 256 frames.
+
+**48 frames is 199,680 B, and `uec.cpp:539` sets `_maxwnd = 50 * _mtu = 208,000 B` — the
+sender's window, exactly two frames above the measured knee.** So the transfer goes
+window-limited: past ~50 MTUs in flight, each further frame waits on a credit, at
+0.0320 ns = 16 B of time each. Eliminated as causes on the way: the NIC send gate
+(probe 4B, bit-identical at 4× the gate rate), GOAL chunking (`goal.py` chunks Broadcast
+and Reduce only, never the ring), congestion control and buffer size (probe 5, both
+bit-identical).
+
+**Not causally proven.** `floor_probe7.sh` tries to move it with `-cwnd 2000000` and the
+result is bit-identical, so that knob does not reach the effective window: the
+constructor's `50 * _mtu` (uec.cpp:539) wins over the NSCC per-instance
+`setMaxWnd(1.5*_bdp)` (uec.cpp:187), which `-intranode_cc none` bypasses anyway. Proving
+it needs a rebuild with `_maxwnd` changed. The law is exact and the coincidence with
+`_maxwnd` is two frames wide; that is the state of the evidence.
+
+### -intranode_cc none is NOT numerically neutral
+
+`sim.py` now passes it (the chapter claims a CC-free scale-up domain, and
+`experiments/intranode_linkspeed_sweep` already did). `ccnone_neutrality.sh` checks it
+against the committed CSVs over both fabrics, all collectives, three sizes: **41 of 42
+rows bit-identical, one moves.**
+
+```
+three-tier, allreduce/rdouble, 64 MB:   base 442,993 -> 461,935 ns   (+4.3%)
+```
+
+Recursive doubling runs concurrent pairwise exchanges, so unlike the ring — whose steps
+each own a dedicated sender/receiver pair — it genuinely contends on shared uplinks. On a
+multi-tier fabric there is real congestion for NSCC to pace, and removing the window
+leaves lossless PFC to absorb it, which is slower. Nothing contends on the crossbar, which
+is why a probe restricted to reduce_scatter/ring there reported "neutral".
+
+`results/scaleup_coll_ab` therefore needs regenerating. No number the chapter *quotes*
+changes — `table_ar` filters to the single switch — but the CC-free arm is the harsher one
+for the endpoint baseline, so keeping the flag makes INC-vs-recursive-doubling on the
+three-tier fabric slightly more favourable to INC, on the grounds that the modelled fabric
+has no window. That is a modelling call, not bookkeeping.
 
 **Confound to avoid.** Doubling the *fabric* rate while leaving `-intranode_linkspeed` at
 4000 makes the gate the bottleneck and the 4 MB floor blows out to −4,065 ns. That is why
