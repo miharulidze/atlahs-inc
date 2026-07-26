@@ -64,14 +64,22 @@ def fill(d, w):  return 2*d*T_L + (2*d-1)*T_SW + 2*d*w/B
 def inc_rs(S, N, d, blocks=None):
     """`blocks` = how many b-byte blocks cross the link that binds the fan-in.
 
-    The own-slice fold (default datapath since -rs_local_fold flipped to default-on)
-    takes a member's egress from N blocks to N-1: it does not ship a contribution
-    toward the slice it already owns.  On the crossbar that egress IS the binding link,
-    so blocks = N-1.  Where a shared uplink sits above the member -- a contiguous group
-    on the three-tier fabric puts four members per leaf -- that uplink still forwards
-    all N slices whatever its members skip, so the floor stays at blocks = N and the
-    fold buys nothing.  Default keys off depth because that is what distinguishes our
-    two fabrics; pass `blocks` explicitly for any other placement."""
+    A member never ships a contribution toward the slice it already owns, so for a link
+    with m_l group members in the subtree beneath it, the blocks climbing it are
+
+        N - 1   if m_l == 1     the sole member below is the owner and stays silent,
+                               so that slice produces no block at all
+        N       if m_l >= 2     the owner is silent but its m_l - 1 peers are not, so
+                               a block still climbs for every one of the N slices
+
+    and `blocks` is the maximum over the links on the member's path.  It is N-1 only
+    when EVERY link below the apex is unshared -- that is a property of placement, not
+    of tree depth: one member per leaf saves a block on a two-tier tree and does not on
+    a three-tier one, where the pod uplink is still shared.  The default below keys off
+    depth because that is what distinguishes our two canonical fabrics (single switch,
+    and a contiguous 64 on the three-tier, which pins four members per leaf); pass
+    `blocks` explicitly for any other placement.  With blocks = N the model is exact;
+    with blocks = N-1 above a crossbar it is a floor -- see model_checks/README.md."""
     b = S//N; w = min(b, MSS) + H
     if blocks is None:
         blocks = N - 1 if d == 1 else N
