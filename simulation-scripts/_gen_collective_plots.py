@@ -32,6 +32,14 @@ OUT  = f"{WS}/simulation-scripts/results/scaleup_coll_ab/thesis_figs"
 SS = "scaleup_single_switch_64_4000Gbps.topo"
 FT = "scaleup_3tier_256_4000Gbps.topo"
 
+# Sweep restriction (2026-07-26), mirroring _gen_rsag_tables.shard_ok: the sharded
+# collectives are plotted only where one rank's shard fills at least a full MSS, i.e.
+# S >= N*MSS.  Below that, lambda(d)'s full-MTU t_ser over-charges the ring model and the
+# baseline curve carries an artefact of the model rather than of the fabric.  Broadcast
+# and Reduce are not sharded and keep every size.
+MSS_B  = 4096
+SHARDED = {"reduce_scatter", "allgather", "allreduce", "allreduce_rs_ag"}
+
 # Tableau-10, the house palette
 C = {"bcast": "#1f77b4", "reduce": "#17becf", "allreduce": "#d62728",
      "allreduce_rd": "#e377c2", "allreduce_rs_ag": "#8c564b",
@@ -54,6 +62,12 @@ def series(rows, coll, topo=SS, algo="ring", N=64):
            for r in rows
            if r["collective"] == coll and r["su_topo"] == topo
            and r["baseline_algo"] == algo and int(r["group_size"]) == N]
+    if coll in SHARDED:
+        dropped = [S for S, _, _ in out if S // N < MSS_B]
+        out = [t for t in out if t[0] // N >= MSS_B]
+        if dropped:
+            print(f"  [shard rule] {coll} |G|={N}: dropped "
+                  + ", ".join(f"{S:,}B" for S in sorted(dropped)))
     out.sort()
     return out
 

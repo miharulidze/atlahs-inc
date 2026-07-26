@@ -38,12 +38,21 @@ def check(name, ok, detail):
 
 
 def rows_of(path, topo=None, coll=None, algo="ring"):
+    """Rows for one (topology, collective, baseline) triple.
+
+    Applies the chapter's sweep restriction: a sharded collective is only reported where
+    one rank's shard fills at least a full MSS (S >= N*MSS). Below that, lambda(d)'s
+    full-MTU t_ser over-charges the ring model, so the residual measures the model's
+    frame accounting rather than the fabric. See M.shard_ok."""
     out = load(path)
     if topo:
         out = [r for r in out if topo in r["su_topo"]]
     if coll:
         out = [r for r in out if r["collective"] == coll]
-    return [r for r in out if r["baseline_algo"] == algo]
+    out = [r for r in out if r["baseline_algo"] == algo]
+    return [r for r in out
+            if r["collective"] not in M.SHARDED
+            or M.shard_ok(int(r["msg_bytes"]), int(r["group_size"]))]
 
 
 # ── 1. in-network models are exact on the single-switch crossbar ──────────────
@@ -85,8 +94,9 @@ def check_ring():
             worst_max = max(worst_max, abs(100 * (p_max - meas) / meas))
             worst_sum = max(worst_sum, abs(100 * (p_sum - meas) / meas))
             n += 1
-    check("slowest-step form within 1.05%", worst_max < 1.05,
-          f"{n} points, worst {worst_max:.2f}%")
+    check("slowest-step form within 0.60%", worst_max < 0.60,
+          f"{n} points, worst {worst_max:.2f}% (was 1.04% before the shard rule "
+          f"excluded S < N*MSS)")
     check("sum-of-steps form is refuted (>10% somewhere)", worst_sum > 10,
           f"worst {worst_sum:.1f}% -- the two forms are cleanly separated")
 
@@ -221,6 +231,8 @@ def check_allreduce():
     worst_ident, worst_apex, worst_comp = 0.0, 0.0, 0.0
     for r in rows_of(M.MAIN, SS, "allreduce"):
         S = int(r["msg_bytes"])
+        if not M.shard_ok(S, 64):
+            continue
         rs, cp = one("reduce_scatter", S), one("allreduce_rs_ag", S)
         if not (rs and cp):
             continue

@@ -57,6 +57,18 @@ FRAME = MSS + H
 # 64 contiguous ranks on the 3-tier fabric (4 hosts/leaf, 16/pod): foreign peers by depth
 SHELLS_3TIER = {1: 3, 2: 12, 3: 48}
 
+# Sweep restriction (2026-07-26).  lambda(d) charges t_ser = f_w(MSS)/B at each of the
+# 2d-1 switches a round trip crosses, so for a per-rank shard b < MSS it over-charges by
+# (MSS-b)/B per switch -- 508 ns on the crossbar and 2,540 ns on the three-tier fabric over
+# 63 rounds at 4 KB, which was the whole of the ring model's error there.  The sharded
+# collectives are therefore reported only where every shard fills at least one frame.
+# Sub-threshold runs stay in the CSVs; they are filtered here, not deleted.
+SHARDED = ('reduce_scatter', 'allgather', 'allreduce', 'allreduce_rs_ag')
+
+def shard_ok(S, N):
+    """Does one rank's shard fill at least a full MSS?  S >= N*MSS."""
+    return S // N >= MSS
+
 def wire(x):     return x + H*math.ceil(x/MSS)
 def lam(d):      return 2*(2*d*T_L + (2*d-1)*T_SW) + (2*d-1)*FRAME/B
 def fill(d, w):  return 2*d*T_L + (2*d-1)*T_SW + 2*d*w/B
@@ -142,7 +154,7 @@ def table_rsag_both():
     for tag, key, d, shells in (("single switch", 'single_switch', 1, None),
                                 ("three-tier", '3tier', 3, SHELLS_3TIER)):
         out.append(f"    \\multicolumn{{7}}{{l}}{{\\itshape {tag}}}\\\\")
-        for S in PICK:
+        for S in PICK_RSAG:
             def get(coll):
                 x = [r for r in rows if key in r['su_topo'] and r['collective'] == coll
                      and int(r['msg_bytes']) == S]
@@ -175,7 +187,8 @@ def table_rsag_both():
 # ── Table 2: group-size sweep at 4 MB ───────────────────────────────────────
 def table_groupsweep():
     rows = [r for r in load(SWEEP) if r['collective'] in ('reduce_scatter', 'allgather')
-            and int(r['msg_bytes']) == 4194304]
+            and int(r['msg_bytes']) == 4194304
+            and shard_ok(4194304, int(r['group_size']))]
     byN = {}
     for r in rows:
         byN.setdefault(int(r['group_size']), {})[r['collective']] = r
@@ -194,7 +207,8 @@ def table_groupsweep():
 # ── Table 3: three-tier, in-network, both collectives ───────────────────────
 def table_3tier_inc():
     rows = [r for r in load(MAIN) if '3tier' in r['su_topo']
-            and r['collective'] in ('reduce_scatter', 'allgather')]
+            and r['collective'] in ('reduce_scatter', 'allgather')
+            and shard_ok(int(r['msg_bytes']), int(r['group_size']))]
     byS = {}
     for r in rows:
         byS.setdefault(int(r['msg_bytes']), {})[r['collective']] = r
@@ -214,7 +228,8 @@ def table_3tier_inc():
 # ── Table 4: three-tier ring, sum-of-steps vs slowest-step ──────────────────
 def table_3tier_ring():
     rows = [r for r in load(MAIN) if '3tier' in r['su_topo']
-            and r['collective'] == 'reduce_scatter']
+            and r['collective'] == 'reduce_scatter'
+            and shard_ok(int(r['msg_bytes']), int(r['group_size']))]
     cen = census(64)
     sum_lam = sum(n*lam(d) for d, n in cen.items())
     out = []
@@ -233,6 +248,7 @@ def table_3tier_ring():
 # ── Table 0: Broadcast (== Reduce) validation, single switch ────────────────
 SEG = 512 * 1024
 PICK = (4096, 262144, 67108864)          # one small, one mid, one large
+PICK_RSAG = (262144, 4194304, 67108864)  # ditto, but every shard >= one MSS at |G|=64
 
 def ring_chain(S, N, dmax=None, cen=None):
     """Rooted pipelined chain: K chunks, fill the N-1 stages then drain the rest.
@@ -312,7 +328,8 @@ def inc_root(S, d):
     return fill(d, w) + (wire(S) - w)/B
 
 def table_ar():
-    rows = [r for r in load(MAIN) if 'single_switch' in r['su_topo']]
+    rows = [r for r in load(MAIN) if 'single_switch' in r['su_topo']
+            and shard_ok(int(r['msg_bytes']), int(r['group_size']))]
     def get(c, S, algo='ring'):
         x = [r for r in rows if r['collective'] == c and int(r['msg_bytes']) == S
              and r['baseline_algo'] == algo]
@@ -341,7 +358,8 @@ def table_ar():
 def table_podstep():
     if not os.path.exists(PODST):
         return None
-    rows = [r for r in load(PODST) if r['collective'] == 'reduce_scatter']
+    rows = [r for r in load(PODST) if r['collective'] == 'reduce_scatter'
+            and shard_ok(int(r['msg_bytes']), int(r['group_size']))]
     out, prev = [], None
     for r in sorted(rows, key=lambda r: int(r['group_size'])):
         N, S = int(r['group_size']), int(r['msg_bytes'])
@@ -375,6 +393,18 @@ if __name__ == '__main__':
     for name, body in tables:
         open(os.path.join(OUT, name), 'w').write(body + "%\n")
     print(f"wrote {len(tables)} tables to {OUT}")
+    # no silent caps: say what the shard rule excluded and from where
+    excl = {}
+    for tag, src in (('scaleup_coll_ab', MAIN), ('groupsweep', SWEEP), ('_podstep', PODST)):
+        if not os.path.exists(src):
+            continue
+        for r in load(src):
+            if r['collective'] in SHARDED and not shard_ok(int(r['msg_bytes']),
+                                                           int(r['group_size'])):
+                excl.setdefault(tag, set()).add((int(r['group_size']), int(r['msg_bytes'])))
+    print("shard rule S >= N*MSS excluded: "
+          + ("; ".join(f"{t}: " + ", ".join(f"|G|={n} @ {S:,}B" for n, S in sorted(v))
+                       for t, v in sorted(excl.items())) if excl else "nothing"))
     print(f"RS/AG: crossbar in-network {worst:.2f} ns (RS == AG at {same} table rows),"
           f" ring {wrb:+.2f}%")
     print("       three-tier RS excess over its uplink floor, in block times: "
