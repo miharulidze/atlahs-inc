@@ -258,10 +258,53 @@ def check_allreduce():
               f"moves the ring's own 2(N-1)/N bytes, exactly 1)")
 
 
+# ── 6. Figure 4.8's shell arithmetic ─────────────────────────────────────────
+def check_shell_figure():
+    """Re-derive every number drawn in the AllGather shell figure.
+
+    The figure hard-codes bar coordinates, so it is the one place in the chapter that
+    could silently drift from the data. This pins the three bounds, which shell binds at
+    each size, and the model/measurement agreement."""
+    print("\n6. Figure 4.8 (AllGather shell maximum): its drawn numbers")
+    w = M.MSS + M.H
+    tinc = {s: M.fill(s, w) - w / M.B for s in (1, 2, 3)}
+    ok = all(abs(tinc[s] - v) < 0.1 for s, v in ((1, 408.3), (2, 1125.0), (3, 1841.6)))
+    check("t_INC(s) as labelled: 408 / 1,125 / 1,842 ns", ok,
+          " / ".join(f"{tinc[s]:.1f}" for s in (1, 2, 3)))
+
+    nge = {s: sum(n for d, n in M.SHELLS_3TIER.items() if d >= s) for s in (1, 2, 3)}
+    check("n_>=s as labelled: 63 / 60 / 48", [nge[s] for s in (1, 2, 3)] == [63, 60, 48],
+          " / ".join(str(nge[s]) for s in (1, 2, 3)))
+
+    # (size, which shell the figure draws as binding, the T it prints)
+    drawn = ((262144, 3, 2241), (4194304, 2, 9112), (16777216, 1, 33954))
+    rows = {int(r["msg_bytes"]): r for r in rows_of(M.MAIN, FT, "allgather")}
+    for S, want_s, want_T in drawn:
+        tb = M.wire(S // 64) / M.B
+        bound = {s: tinc[s] + nge[s] * tb for s in (1, 2, 3)}
+        got_s = max(bound, key=bound.get)
+        meas = float(rows[S]["inc_ns"]) if S in rows else float("nan")
+        check(f"S={S >> 10} KiB: shell s={want_s} binds at T={want_T:,}",
+              got_s == want_s and abs(bound[got_s] - want_T) < 1.0
+              and abs(bound[got_s] - meas) <= 1.0,
+              f"binds s={got_s}, bound {bound[got_s]:,.0f}, measured {meas:,.0f}; "
+              + ", ".join(f"s={s}:{bound[s]:,.0f}" for s in (1, 2, 3)))
+
+    # the 4 MB decomposition the prose quotes: one deeper fill + four extra blocks
+    tb = M.wire(4194304 // 64) / M.B
+    fill_gap, blk_gap = tinc[3] - tinc[2], 4 * tb
+    check("4 MB gap decomposes as 717 ns fill + 532 ns blocks",
+          abs(fill_gap - 717) < 1 and abs(blk_gap - 532) < 1
+          and abs((fill_gap + blk_gap) - (M.inc_rs(4194304, 64, 3)
+                                          - M.inc_ag(4194304, 64, M.SHELLS_3TIER))) < 1,
+          f"{fill_gap:.0f} + {blk_gap:.0f} = {fill_gap + blk_gap:.0f} ns")
+
+
 if __name__ == "__main__":
     print(f"Verifying the collective models against the committed CSVs under\n  {ROOT}")
     for fn in (check_single_switch, check_ring, check_podstep, check_naive_arm,
-               check_fold_symmetry, check_three_tier, check_allreduce):
+               check_fold_symmetry, check_three_tier, check_allreduce,
+               check_shell_figure):
         fn()
     print()
     if FAILS:
