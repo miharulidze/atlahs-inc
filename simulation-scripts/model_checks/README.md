@@ -15,10 +15,18 @@ committed CSVs and prints PASS/FAIL per claim. It *imports* the model functions 
 away from the generator that produces the thesis tables: edit a model and both move
 together, and any claim that stops holding turns into a FAIL.
 
-Current output: 12/12 pass — in-network residuals under 1 ns over 42 single-switch
+Current output: 20/20 pass — in-network residuals under 1 ns over 42 single-switch
 points (all positive, i.e. integer-nanosecond truncation rather than fitting), the ring
 baseline within 1.04% over 30 points, the pod-boundary step at 1.74×, and AllReduce
-apex 2.16× against composed 1.09× at 256 MB.
+apex 2.16× against composed 1.10× at 256 MB.
+
+Since `-rs_local_fold` became the **default** datapath (2026-07-26), the Reduce-Scatter
+model carries a coefficient κ = blocks on the link that binds the fan-in: N−1 where the
+member's own egress is the busiest link on its path (the crossbar), N once a shared
+uplink sits above it, because that uplink forwards all N slices whatever its members
+skip. `-no_rs_local_fold` pins κ = N unconditionally and is the arm the model is exact
+against on *both* fabrics (0.84 ns over 18 points) — the fold is then worth −1.000 block
+times on the crossbar and +0.75…+0.96 (converging on +5/6) on the three-tier fabric.
 
 Nothing anywhere here is fitted. Every constant (`B`, `t_l`, `t_sw`, `H`, `MSS`) comes
 from the `.topo` files and the simulator's packet format.

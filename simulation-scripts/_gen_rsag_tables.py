@@ -24,10 +24,16 @@ Models
   fill(d) = 2d t_l + (2d-1) t_sw + 2d w/B           leading frame down a depth-d path
   f_w(x)  = x + H ceil(x/MSS)                       on-wire size of an x-byte payload
 
-  T_RS  = fill(d) + (N f_w(b) - w)/B                EGRESS-bound: a member injects a
-                                                    contribution for all N slices.
-                                                    Depth-uniform: the fold must reach
-                                                    the apex, so every slice pays d_max.
+  T_RS  = fill(d) + (c f_w(b) - w)/B                Fan-in, bound by the busiest link on
+          c = N-1  no shared uplink above the       the member's path, and depth-uniform:
+                   member (own-slice fold: the      the fold has to reach the apex, so
+                   member skips its own slice)      every slice pays d_max.
+          c = N    a shared uplink above it: that
+                   uplink forwards all N slices
+                   whatever the member skips
+                                                    With c = N the model is a floor, not
+                                                    an equality: measurement sits 5/6 of
+                                                    a block time above it (see below).
   T_AG  = max over depth shells s of                INGRESS-bound: a member ingests the
           [ fill(s) + n_{>=s} f_w(b)/B - w/B ]      N-1 foreign blocks, which arrive from
                                                     DIFFERENT depths (a same-leaf peer's
@@ -55,9 +61,21 @@ def wire(x):     return x + H*math.ceil(x/MSS)
 def lam(d):      return 2*(2*d*T_L + (2*d-1)*T_SW) + (2*d-1)*FRAME/B
 def fill(d, w):  return 2*d*T_L + (2*d-1)*T_SW + 2*d*w/B
 
-def inc_rs(S, N, d):
+def inc_rs(S, N, d, blocks=None):
+    """`blocks` = how many b-byte blocks cross the link that binds the fan-in.
+
+    The own-slice fold (default datapath since -rs_local_fold flipped to default-on)
+    takes a member's egress from N blocks to N-1: it does not ship a contribution
+    toward the slice it already owns.  On the crossbar that egress IS the binding link,
+    so blocks = N-1.  Where a shared uplink sits above the member -- a contiguous group
+    on the three-tier fabric puts four members per leaf -- that uplink still forwards
+    all N slices whatever its members skip, so the floor stays at blocks = N and the
+    fold buys nothing.  Default keys off depth because that is what distinguishes our
+    two fabrics; pass `blocks` explicitly for any other placement."""
     b = S//N; w = min(b, MSS) + H
-    return fill(d, w) + (N*wire(b) - w)/B
+    if blocks is None:
+        blocks = N - 1 if d == 1 else N
+    return fill(d, w) + (blocks*wire(b) - w)/B
 
 def inc_ag(S, N, shells):
     """shells: {depth: #foreign peers at that depth}.  Single switch = {1: N-1}."""
@@ -99,27 +117,52 @@ MAIN  = os.path.join(ROOT, 'simulation-scripts/results/scaleup_coll_ab/scaleup_c
 SWEEP = os.path.join(ROOT, 'simulation-scripts/results/scaleup_coll_ab_groupsweep/scaleup_coll_ab.csv')
 PODST = os.path.join(ROOT, 'simulation-scripts/results/_podstep/scaleup_coll_ab.csv')
 
-# ── Table 1: single-switch |G|=64 ───────────────────────────────────────────
-def table_single_switch():
-    rows = [r for r in load(MAIN) if 'single_switch' in r['su_topo']
+# ── Table 1: RS/AG on BOTH fabrics, three sizes ─────────────────────────────
+def table_rsag_both():
+    """Reduce-Scatter and AllGather on both fabrics at three sizes.
+
+    The two share one endpoint baseline (identical traffic on the same cycle), so the
+    ring columns are printed once.  In-network they part company on a multi-tier fabric:
+    with the own-slice fold, RS binds at the top-most SHARED UPLINK (N blocks) and AG at
+    the member's own ingress (N-1), and only on the crossbar -- where the member's link
+    is the sole link -- do the two coincide.  Returned diagnostics: worst in-network
+    residual on the crossbar, worst ring error, worst three-tier RS residual in units of
+    a block time (the unmodelled fold artefact), and how many sizes have RS == AG."""
+    rows = [r for r in load(MAIN) if r['baseline_algo'] == 'ring'
             and r['collective'] in ('reduce_scatter', 'allgather')]
-    out, worst = [], 0.0
-    for coll, label in (('reduce_scatter', 'Reduce-Scatter'), ('allgather', 'AllGather')):
-        out.append(f"    \\multicolumn{{8}}{{l}}{{\\itshape {label}}}\\\\")
-        for r in sorted([x for x in rows if x['collective'] == coll],
-                        key=lambda r: int(r['msg_bytes'])):
-            S, N = int(r['msg_bytes']), int(r['group_size'])
-            mi, mb = float(r['inc_ns']), float(r['base_ns'])
-            pi = inc_rs(S, N, 1) if coll == 'reduce_scatter' else inc_ag(S, N, {1: N-1})
-            pb = ring(S, N, 1)
-            worst = max(worst, abs(pi-mi))
-            out.append(f"    {sizetag(S)} & {num(S//N)} & {num(mi)} & {num(pi)} & "
-                       f"{num(mb)} & {num(pb)} & {mb/mi:.2f} & {pb/pi:.2f}\\\\")
-    hdr = ("    & & \\multicolumn{2}{c}{$T_{\\mathrm{inc}}$ (ns)}\n"
-           "    & \\multicolumn{2}{c}{$T_{\\mathrm{ring}}$ (ns)}\n"
-           "    & \\multicolumn{2}{c}{speed-up}\\\\\n"
-           "    size & $b$ [B] & meas. & model & meas. & model & meas. & model\\\\")
-    return wrap("r r rr rr rr", hdr, "\n".join(out)), worst
+    out, worst_ss, worst_b, blk_excess, same, npair = [], 0.0, 0.0, [], 0, 0
+    for tag, key, d, shells in (("single switch", 'single_switch', 1, None),
+                                ("three-tier", '3tier', 3, SHELLS_3TIER)):
+        out.append(f"    \\multicolumn{{7}}{{l}}{{\\itshape {tag}}}\\\\")
+        for S in PICK:
+            def get(coll):
+                x = [r for r in rows if key in r['su_topo'] and r['collective'] == coll
+                     and int(r['msg_bytes']) == S]
+                return x[0] if x else None
+            rs, ag = get('reduce_scatter'), get('allgather')
+            if not (rs and ag):
+                continue
+            N = int(rs['group_size'])
+            m_rs, m_ag, m_b = float(rs['inc_ns']), float(ag['inc_ns']), float(rs['base_ns'])
+            p_rs = inc_rs(S, N, d)
+            p_ag = inc_ag(S, N, {1: N-1} if shells is None else shells)
+            p_b = ring(S, N, d)
+            same += abs(m_rs - m_ag) <= 1
+            npair += 1
+            if d == 1:
+                worst_ss = max(worst_ss, abs(p_rs - m_rs), abs(p_ag - m_ag))
+            else:
+                blk_excess.append((S, (m_rs - p_rs) / (wire(S//N)/B)))
+            worst_b = max(worst_b, abs(100*(p_b - m_b)/m_b))
+            out.append(f"    {sizetag(S)} & {num(m_rs)} & {num(p_rs)} & {num(m_ag)} & "
+                       f"{num(p_ag)} & {num(m_b)} & {num(p_b)}\\\\")
+    hdr = ("    & \\multicolumn{2}{c}{Reduce-Scatter, in-net}\n"
+           "    & \\multicolumn{2}{c}{AllGather, in-net}\n"
+           "    & \\multicolumn{2}{c}{ring (both)}\\\\\n"
+           "    \\cmidrule(lr){2-3} \\cmidrule(lr){4-5} \\cmidrule(lr){6-7}\n"
+           "    size & meas. & model & meas. & model & meas. & model\\\\")
+    return (wrap("r rr rr rr", hdr, "\n".join(out)),
+            worst_ss, worst_b, blk_excess, f"{same}/{npair}")
 
 # ── Table 2: group-size sweep at 4 MB ───────────────────────────────────────
 def table_groupsweep():
@@ -152,11 +195,12 @@ def table_3tier_inc():
         rs, ag = byS[S]['reduce_scatter'], byS[S]['allgather']
         mr, ma = float(rs['inc_ns']), float(ag['inc_ns'])
         pr, pa = inc_rs(S, 64, 3), inc_ag(S, 64, SHELLS_3TIER)
-        out.append(f"    {sizetag(S)} & {num(mr)} & {num(pr)} & {pr-mr:+.1f} & "
+        blk = wire(S//64)/B
+        out.append(f"    {sizetag(S)} & {num(mr)} & {num(pr)} & {(mr-pr)/blk:+.2f} & "
                    f"{num(ma)} & {num(pa)} & {100*(pa-ma)/ma:+.2f}\\\\")
-    hdr = ("    & \\multicolumn{3}{c}{Reduce-Scatter (depth-uniform)}\n"
-           "    & \\multicolumn{3}{c}{AllGather (mixed-depth)}\\\\\n"
-           "    size & meas. & model & err.\\ [ns] & meas. & model & err.\\ [\\%]\\\\")
+    hdr = ("    & \\multicolumn{3}{c}{Reduce-Scatter (uplink-bound, $N$ blocks)}\n"
+           "    & \\multicolumn{3}{c}{AllGather (ingress-bound, mixed depth)}\\\\\n"
+           "    size & meas. & floor & excess [$\\tau_b$] & meas. & model & err.\\ [\\%]\\\\")
     return wrap("r rr r rr r", hdr, "\n".join(out))
 
 # ── Table 4: three-tier ring, sum-of-steps vs slowest-step ──────────────────
@@ -307,7 +351,7 @@ def table_podstep():
     return wrap("r r r r r rr", hdr, "\n".join(out))
 
 if __name__ == '__main__':
-    t1, worst = table_single_switch()
+    t1, worst, wrb, wblk, same = table_rsag_both()
     tb, wbi, wbb = table_bcast_both()
     td, wd = table_duality()
     tables = [('tab_duality.tex', td),
@@ -323,7 +367,10 @@ if __name__ == '__main__':
     for name, body in tables:
         open(os.path.join(OUT, name), 'w').write(body + "%\n")
     print(f"wrote {len(tables)} tables to {OUT}")
-    print(f"worst single-switch in-network residual: {worst:.2f} ns")
+    print(f"RS/AG: crossbar in-network {worst:.2f} ns (RS == AG at {same} table rows),"
+          f" ring {wrb:+.2f}%")
+    print("       three-tier RS excess over its uplink floor, in block times: "
+          + ", ".join(f"{sizetag(S).replace(chr(92)+',',' ')} {e:+.2f}" for S, e in wblk))
     print(f"duality: worst |Reduce - Broadcast| = {wd:.3f}% (in-network exactly 0 everywhere)")
     print(f"Broadcast, both fabrics: in-network {wbi:.2f} ns, ring {wbb:+.2f}%")
     print(f"lambda: d=1 {lam(1):.1f}  d=2 {lam(2):.1f}  d=3 {lam(3):.1f}")

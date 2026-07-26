@@ -113,12 +113,86 @@ def check_podstep():
               f"{step:.2f}x (16 fits one pod, 17 does not)")
 
 
-# ── 4. three-tier: RS depth-uniform, AG mixed-depth ───────────────────────────
+# ── 3a. the naive datapath pins Reduce-Scatter's kappa = N on BOTH fabrics ────
+def check_naive_arm():
+    print("\n3a. -no_rs_local_fold arm: Equation (rsag-inc-rs) with kappa = N")
+    path = os.path.join(ROOT, "simulation-scripts/results/_fold_off/scaleup_coll_ab.csv")
+    if not os.path.exists(path):
+        print("  [SKIP] results/_fold_off not present")
+        return
+    resid, neg = [], 0
+    for topo, d in ((SS, 1), (FT, 3)):
+        for r in rows_of(path, topo, "reduce_scatter"):
+            e = M.inc_rs(int(r["msg_bytes"]), 64, d, blocks=64) - float(r["inc_ns"])
+            resid.append(e)
+            neg += e < 0
+    # this is the arm the model was DERIVED for: no fold, so N blocks everywhere
+    check("kappa = N is exact on both fabrics", max(map(abs, resid)) < 1.0,
+          f"{len(resid)} points, worst {max(map(abs, resid)):.2f} ns")
+    check("every residual positive (ns truncation, not fitting)", neg == 0,
+          f"{neg} negative of {len(resid)}")
+
+    on = os.path.join(ROOT, "simulation-scripts/results/_fold_on/scaleup_coll_ab.csv")
+    if not os.path.exists(on):
+        return
+    # the two knee sizes scatter; the bandwidth-bound tail converges on 5/6
+    for topo, lo, hi, what in ((SS, -1.05, -0.90, "saves one block"),
+                               (FT,  0.70,  1.00, "costs 3/4 to one block")):
+        d = []
+        for r in rows_of(on, topo, "reduce_scatter"):
+            S = int(r["msg_bytes"])
+            naive = [x for x in rows_of(path, topo, "reduce_scatter")
+                     if int(x["msg_bytes"]) == S]
+            if naive and S >= 65536:                 # above the latency knee
+                d.append((float(r["inc_ns"]) - float(naive[0]["inc_ns"]))
+                         / (M.wire(S // 64) / M.B))
+        check(f"on the {'crossbar' if topo == SS else 'three-tier fabric'} the fold "
+              f"{what}", all(lo < x < hi for x in d),
+              f"{len(d)} sizes, {min(d):+.3f} to {max(d):+.3f} block times")
+
+
+# ── 3b. the own-slice fold: RS == AG on the crossbar, RS > AG above it ────────
+def check_fold_symmetry():
+    print("\n3b. Own-slice fold (default datapath): which link binds the fan-in")
+    for topo, want_equal in ((SS, True), (FT, False)):
+        pairs = []
+        for r in rows_of(M.MAIN, topo, "reduce_scatter"):
+            S = int(r["msg_bytes"])
+            ag = [x for x in rows_of(M.MAIN, topo, "allgather")
+                  if int(x["msg_bytes"]) == S]
+            if ag:
+                pairs.append((S, float(r["inc_ns"]), float(ag[0]["inc_ns"])))
+        eq = [abs(rs - ag) <= 1 for _, rs, ag in pairs]
+        if want_equal:
+            # no link above the member's own, so the fold takes both to (N-1) blocks
+            check("crossbar: Reduce-Scatter == AllGather at every size", all(eq),
+                  f"{sum(eq)}/{len(eq)} sizes agree to 1 ns")
+        else:
+            # a shared uplink sits above every member and still carries all N slices
+            worst = max((rs - ag) / ag for _, rs, ag in pairs)
+            check("three-tier: Reduce-Scatter strictly slower than AllGather",
+                  all(rs >= ag for _, rs, ag in pairs),
+                  f"{len(pairs)} sizes, up to {100*worst:+.2f}% -- the uplink "
+                  "the fold cannot unload")
+
+
+# ── 4. three-tier: RS uplink-bound, AG ingress-bound and shell-aware ──────────
 def check_three_tier():
-    print("\n4. Three-tier fabric: Reduce-Scatter depth-uniform, AllGather shell-aware")
-    worst_rs = max(abs(M.inc_rs(int(r["msg_bytes"]), 64, 3) - float(r["inc_ns"]))
-                   for r in rows_of(M.MAIN, FT, "reduce_scatter"))
-    check("Reduce-Scatter (d=3) under 1 ns", worst_rs < 1.0, f"worst {worst_rs:.2f} ns")
+    print("\n4. Three-tier fabric: Reduce-Scatter uplink-bound, AllGather shell-aware")
+    exc = []
+    for r in rows_of(M.MAIN, FT, "reduce_scatter"):
+        S = int(r["msg_bytes"])
+        floor = M.inc_rs(S, 64, 3)                       # N blocks over the uplink
+        exc.append((S, (float(r["inc_ns"]) - floor) / (M.wire(S // 64) / M.B)))
+    check("uplink floor is never violated above the latency knee",
+          all(e > 0 for S, e in exc if S >= 65536),
+          "excess over the floor, in block times: "
+          + ", ".join(f"{S>>10}K {e:+.2f}" for S, e in exc if S >= 65536))
+    band = [e for S, e in exc if S >= 4194304]
+    check("bandwidth-bound excess is a constant ~5/6 of a block time",
+          all(0.75 < e < 0.95 for e in band),
+          f"{len(band)} points, {min(band):.3f}--{max(band):.3f} "
+          "-- the unmodelled fold artefact")
 
     small, large = [], []
     for r in rows_of(M.MAIN, FT, "allgather"):
@@ -168,13 +242,14 @@ def check_allreduce():
         sp_comp = float(ar["base_ns"]) / float(cp["inc_ns"])
         check("apex ~2x at 256 MB while the composition ~1x", sp_apex > 2.0 > sp_comp,
               f"apex {sp_apex:.2f}x, composed {sp_comp:.2f}x "
-              f"(asymptotes 2(N-1)/N = {2*63/64:.3f} and {2*63/64/(2-1/64):.3f})")
+              f"(asymptotes 2(N-1)/N = {2*63/64:.3f} and, since the folded composition "
+              f"moves the ring's own 2(N-1)/N bytes, exactly 1)")
 
 
 if __name__ == "__main__":
     print(f"Verifying the collective models against the committed CSVs under\n  {ROOT}")
-    for fn in (check_single_switch, check_ring, check_podstep,
-               check_three_tier, check_allreduce):
+    for fn in (check_single_switch, check_ring, check_podstep, check_naive_arm,
+               check_fold_symmetry, check_three_tier, check_allreduce):
         fn()
     print()
     if FAILS:
