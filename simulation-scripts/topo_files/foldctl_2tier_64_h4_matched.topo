@@ -1,0 +1,25 @@
+# foldctl_2tier_64_h4_matched.topo -- the CONTROL baseline for the -rs_local_fold
+# causal test (simulation-scripts/model_checks/fold_slack_test.py).
+#
+# 2-tier, 64 hosts, 4 hosts per leaf, full bisection, at the same primitives as
+# scaleup_3tier_256_4000Gbps.topo: 4000 Gbps (= 2 ps/B), 50 ns link, 300 ns switch.
+# Every link is therefore EXACTLY rate matched: four host links at 4000 feed a leaf
+# that folds 4:1 and forwards on one 4000 Gbps uplink. Pair with the _up8000 sibling,
+# which differs ONLY in the shared link's rate.
+Nodes 64
+Tiers 2
+Podsize 64
+
+Tier 0
+Downlink_speed_Gbps 4000
+Radix_Down 4
+Radix_Up 4
+Downlink_Latency_ns 50
+Switch_Latency_ns 300
+Oversubscribed 1
+
+Tier 1
+Downlink_speed_Gbps 4000
+Radix_Down 16
+Downlink_Latency_ns 50
+Switch_Latency_ns 300

@@ -1,0 +1,28 @@
+# foldctl_2tier_64_h4_up8000.topo -- the TREATMENT of the -rs_local_fold causal test.
+#
+# Identical to foldctl_2tier_64_h4_matched.topo except that the shared leaf<->top links
+# run at 8000 Gbps, twice the 4000 Gbps host links, so no internal link can be
+# saturated by streams the hosts feed at 4000. Radix_Up 2 / Radix_Down 8 keeps the
+# bisection while halving the number of (now double-rate) uplinks.
+#
+# Result: the unfolded time is unchanged (35,205 -> 35,197 ns at |G|=16, S=16 MiB, i.e.
+# still host-bound), but -rs_local_fold flips from +0.498 to -0.998 block times -- the
+# full one-block saving. Slack on the shared link is what decides whether the fold's
+# saving can be cashed; nothing else about the group or the tree changed.
+Nodes 64
+Tiers 2
+Podsize 64
+
+Tier 0
+Downlink_speed_Gbps 4000
+Radix_Down 4
+Radix_Up 2
+Downlink_Latency_ns 50
+Switch_Latency_ns 300
+Oversubscribed 2
+
+Tier 1
+Downlink_speed_Gbps 8000
+Radix_Down 8
+Downlink_Latency_ns 50
+Switch_Latency_ns 300

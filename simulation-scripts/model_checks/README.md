@@ -28,6 +28,7 @@ from the `.topo` files and the simulator's packet format.
 | script | what it does |
 |---|---|
 | `regen_all.sh` | Regenerates every dataset that touches the INC emitters, in order: `scaleup_coll_ab`, its group sweep, `scaleup_coll_footprint`, `scaleup_ar_bandwidth`. Run after any datapath change. ~2 h. |
+| `fold_slack_test.py` | The causal control for `-rs_local_fold`: two fabrics differing only in the shared uplink's rate. Slack on that link flips the fold from +0.50 to −1.00 block times while the fold-off arm is unchanged. |
 | `fold_placement_test.py` | Discriminates what governs `-rs_local_fold`'s payoff: tree depth, or which link binds. Four placements on one fabric; the two spread ones falsify the depth reading. |
 | `podstep.sh` | The pod-boundary experiment: sweeps \|G\| ∈ {12,14,15,16,17,18,20,24} on the three-tier fabric at 85,680 B. Writes `results/_podstep`. |
 
