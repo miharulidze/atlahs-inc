@@ -296,6 +296,38 @@ def check_shell_symmetry():
           f"{asym} of 8 group sizes asymmetric, worst residual {worst:.2f} ns")
 
 
+# ── 5c. the shell maximum is EXACT, not just a bound ──────────────────────────
+def check_busy_period():
+    """The chapter claims max_s [t_INC(s) + n_>=s tau_b] is the completion time, not merely
+    a lower bound on it. That rests on the ingress being work-conserving: for a single
+    server with release dates, the last completion equals the largest such bound, because
+    the final busy period starts at some release and everything released earlier was
+    already cleared. Simulate the server directly and compare -- and record WHICH shell
+    starts the final busy period, since that is what 'binds' means."""
+    print("\n5c. Shell maximum is exact: work-conserving server vs max over shells")
+    w = M.MSS + M.H
+    tinc = {s: M.fill(s, w) - w / M.B for s in (1, 2, 3)}
+    worst, starts = 0.0, {}
+    for r in rows_of(M.MAIN, FT, "allgather"):
+        S = int(r["msg_bytes"])
+        tb = M.wire(S // 64) / M.B
+        t, start = 0.0, None
+        for sh in (1, 2, 3):                       # serve the batches in release order
+            if t < tinc[sh]:                       # link idles -> busy period restarts
+                t, start = tinc[sh], sh
+            t += M.SHELLS_3TIER[sh] * tb
+        closed = max(tinc[sh] + sum(n for d, n in M.SHELLS_3TIER.items() if d >= sh) * tb
+                     for sh in (1, 2, 3))
+        worst = max(worst, abs(t - closed))
+        starts.setdefault(start, []).append(S)
+    check("simulated server == closed-form maximum, under 0.01 ns", worst < 0.01,
+          f"worst {worst:.4f} ns over {sum(len(v) for v in starts.values())} sizes")
+    check("the binding shell is the one starting the final busy period, and it moves",
+          len(starts) > 1,
+          "; ".join(f"s={k} at " + ", ".join(f"{S>>10}K" for S in sorted(v))
+                    for k, v in sorted(starts.items())))
+
+
 # ── 6. Figure 4.8's shell arithmetic ─────────────────────────────────────────
 def check_shell_figure():
     """Re-derive every number drawn in the AllGather shell figure.
@@ -342,7 +374,7 @@ if __name__ == "__main__":
     print(f"Verifying the collective models against the committed CSVs under\n  {ROOT}")
     for fn in (check_single_switch, check_ring, check_podstep, check_naive_arm,
                check_fold_symmetry, check_three_tier, check_allreduce,
-               check_shell_symmetry, check_shell_figure):
+               check_shell_symmetry, check_busy_period, check_shell_figure):
         fn()
     print()
     if FAILS:
