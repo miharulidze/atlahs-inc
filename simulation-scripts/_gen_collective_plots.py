@@ -229,8 +229,11 @@ def fig_regimes(main, fname, N=64):
                 label=r"bandwidth bound $(N{+}K{-}2)/K$")
         Sk = Li * _B
         ax.axvline(Sk, color="black", lw=0.8, ls="-.", alpha=0.55)
-        ax.annotate(f"hand-over\n$T = t_{{\\mathrm{{INC}}}}$\n{Sk/1024:.0f} KiB",
-                    xy=(Sk, 2.6), xytext=(Sk*1.5, 3.4), fontsize=7, color="black",
+        # Label the CONDITION that fixes this x-position, not a bare "T": the chapter
+        # uses T with subscripts for completion TIMES, so "T = t_INC" reads as the
+        # completion time equalling its own floor, which happens only at S = 0.
+        ax.annotate(f"$f_w(S)/B = t_{{\\mathrm{{INC}}}}(d)$\n{Sk/1024:.0f} KiB",
+                    xy=(Sk, 2.6), xytext=(Sk*1.45, 3.2), fontsize=7, color="black",
                     va="center")
         ax.text(0.97, 0.93, f"{Lr/Li:.0f}$\\times$", transform=ax.transAxes,
                 ha="right", va="top", fontsize=8, color="#d62728")
