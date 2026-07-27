@@ -232,20 +232,26 @@ def fig_rsag_regimes(main, fname, N=64):
         RS:  t_d + T                              -> (N-1)/N,  a hair BELOW one
         AG:  max_s [t_s + (n_{>=s}/N) T]          -> exactly 1
     The two are 1.6% apart at N=64 and invisible on a log axis, so one dotted line is
-    drawn at 1 and the RS asymptote is annotated rather than plotted -- drawing two
-    indistinguishable lines would imply a resolution the figure does not have."""
+    drawn at 1 and the RS asymptote is named in the caption rather than plotted --
+    drawing two indistinguishable lines would imply a resolution the figure lacks.
+
+    NO f_w(S)/B = t_d marker, unlike the rooted figure. There the condition is exact:
+    the in-network denominator is t_d + T, so it is where the two terms cross. Here it
+    would be exact for Reduce-Scatter and meaningless for AllGather, whose denominator
+    is a maximum over depth batches with no single latency term to cross -- and a
+    vertical line that reads for only one of two plotted curves misleads.
+
+    Sized to be READ: 7.4in wide, not the rooted figure's 11in. Both are included at
+    \linewidth (369pt = 5.1in), so 11in is downscaled 0.46x and 7.5pt type lands at
+    3.5pt on the page. At 7.4in the scale is 0.69x and 10pt type lands near 7pt."""
     sizes = [2**(k/4) for k in range(70, 118)]      # from the smallest legal shard up
-    # 5.3 rather than the rooted figure's 4.6: the legend strip below the axes eats
-    # ~12% of the height, and this way the PLOT AREA matches Figure 4.5's once both are
-    # scaled to \linewidth.
-    fig, axes = plt.subplots(1, 2, figsize=(11, 5.3), sharey=True)
+    fig, axes = plt.subplots(1, 2, figsize=(7.4, 3.9), sharey=True)
     for ax, (tag, topo, d) in zip(axes, (
             (r"(a)  single switch, $d{=}1$", SS, 1),
             (r"(b)  three-tier, $d{=}3$",    FT, 3))):
         lam_max, t_d = _lam(d), _tinc(d)
         bat = {1: N-1} if d == 1 else _batches(N)
-        # kappa = N, so Reduce-Scatter's binding link carries the whole f_w(S).
-        # AllGather maximises over the depth batches, each releasing at its own t_s.
+
         def t_rs(S):
             return t_d + _fw(S)/_B
 
@@ -257,43 +263,37 @@ def fig_rsag_regimes(main, fname, N=64):
         for coll, tinc in (("reduce_scatter", t_rs), ("allgather", t_ag)):
             num = [(N-1)*lam_max + (N-1)/N*_fw(S)/_B for S in sizes]
             ax.plot(sizes, [n/tinc(S) for n, S in zip(num, sizes)],
-                    color=C[coll], lw=1.9, label=f"{TITLE[coll]}, model")
+                    color=C[coll], lw=1.7, label=f"{TITLE[coll]}, model")
             m = series(main, coll, topo=topo)
             if m:
                 ax.plot([x[0] for x in m], [x[2]/x[1] for x in m], "o", ms=5,
                         color=C[coll], mfc="white", mew=1.4,
                         label=f"{TITLE[coll]}, measured")
         ax.axhline((N-1)*lam_max/t_d, color="#d62728", ls="--", lw=1.2,
-                   label=r"latency bound $(N{-}1)\lambda_{\max} / t_d$")
-        ax.axhline(1.0, color="#2ca02c", ls=":", lw=1.6,
-                   label=r"bandwidth bound $1$ (AG); $(N{-}1)/N$ (RS)")
+                   label="latency bound")
+        ax.axhline(1.0, color="#2ca02c", ls=":", lw=1.6, label="bandwidth bound")
+        # the bound's VALUE, since the legend no longer carries its formula
         ax.text(0.97, 0.93, f"{(N-1)*lam_max/t_d:.0f}$\\times$",
                 transform=ax.transAxes, ha="right", va="top",
-                fontsize=8, color="#d62728")
-        # the knee, as in fig_regimes: where the in-network arm stops being
-        # latency-bound. Reduce-Scatter's binding link carries the full f_w(S), so the
-        # condition is f_w(S)/B = t_d, the same one the rooted collectives use.
-        Sk = t_d * _B
-        ax.axvline(Sk, color="black", lw=0.8, ls="-.", alpha=0.55)
-        ax.annotate(f"$f_w(S)/B = t_d$\n{Sk/1024:.0f} KiB",
-                    xy=(Sk, 2.2), xytext=(Sk*1.45, 2.2), fontsize=7, color="black",
-                    va="center")
+                fontsize=9, color="#d62728")
         style(ax, ylabel=None)
         plain_log_y(ax, [1, 2, 5, 10, 20, 50, 100, 200])
         # The shard rule leaves nothing below 256 KiB, so the rooted figure's tick set
         # would spend half the axis on empty space. Retick over the range that has data.
-        rs_ticks = [262144, 1048576, 4194304, 16777216, 67108864, 268435456]
-        ax.set_xticks(rs_ticks)
-        ax.set_xticklabels(["256 KiB", "1 MiB", "4 MiB", "16 MiB", "64 MiB", "256 MiB"])
+        # three ticks over the 11.8 octaves that carry data, which is the same tick
+        # density the rooted figure uses over its 16; four put "64 MiB" and "256 MiB"
+        # close enough to touch at this width.
+        ax.set_xticks([262144, 4194304, 67108864])
+        ax.set_xticklabels(["256 KiB", "4 MiB", "64 MiB"], fontsize=9)
         ax.set_xlim(2**17.4, 2**29.2)
-        ax.set_title(tag)
-    axes[0].set_ylabel(r"speed-up  (endpoint $/$ in-network)")
-    # Legend BELOW the axes: in panel (a) the knee sits at 203 KiB, hard against the
-    # left edge, and an in-axes legend at lower left buries its annotation.
+        ax.tick_params(axis="both", labelsize=9)
+        ax.set_xlabel("message size", fontsize=10)
+        ax.set_title(tag, fontsize=10)
+    axes[0].set_ylabel(r"speed-up  (endpoint $/$ in-network)", fontsize=10)
     h, l = axes[0].get_legend_handles_labels()
-    fig.legend(h, l, fontsize=7.5, ncol=3, loc="lower center",
-               bbox_to_anchor=(0.5, -0.02), frameon=False)
-    fig.tight_layout(rect=(0, 0.12, 1, 1))
+    fig.legend(h, l, fontsize=9, ncol=3, loc="lower center",
+               bbox_to_anchor=(0.5, -0.015), frameon=False)
+    fig.tight_layout(rect=(0, 0.15, 1, 1))
     fig.savefig(f"{OUT}/{fname}")
     plt.close(fig)
 
