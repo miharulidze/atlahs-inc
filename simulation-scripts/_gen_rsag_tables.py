@@ -76,25 +76,19 @@ def fill(d, w):  return 2*d*T_L + (2*d-1)*T_SW + 2*d*w/B
 def inc_rs(S, N, d, blocks=None):
     """`blocks` = how many b-byte blocks cross the link that binds the fan-in.
 
-    A member never ships a contribution toward the slice it already owns, so for a link
-    with m_l group members in the subtree beneath it, the blocks climbing it are
+    Every member ships a contribution for EVERY slice, including the one it owns, so
+    a block climbs for each of the N slices on every link of the member's path:
+    blocks = N, on every fabric and at every depth.  No placement case, no floor.
 
-        N - 1   if m_l == 1     the sole member below is the owner and stays silent,
-                               so that slice produces no block at all
-        N       if m_l >= 2     the owner is silent but its m_l - 1 peers are not, so
-                               a block still climbs for every one of the N slices
-
-    and `blocks` is the maximum over the links on the member's path.  It is N-1 only
-    when EVERY link below the apex is unshared -- that is a property of placement, not
-    of tree depth: one member per leaf saves a block on a two-tier tree and does not on
-    a three-tier one, where the pod uplink is still shared.  The default below keys off
-    depth because that is what distinguishes our two canonical fabrics (single switch,
-    and a contiguous 64 on the three-tier, which pins four members per leaf); pass
-    `blocks` explicitly for any other placement.  With blocks = N the model is exact;
-    with blocks = N-1 above a crossbar it is a floor -- see model_checks/README.md."""
+    This is the datapath's default as of the 2026-07-27 fold retirement.  The own-slice
+    local fold (-rs_local_fold) would drop the owner's own block and give N-1 where a
+    link is unshared, but it desynchronises the members by one whole block -- each skips
+    a DIFFERENT slice, so the switch holds a block of chunk accumulators open waiting for
+    the laggard (1,028 vs 1 at |G|=16, S=64MB) and the collective runs 1/2 tau_b slower at
+    d=2 and 5/6 tau_b slower at d=3.  Pass `blocks` explicitly to model that variant."""
     b = S//N; w = min(b, MSS) + H
     if blocks is None:
-        blocks = N - 1 if d == 1 else N
+        blocks = N
     return fill(d, w) + (blocks*wire(b) - w)/B
 
 def inc_ag(S, N, shells):

@@ -125,7 +125,7 @@ def check_podstep():
 
 # ── 3a. the naive datapath pins Reduce-Scatter's kappa = N on BOTH fabrics ────
 def check_naive_arm():
-    print("\n3a. -no_rs_local_fold arm: Equation (rsag-inc-rs) with kappa = N")
+    print("\n3a. Default datapath: Equation (rsag-inc-rs) with kappa = N")
     path = os.path.join(ROOT, "simulation-scripts/results/_fold_off/scaleup_coll_ab.csv")
     if not os.path.exists(path):
         print("  [SKIP] results/_fold_off not present")
@@ -163,7 +163,12 @@ def check_naive_arm():
 
 # ── 3b. the own-slice fold: RS == AG on the crossbar, RS > AG above it ────────
 def check_fold_symmetry():
-    print("\n3b. Own-slice fold (default datapath): which link binds the fan-in")
+    """Which link binds the fan-in, now that the own-slice fold is RETIRED (2026-07-27).
+    With kappa = N everywhere, Reduce-Scatter puts N blocks on the member's egress while
+    AllGather's ingress still takes only the N-1 it does not already hold, so the two
+    part company by EXACTLY one block time even on a crossbar -- where, under the fold,
+    they used to coincide."""
+    print("\n3b. kappa = N on every link: which link binds the fan-in")
     for topo, want_equal in ((SS, True), (FT, False)):
         pairs = []
         for r in rows_of(M.MAIN, topo, "reduce_scatter"):
@@ -174,16 +179,21 @@ def check_fold_symmetry():
                 pairs.append((S, float(r["inc_ns"]), float(ag[0]["inc_ns"])))
         eq = [abs(rs - ag) <= 1 for _, rs, ag in pairs]
         if want_equal:
-            # no link above the member's own, so the fold takes both to (N-1) blocks
-            check("crossbar: Reduce-Scatter == AllGather at every size", all(eq),
-                  f"{sum(eq)}/{len(eq)} sizes agree to 1 ns")
+            # RS ships N blocks off the member, AG receives N-1: exactly one block apart
+            # the models differ by exactly wire(b)/B, so test that in NANOSECONDS:
+            # as a ratio the small sizes look off by 4% purely because tau_b is 8 ns
+            # there and the simulator reports on a 1 ns grid.
+            errs = [abs((rs - ag) - M.wire(S // 64) / M.B) for S, rs, ag in pairs]
+            check("crossbar: Reduce-Scatter is AllGather plus exactly one block time",
+                  all(e < 1.0 for e in errs),
+                  f"{len(errs)} sizes, |gap - tau_b| worst {max(errs):.2f} ns "
+                  "-- the block the retired fold used to save")
         else:
-            # a shared uplink sits above every member and still carries all N slices
+            # a shared uplink sits above every member and carries all N slices
             worst = max((rs - ag) / ag for _, rs, ag in pairs)
             check("three-tier: Reduce-Scatter strictly slower than AllGather",
                   all(rs >= ag for _, rs, ag in pairs),
-                  f"{len(pairs)} sizes, up to {100*worst:+.2f}% -- the uplink "
-                  "the fold cannot unload")
+                  f"{len(pairs)} sizes, up to {100*worst:+.2f}% -- the shared uplink")
 
 
 # ── 4. three-tier: RS uplink-bound, AG ingress-bound and shell-aware ──────────
@@ -194,15 +204,18 @@ def check_three_tier():
         S = int(r["msg_bytes"])
         floor = M.inc_rs(S, 64, 3)                       # N blocks over the uplink
         exc.append((S, (float(r["inc_ns"]) - floor) / (M.wire(S // 64) / M.B)))
-    check("uplink floor is never violated above the latency knee",
-          all(e > 0 for S, e in exc if S >= 65536),
-          "excess over the floor, in block times: "
-          + ", ".join(f"{S>>10}K {e:+.2f}" for S, e in exc if S >= 65536))
+    # Before the fold was retired (2026-07-27) this was a FLOOR: the measurement sat
+    # 5/6 of a block time above it, because each member skipped a DIFFERENT slice and
+    # the resulting one-block skew stalled the switch's fan-in. With kappa = N the
+    # members are back in lockstep and the model is an equality.
+    check("uplink model is exact above the latency knee, not a floor",
+          all(abs(e) < 0.05 for S, e in exc if S >= 65536),
+          "residual in block times: "
+          + ", ".join(f"{S>>10}K {e:+.3f}" for S, e in exc if S >= 65536))
     band = [e for S, e in exc if S >= 4194304]
-    check("bandwidth-bound excess is a constant ~5/6 of a block time",
-          all(0.75 < e < 0.95 for e in band),
-          f"{len(band)} points, {min(band):.3f}--{max(band):.3f} "
-          "-- the unmodelled fold artefact")
+    check("no residual fold artefact once bandwidth-bound",
+          all(abs(e) < 0.01 for e in band),
+          f"{len(band)} points, {min(band):+.4f}--{max(band):+.4f} block times")
 
     small, large = [], []
     for r in rows_of(M.MAIN, FT, "allgather"):
