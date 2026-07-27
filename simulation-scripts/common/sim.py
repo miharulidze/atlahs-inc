@@ -48,14 +48,27 @@ MTU_DEFAULT = 4160
 # matters WORSE (+4.0 tau_b at 100/40, +6.7 at 100/1), because a lower resume point
 # starves the upstream for longer. It is the absolute pause point that matters.
 #
-# 300 sits 2.3x above the knee and at 68% of the auto-sized 1,826,000 B (439-packet)
-# queue, leaving 139 packets of headroom for data in flight while the pause propagates
-# (which needs about 12 frames at 50 ns and 500 B/ns). It must stay below the queue
-# size or the queue overflows before it pauses. Verified at every size on both
-# fabrics: it moves only INC AllGather, and moves it onto its model exactly.
-# See model_checks/agprobe{2,3}.sh.
+# 300 sits 2.3x above the knee. It must also stay BELOW the queue, or the queue
+# overflows before it ever pauses -- and that is the part that needs care, because the
+# queue is auto-sized to 1x BDP from each fabric's own diameter and therefore DIFFERS
+# between them: 270 packets on the crossbar, 440 on the three-tier fat tree. A threshold
+# validated against the deeper fabric is not automatically valid on the shallower one
+# (300 > 270 is exactly the mistake this comment exists to prevent).
+#
+# Dropping the threshold under 270 instead does not work: the pause point a message needs
+# grows with its block size, so at high=160 AllGather is exact at 16 and 64 MB but drifts
+# +183 ns at 256 MB. The queue is the knob, not the threshold.
+#
+# So the queue is sized explicitly at 4x BDP (-queue_size_bdp_factor 4): 1,080 packets on
+# the crossbar, 1,760 on the fat tree. Both leave 300 far inside, and the ceiling now
+# scales WITH the fabric instead of against it. Measured on both fabrics at 16/64/256 MB:
+# zero lossless warnings, AllGather exact to 0.6 ns, and 0 of 21 rows differing by even a
+# nanosecond from the 1x-BDP runs -- the buffer never affected a completion time, it only
+# decided whether htsim logged that a real switch would have had to drop.
+# See model_checks/agprobe{2,3}.sh and pfcprobe.sh.
 LOSSLESS_HIGH_PFC_DEFAULT = 300
 LOSSLESS_LOW_PFC_DEFAULT = 240
+QUEUE_SIZE_BDP_FACTOR_DEFAULT = 4
 
 # Primary metric: the makespan summary line (verified emitted by
 # htsim_flow_app_atlahs). Fallback: max over per-host "Host N: t" lines (only
@@ -91,7 +104,8 @@ def run_sim(binpath, so_topo, su_topo, nodes, gpus_per_node, groups=None,
            "-intranode_cc", "none",
            "-intranode_queue_type", "lossless_input",
            "-lossless_high_pfc", str(LOSSLESS_HIGH_PFC_DEFAULT),
-           "-lossless_low_pfc", str(LOSSLESS_LOW_PFC_DEFAULT)]
+           "-lossless_low_pfc", str(LOSSLESS_LOW_PFC_DEFAULT),
+           "-queue_size_bdp_factor", str(QUEUE_SIZE_BDP_FACTOR_DEFAULT)]
     if mtu:
         cmd += ["-mtu", str(mtu)]
     if groups:
@@ -150,6 +164,7 @@ def run_sim_footprint(binpath, so_topo, su_topo, nodes, gpus_per_node, groups=No
            "-intranode_queue_type", "lossless_input",
            "-lossless_high_pfc", str(LOSSLESS_HIGH_PFC_DEFAULT),
            "-lossless_low_pfc", str(LOSSLESS_LOW_PFC_DEFAULT),
+           "-queue_size_bdp_factor", str(QUEUE_SIZE_BDP_FACTOR_DEFAULT),
            "-link_crosses_csv", lc_path]
     if mtu:
         cmd += ["-mtu", str(mtu)]
