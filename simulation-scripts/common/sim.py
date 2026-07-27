@@ -64,9 +64,31 @@ FRAME_B = 4160
 PFC_HEADROOM_FRAMES = 50
 
 
-def pfc_thresholds(su_topo):
-    """(high, low) in packets for this .topo: XOFF = 1 BDP - headroom, XON = 0.8 x XOFF."""
-    tiers, t_l, t_sw, gbps = 2, 50.0, 300.0, 4000.0
+def pfc_config(su_topo):
+    """(high, low, egress_cap) in packets for this .topo.
+
+    Thresholds: XOFF = 1 BDP - headroom, XON = 0.8 x XOFF -- the per-INGRESS
+    reservation semantics of a shared-buffer switch: each ingress may hold up to
+    one BDP of packets anywhere inside the switch, and pauses its upstream one
+    pause-propagation headroom before that.
+
+    Egress cap: radix x BDP = the SUM of the ingress reservations. PFC bounds
+    each ingress, not any single egress, so several individually-lawful streams
+    converging on one output can jointly park Sum(xoff + headroom) there -- the
+    standard shared-buffer provisioning rule. htsim's per-queue cap previously
+    sat at 1 BDP, i.e. the per-port-FIFO yardstick of an input-buffered switch,
+    so lawful fan-in (e.g. recursive doubling's cross-pod rounds, ECMP-collided:
+    measured peak 1,001 pkt against a 440 cap, within the 4x439 per-uplink
+    ceiling) tripped "LOSSLESS not working" warnings that no protocol invariant
+    justifies. With the cap AT the invariant's own bound, the drops column
+    becomes a tripwire: any nonzero means an ingress exceeded its reservation,
+    i.e. something genuinely ignored backpressure.
+
+    The cap is passed as -intranode_q, which also rescales the driver's ECN
+    thresholds (htsim_app_atlahs.cpp:1125). Verified inert here: with
+    -intranode_cc none the window is constant, and sweeping -intranode_q from
+    440 to 16,000 left every completion time byte-identical."""
+    tiers, t_l, t_sw, gbps, radix = 2, 50.0, 300.0, 4000.0, 16
     try:
         with open(su_topo) as f:
             for line in f:
@@ -76,13 +98,15 @@ def pfc_thresholds(su_topo):
                     elif w[0] == "Downlink_Latency_ns": t_l = float(w[1])
                     elif w[0] == "Switch_Latency_ns":   t_sw = float(w[1])
                     elif w[0] == "Downlink_speed_Gbps": gbps = float(w[1])
+                    elif w[0] in ("Radix_Down", "Radix_Up"):
+                        radix = max(radix, int(w[1]))
     except OSError:
         pass
     B = gbps / 8.0                                        # Gb/s -> B/ns
     rtt = 2 * (t_l * 2 * tiers + t_sw * (2 * tiers - 1))  # 2 x diameter latency
-    bdp = int(rtt * B / (FRAME_B - 64))                   # queue, in packets, floored
+    bdp = int(rtt * B / (FRAME_B - 64))                   # reservation, packets, floored
     high = max(2, bdp - PFC_HEADROOM_FRAMES)
-    return high, max(1, int(high * 0.8))
+    return high, max(1, int(high * 0.8)), radix * bdp
 
 # Primary metric: the makespan summary line (verified emitted by
 # htsim_flow_app_atlahs). Fallback: max over per-host "Host N: t" lines (only
@@ -110,7 +134,7 @@ def run_sim(binpath, so_topo, su_topo, nodes, gpus_per_node, groups=None,
     mcast_pin: -1 (default) = round-robin INC tree placement; >=0 pins every tree onto
     one aggregation position + core (the PFC/backpressure experiment knob). Only appended
     when >=0, so it needs a pcm binary built with the -mcast_pin flag (else it errors)."""
-    _hi, _lo = pfc_thresholds(su_topo)
+    _hi, _lo, _q = pfc_config(su_topo)
     cmd = [paths.PCM_APP_HTSIM_ATLAHS_EXEC_PATH, "-goal", binpath,
            "-nodes", str(nodes), "-num_gpus_per_node", str(gpus_per_node),
            "-topo", so_topo, "-intranode_topo", su_topo,
@@ -119,7 +143,8 @@ def run_sim(binpath, so_topo, su_topo, nodes, gpus_per_node, groups=None,
            "-intranode_cc", "none",
            "-intranode_queue_type", "lossless_input",
            "-lossless_high_pfc", str(_hi),
-           "-lossless_low_pfc", str(_lo)]
+           "-lossless_low_pfc", str(_lo),
+           "-intranode_q", str(_q)]
     if mtu:
         cmd += ["-mtu", str(mtu)]
     if groups:
@@ -169,7 +194,7 @@ def run_sim_footprint(binpath, so_topo, su_topo, nodes, gpus_per_node, groups=No
     import tempfile
     fd, lc_path = tempfile.mkstemp(prefix="lc_", suffix=".csv")
     os.close(fd)
-    _hi, _lo = pfc_thresholds(su_topo)
+    _hi, _lo, _q = pfc_config(su_topo)
     cmd = [paths.PCM_APP_HTSIM_ATLAHS_EXEC_PATH, "-goal", binpath,
            "-nodes", str(nodes), "-num_gpus_per_node", str(gpus_per_node),
            "-topo", so_topo, "-intranode_topo", su_topo,
@@ -179,6 +204,7 @@ def run_sim_footprint(binpath, so_topo, su_topo, nodes, gpus_per_node, groups=No
            "-intranode_queue_type", "lossless_input",
            "-lossless_high_pfc", str(_hi),
            "-lossless_low_pfc", str(_lo),
+           "-intranode_q", str(_q),
            "-link_crosses_csv", lc_path]
     if mtu:
         cmd += ["-mtu", str(mtu)]
