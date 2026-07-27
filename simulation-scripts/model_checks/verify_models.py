@@ -217,23 +217,20 @@ def check_three_tier():
           all(abs(e) < 0.01 for e in band),
           f"{len(band)} points, {min(band):+.4f}--{max(band):+.4f} block times")
 
-    small, large = [], []
-    for r in rows_of(M.MAIN, FT, "allgather"):
-        S = int(r["msg_bytes"])
-        e = M.inc_ag(S, 64, M.SHELLS_3TIER) - float(r["inc_ns"])
-        (large if S >= 67108864 else small).append((S, e, 100 * e / float(r["inc_ns"])))
-    check("AllGather mixed-depth under 1 ns below 64 MB",
-          all(abs(e) < 1.0 for _, e, _ in small),
-          f"{len(small)} points, worst {max(abs(e) for _, e, _ in small):.2f} ns")
-    # characterised by ag_probe1: multi-tier only, onset between a 512 KB and a 1 MB
-    # shard, magnitude about one block time. Cause not established.
-    tb = {s: M.wire(s // 64) / M.B for s, _, _ in large}
-    inblk = [(s, e / tb[s]) for s, e, _ in large]
-    check("above a 512 KB shard the three-tier measurement exceeds the bound by ~1 block",
-          all(0.7 < -x < 1.4 for _, x in inblk),
-          "; ".join(f"{s>>20} MB {-x:+.2f} tau_b" for s, x in inblk)
-          + "  -- multi-tier only (the crossbar is exact at every size, ag_probe1);"
-            " cause not established")
+    # AllGather used to run ~1 block time over its model above a 512 KB shard on this
+    # fabric, and only on this fabric. That was never a modelling error: the driver's
+    # default PFC pause threshold (100 packets) sits below the fan-in backlog a large
+    # collective builds, so the pause fired and throttled the ingress. The harness now
+    # declares 300 (sim.LOSSLESS_HIGH_PFC_DEFAULT, knee measured at 128, queue ceiling
+    # 439) and the model is exact at every size. agprobe{2,3}.sh hold the evidence:
+    # a 1000x queue changes nothing, and LOWERING the threshold reintroduces the
+    # deviation at a size where it does not otherwise occur, up to +139 tau_b.
+    ag = [(int(r["msg_bytes"]),
+           float(r["inc_ns"]) - M.inc_ag(int(r["msg_bytes"]), 64, M.SHELLS_3TIER))
+          for r in rows_of(M.MAIN, FT, "allgather")]
+    check("AllGather is exact at every size, PFC pause given headroom",
+          all(abs(e) < 1.0 for _, e in ag),
+          f"{len(ag)} points, worst {max(abs(e) for _, e in ag):.2f} ns")
 
 
 # ── 5. AllReduce: apex wins on bandwidth, composition forfeits it ─────────────

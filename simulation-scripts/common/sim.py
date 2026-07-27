@@ -36,6 +36,27 @@ INTRANODE_LINKSPEED_DEFAULT = 4000000
 # two, so 4096 divides them exactly and the ceiling in f_w never rounds.
 MTU_DEFAULT = 4160
 
+# PFC pause threshold on the scale-up path, in PACKETS (-lossless_high_pfc /
+# -lossless_low_pfc). The driver defaults to 100/80, which is BELOW the transient
+# fan-in backlog a large in-network collective builds and makes the fabric, not the
+# collective, the limiting factor: at |G|=64 on the three-tier fat-tree the INC
+# AllGather measured 1.28% over its model at 64 MB and 1.67% at 256 MB, and both
+# residuals vanish once the pause stops firing. Sweeping the threshold puts the knee
+# between 100 and 128 packets and the curve dead flat above it, so the default sits
+# just under the cliff. The queue itself is not the constraint -- a 1000x -intranode_q
+# changes nothing -- and the high/low band is not either: widening it at high=100 makes
+# matters WORSE (+4.0 tau_b at 100/40, +6.7 at 100/1), because a lower resume point
+# starves the upstream for longer. It is the absolute pause point that matters.
+#
+# 300 sits 2.3x above the knee and at 68% of the auto-sized 1,826,000 B (439-packet)
+# queue, leaving 139 packets of headroom for data in flight while the pause propagates
+# (which needs about 12 frames at 50 ns and 500 B/ns). It must stay below the queue
+# size or the queue overflows before it pauses. Verified at every size on both
+# fabrics: it moves only INC AllGather, and moves it onto its model exactly.
+# See model_checks/agprobe{2,3}.sh.
+LOSSLESS_HIGH_PFC_DEFAULT = 300
+LOSSLESS_LOW_PFC_DEFAULT = 240
+
 # Primary metric: the makespan summary line (verified emitted by
 # htsim_flow_app_atlahs). Fallback: max over per-host "Host N: t" lines (only
 # printed for <=16 ranks).
@@ -68,7 +89,9 @@ def run_sim(binpath, so_topo, su_topo, nodes, gpus_per_node, groups=None,
            "-intranode_linkspeed", str(intranode_linkspeed),
            "-end", str(end), "-sender_cc_only",
            "-intranode_cc", "none",
-           "-intranode_queue_type", "lossless_input"]
+           "-intranode_queue_type", "lossless_input",
+           "-lossless_high_pfc", str(LOSSLESS_HIGH_PFC_DEFAULT),
+           "-lossless_low_pfc", str(LOSSLESS_LOW_PFC_DEFAULT)]
     if mtu:
         cmd += ["-mtu", str(mtu)]
     if groups:
@@ -125,6 +148,8 @@ def run_sim_footprint(binpath, so_topo, su_topo, nodes, gpus_per_node, groups=No
            "-end", str(end), "-sender_cc_only",
            "-intranode_cc", "none",
            "-intranode_queue_type", "lossless_input",
+           "-lossless_high_pfc", str(LOSSLESS_HIGH_PFC_DEFAULT),
+           "-lossless_low_pfc", str(LOSSLESS_LOW_PFC_DEFAULT),
            "-link_crosses_csv", lc_path]
     if mtu:
         cmd += ["-mtu", str(mtu)]
