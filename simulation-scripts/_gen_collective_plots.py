@@ -27,6 +27,7 @@ from matplotlib.ticker import FixedLocator, NullFormatter, ScalarFormatter
 WS   = os.environ.get("ATLAHS_WS", "/workspace")
 MAIN = f"{WS}/simulation-scripts/results/scaleup_coll_ab/scaleup_coll_ab.csv"
 SWEEP= f"{WS}/simulation-scripts/results/scaleup_coll_ab_groupsweep/scaleup_coll_ab.csv"
+FOOT = f"{WS}/simulation-scripts/results/scaleup_coll_footprint/scaleup_coll_footprint.csv"
 OUT  = f"{WS}/simulation-scripts/results/scaleup_coll_ab/thesis_figs"
 
 SS = "scaleup_single_switch_64_4000Gbps.topo"
@@ -298,6 +299,67 @@ def fig_rsag_regimes(main, fname, N=64):
     plt.close(fig)
 
 
+def fig_footprint(fname):
+    """Network-footprint reduction: baseline byte-link-crossings / in-network ones.
+
+    A CAPACITY result, orthogonal to the completion-time figures. The speed-up decays
+    to ~1 once both arms are bandwidth-bound; this ratio does not, so at large messages
+    the in-network path stops being faster while still moving half the bytes.
+
+    Two closed forms hold exactly on the crossbar, where every pair is two hops:
+        Bcast / AllGather / AllReduce :  2 - 2/P
+        Reduce / Reduce-Scatter      :  2(P-1)/(P+1)
+    The split is the retired own-shard fold. Reduce's root and Reduce-Scatter's shard
+    owners now ship their own contribution instead of folding it locally, which adds one
+    block to the in-network numerator; Broadcast's root never receives its own data, so
+    it has nothing to fold and is unaffected. Measured sits 1.54% above both, uniformly:
+    the ring pays a 64 B acknowledgement per 4160 B frame and the multicast arm does not.
+
+    Ring only. There is no recursive-doubling implementation for these collectives, and
+    RD is what makes the published version of this figure climb with depth."""
+    rows = [r for r in load(FOOT) if r["baseline_algo"] == "ring"]
+    fig, axes = plt.subplots(1, 2, figsize=(7.4, 3.6), sharey=True)
+    order = ("bcast", "reduce", "reduce_scatter", "allgather", "allreduce")
+    # descending marker size so coincident series nest visibly instead of hiding
+    # Descending marker size AND distinct dash patterns, because several series are
+    # byte-identical: on the crossbar Broadcast = AllGather = AllReduce and
+    # Reduce = Reduce-Scatter; on the fat tree AllGather = AllReduce. Open markers of
+    # decreasing size nest so all are visible, and the later series dash so the earlier
+    # one's line shows through instead of being painted over.
+    marks = {"bcast": ("o", 8.5, "-"), "reduce": ("s", 7.0, "-"),
+             "reduce_scatter": ("^", 5.5, "-"), "allgather": ("v", 4.5, (0, (5, 2))),
+             "allreduce": ("D", 3.0, (0, (1, 2)))}
+    for ax, (tag, cls) in zip(axes, ((r"(a)  single switch, $d{=}1$", "single_switch"),
+                                     (r"(b)  three-tier, $d{=}3$", "fat3tier"))):
+        for coll in order:
+            pts = sorted((int(r["group_size"]), float(r["ratio_bytes"])) for r in rows
+                         if r["topology_class"] == cls and r["collective"] == coll
+                         and 4 <= int(r["group_size"]) <= 64)
+            if not pts:
+                continue
+            mk, ms, ls = marks[coll]
+            ax.plot([p[0] for p in pts], [p[1] for p in pts], marker=mk, ms=ms, lw=1.3,
+                    ls=ls, color=C[coll], mfc="none", mew=1.3, label=TITLE[coll])
+        ps = [4, 8, 16, 32, 64]
+        ax.plot(ps, [2 - 2/p for p in ps], color="black", ls="--", lw=1.0, zorder=0,
+                label=r"$2-2/P$")
+        ax.axhline(2.0, color="black", ls=":", lw=0.9, alpha=0.5)
+        ax.set_xscale("log", base=2)
+        ax.set_xticks(ps); ax.set_xticklabels(ps, fontsize=9)
+        ax.set_ylim(1.0, 2.12)
+        ax.tick_params(axis="both", labelsize=9)
+        ax.grid(True, which="major", ls=":", alpha=0.6)
+        ax.set_xlabel(r"group size $P$", fontsize=10)
+        ax.set_title(tag, fontsize=10)
+    axes[0].set_ylabel("footprint reduction\n(endpoint $/$ in-network)", fontsize=10)
+    h, l = axes[0].get_legend_handles_labels()
+    fig.legend(h, l, fontsize=9, ncol=3, loc="lower center",
+               bbox_to_anchor=(0.5, -0.015), frameon=False)
+    fig.tight_layout(rect=(0, 0.18, 1, 1))
+    fig.savefig(f"{OUT}/{fname}")
+    plt.close(fig)
+
+
 def fig_regimes(main, fname, N=64):
     """Where the speed-up formula hands over from its latency bound to its bandwidth one.
 
@@ -361,6 +423,7 @@ if __name__ == "__main__":
     fig_time(main, "allgather", "inc_allgather_time.pdf")
     fig_regimes(main, "inc_bcast_regimes.pdf")
     fig_rsag_regimes(main, "inc_rsag_regimes.pdf")
+    fig_footprint("inc_footprint_reduction.pdf")
     fig_speedup_two_fabrics(main, "bcast", "inc_bcast_speedup.pdf",
                             r"Broadcast, $|G|=64$")
     fig_time(main, "bcast", "inc_bcast_time.pdf")
