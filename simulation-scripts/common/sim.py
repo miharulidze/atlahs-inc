@@ -36,39 +36,53 @@ INTRANODE_LINKSPEED_DEFAULT = 4000000
 # two, so 4096 divides them exactly and the ceiling in f_w never rounds.
 MTU_DEFAULT = 4160
 
-# PFC pause threshold on the scale-up path, in PACKETS (-lossless_high_pfc /
-# -lossless_low_pfc). The driver defaults to 100/80, which is BELOW the transient
-# fan-in backlog a large in-network collective builds and makes the fabric, not the
-# collective, the limiting factor: at |G|=64 on the three-tier fat-tree the INC
-# AllGather measured 1.28% over its model at 64 MB and 1.67% at 256 MB, and both
-# residuals vanish once the pause stops firing. Sweeping the threshold puts the knee
-# between 100 and 128 packets and the curve dead flat above it, so the default sits
-# just under the cliff. The queue itself is not the constraint -- a 1000x -intranode_q
-# changes nothing -- and the high/low band is not either: widening it at high=100 makes
-# matters WORSE (+4.0 tau_b at 100/40, +6.7 at 100/1), because a lower resume point
-# starves the upstream for longer. It is the absolute pause point that matters.
+# PFC thresholds on the scale-up path, DERIVED per fabric rather than fixed.
 #
-# 300 sits 2.3x above the knee. It must also stay BELOW the queue, or the queue
-# overflows before it ever pauses -- and that is the part that needs care, because the
-# queue is auto-sized to 1x BDP from each fabric's own diameter and therefore DIFFERS
-# between them: 270 packets on the crossbar, 440 on the three-tier fat tree. A threshold
-# validated against the deeper fabric is not automatically valid on the shallower one
-# (300 > 270 is exactly the mistake this comment exists to prevent).
+# The rule everyone else uses runs the opposite way from picking a threshold and hoping:
+#   headroom = MTU_in_flight + MTU_being_sent + response + 2 x link_delay
+#   XOFF     = queue - headroom
+# Headroom is the data that keeps arriving after the pause is sent and must still fit;
+# the threshold falls out of it. Choosing XOFF first is what produced a value (300) above
+# the crossbar's own 270-packet queue, so the queue overflowed before it could ever pause.
 #
-# Dropping the threshold under 270 instead does not work: the pause point a message needs
-# grows with its block size, so at high=160 AllGather is exact at 16 and 64 MB but drifts
-# +183 ns at 256 MB. The queue is the knob, not the threshold.
+# Both terms are topology-dependent, so the threshold has to be too. The queue is
+# auto-sized to 1 BDP from the fabric's diameter -- 270 packets on the crossbar, 440 on
+# the three-tier -- and link_delay is the fabric's own t_l. A single global constant is
+# wrong in principle, not merely badly chosen.
 #
-# So the queue is sized explicitly at 4x BDP (-queue_size_bdp_factor 4): 1,080 packets on
-# the crossbar, 1,760 on the fat tree. Both leave 300 far inside, and the ceiling now
-# scales WITH the fabric instead of against it. Measured on both fabrics at 16/64/256 MB:
-# zero lossless warnings, AllGather exact to 0.6 ns, and 0 of 21 rows differing by even a
-# nanosecond from the 1x-BDP runs -- the buffer never affected a completion time, it only
-# decided whether htsim logged that a real switch would have had to drop.
-# See model_checks/agprobe{2,3}.sh and pfcprobe.sh.
-LOSSLESS_HIGH_PFC_DEFAULT = 300
-LOSSLESS_LOW_PFC_DEFAULT = 240
-QUEUE_SIZE_BDP_FACTOR_DEFAULT = 4
+# For these fabrics headroom is 2*t_l*B + 2 frames + t_sw*B = 208,320 B = 50 frames, so
+# ~19% of the crossbar queue and ~11% of the fat tree's. Measured with the derived values
+# at the realistic 1x BDP queue: zero lossless warnings on both, AllGather exact to 0.6 ns.
+#
+# CAVEAT worth keeping: htsim's own BDP arithmetic lands one packet off our reconstruction
+# on the crossbar (270 against 269), so we take the conservative side and leave a little
+# more headroom than the formula demands. And note that a real scale-up fabric would not
+# use PFC at all -- Broadcom's Scale-Up Ethernet and InfiniBand are both credit-based,
+# per-class or per-virtual-lane, which is finer-grained than a link-wide pause. PFC is what
+# htsim models, and Section 4.1 says so.
+FRAME_B = 4160
+PFC_HEADROOM_FRAMES = 50
+
+
+def pfc_thresholds(su_topo):
+    """(high, low) in packets for this .topo: XOFF = 1 BDP - headroom, XON = 0.8 x XOFF."""
+    tiers, t_l, t_sw, gbps = 2, 50.0, 300.0, 4000.0
+    try:
+        with open(su_topo) as f:
+            for line in f:
+                w = line.split()
+                if len(w) == 2:
+                    if w[0] == "Tiers":                tiers = int(w[1])
+                    elif w[0] == "Downlink_Latency_ns": t_l = float(w[1])
+                    elif w[0] == "Switch_Latency_ns":   t_sw = float(w[1])
+                    elif w[0] == "Downlink_speed_Gbps": gbps = float(w[1])
+    except OSError:
+        pass
+    B = gbps / 8.0                                        # Gb/s -> B/ns
+    rtt = 2 * (t_l * 2 * tiers + t_sw * (2 * tiers - 1))  # 2 x diameter latency
+    bdp = int(rtt * B / (FRAME_B - 64))                   # queue, in packets, floored
+    high = max(2, bdp - PFC_HEADROOM_FRAMES)
+    return high, max(1, int(high * 0.8))
 
 # Primary metric: the makespan summary line (verified emitted by
 # htsim_flow_app_atlahs). Fallback: max over per-host "Host N: t" lines (only
@@ -96,6 +110,7 @@ def run_sim(binpath, so_topo, su_topo, nodes, gpus_per_node, groups=None,
     mcast_pin: -1 (default) = round-robin INC tree placement; >=0 pins every tree onto
     one aggregation position + core (the PFC/backpressure experiment knob). Only appended
     when >=0, so it needs a pcm binary built with the -mcast_pin flag (else it errors)."""
+    _hi, _lo = pfc_thresholds(su_topo)
     cmd = [paths.PCM_APP_HTSIM_ATLAHS_EXEC_PATH, "-goal", binpath,
            "-nodes", str(nodes), "-num_gpus_per_node", str(gpus_per_node),
            "-topo", so_topo, "-intranode_topo", su_topo,
@@ -103,9 +118,8 @@ def run_sim(binpath, so_topo, su_topo, nodes, gpus_per_node, groups=None,
            "-end", str(end), "-sender_cc_only",
            "-intranode_cc", "none",
            "-intranode_queue_type", "lossless_input",
-           "-lossless_high_pfc", str(LOSSLESS_HIGH_PFC_DEFAULT),
-           "-lossless_low_pfc", str(LOSSLESS_LOW_PFC_DEFAULT),
-           "-queue_size_bdp_factor", str(QUEUE_SIZE_BDP_FACTOR_DEFAULT)]
+           "-lossless_high_pfc", str(_hi),
+           "-lossless_low_pfc", str(_lo)]
     if mtu:
         cmd += ["-mtu", str(mtu)]
     if groups:
@@ -155,6 +169,7 @@ def run_sim_footprint(binpath, so_topo, su_topo, nodes, gpus_per_node, groups=No
     import tempfile
     fd, lc_path = tempfile.mkstemp(prefix="lc_", suffix=".csv")
     os.close(fd)
+    _hi, _lo = pfc_thresholds(su_topo)
     cmd = [paths.PCM_APP_HTSIM_ATLAHS_EXEC_PATH, "-goal", binpath,
            "-nodes", str(nodes), "-num_gpus_per_node", str(gpus_per_node),
            "-topo", so_topo, "-intranode_topo", su_topo,
@@ -162,9 +177,8 @@ def run_sim_footprint(binpath, so_topo, su_topo, nodes, gpus_per_node, groups=No
            "-end", str(end), "-sender_cc_only",
            "-intranode_cc", "none",
            "-intranode_queue_type", "lossless_input",
-           "-lossless_high_pfc", str(LOSSLESS_HIGH_PFC_DEFAULT),
-           "-lossless_low_pfc", str(LOSSLESS_LOW_PFC_DEFAULT),
-           "-queue_size_bdp_factor", str(QUEUE_SIZE_BDP_FACTOR_DEFAULT),
+           "-lossless_high_pfc", str(_hi),
+           "-lossless_low_pfc", str(_lo),
            "-link_crosses_csv", lc_path]
     if mtu:
         cmd += ["-mtu", str(mtu)]
