@@ -313,10 +313,12 @@ def fig_footprint(fname, colls):
 
     Bars START AT ZERO. The ratio's own floor is 1.0 (no reduction at all), so a
     1.0-baselined axis would be defensible for lines, but a truncated bar chart
-    misrepresents the encoded quantity, which for bars is length. The analytic overlay
-    carries the comparison the eye needs instead.
+    misrepresents the encoded quantity, which for bars is length. A dotted line at the
+    2x asymptote carries the comparison the eye needs instead.
 
-    Two closed forms hold exactly on the crossbar, where every pair is two hops:
+    The analytic overlay was dropped 2026-07-27 (same measured-only rule as the header;
+    the chapter argues the 2x convergence in prose). For the record, two closed forms
+    hold exactly on the crossbar, where every pair is two hops:
         Bcast / AllGather / AllReduce :  2 - 2/P      (P crossings, 2P for AllReduce)
         Reduce / Reduce-Scatter      :  2(P-1)/(P+1)  (P+1 crossings)
     The split is the own-shard fold: Reduce's root and Reduce-Scatter's shard owners
@@ -337,8 +339,6 @@ def fig_footprint(fname, colls):
             off = (k - (len(colls) - 1) / 2) * w
             ax.bar([xi + off for xi in x], [d.get(p, 0.0) for p in ps], w,
                    color=C[coll], edgecolor="white", linewidth=0.5, label=TITLE[coll])
-        ax.plot(x, [2 - 2/p for p in ps], color="black", ls="--", lw=1.1,
-                marker="o", ms=3.5, label=r"analytic $2-2/P$")
         ax.axhline(2.0, color="black", ls=":", lw=0.9, alpha=0.45)
         ax.set_xticks(x); ax.set_xticklabels(ps, fontsize=9)
         ax.set_ylim(0, 2.25)
