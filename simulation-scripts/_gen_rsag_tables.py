@@ -315,38 +315,55 @@ def table_bcast_both():
            "    size & $K$ & meas. & model & meas. & model\\\\")
     return wrap("r r rr rr", hdr, "\n".join(out)), worst_i, worst_b
 
-# ── Table 5: AllReduce, apex vs composed, both baselines ────────────────────
+# ── Table 5: AllReduce validation on BOTH fabrics ───────────────────────────
 def inc_root(S, d):
     """Bcast / Reduce / apex AllReduce: one source stream of S through a depth-d path."""
     w = min(S, MSS) + H
     return fill(d, w) + (wire(S) - w)/B
 
 def table_ar():
-    rows = [r for r in load(MAIN) if 'single_switch' in r['su_topo']
+    """AllReduce on both fabrics at three sizes: measurement against the models.
+
+    Same shape as the rooted and the RS/AG tables -- meas./model pairs and nothing else.
+    Dropped 2026-07-27: the composed RS-then-AG in-network variant, which the chapter
+    never models in the Validation chapter (it is an abstract construction in the Design
+    chapter), and the speed-up columns, which now live in their own figure where the
+    recursive-doubling baseline can be shown against the same denominator.
+
+    Recursive doubling gets ONE column, not a pair: the chapter states that it carries
+    the same bandwidth term as the ring but deliberately derives no completion-time
+    model for it, so there is nothing to validate against and the entry is measured only.
+
+    Both fabrics, three sizes each, mirroring table_rsag_both: the in-network model is
+    depth-parameterised (t_d) and the ring one is paced by lambda(d_max) in every round,
+    so the pair is exactly what the second fabric tests."""
+    rows = [r for r in load(MAIN) if r['collective'] == 'allreduce'
             and shard_ok(int(r['msg_bytes']), int(r['group_size']))]
-    def get(c, S, algo='ring'):
-        x = [r for r in rows if r['collective'] == c and int(r['msg_bytes']) == S
-             and r['baseline_algo'] == algo]
-        return x[0] if x else None
-    sizes = sorted(set(int(r['msg_bytes']) for r in rows))
-    out = []
-    for S in sizes:
-        ar, rd, comp = get('allreduce', S), get('allreduce', S, 'rdouble'), get('allreduce_rs_ag', S)
-        if not (ar and comp):
-            continue
-        N = 64
-        m_ring, m_rd = float(ar['base_ns']), (float(rd['base_ns']) if rd else float('nan'))
-        m_apex, m_comp = float(ar['inc_ns']), float(comp['inc_ns'])
-        p_ring = 2*ring(S, N, 1)
-        p_apex = inc_root(S, 1)
-        p_comp = inc_rs(S, N, 1) + inc_ag(S, N, {1: N-1})
-        out.append(f"    {sizetag(S)} & {num(m_ring)} & {num(m_rd)} & "
-                   f"{num(m_apex)} & {num(p_apex)} & {num(m_comp)} & {num(p_comp)} & "
-                   f"{m_ring/m_apex:.2f} & {m_ring/m_comp:.2f}\\\\")
-    hdr = ("    & \\multicolumn{2}{c}{endpoint (ns)} & \\multicolumn{2}{c}{apex in-net (ns)}\n"
-           "    & \\multicolumn{2}{c}{composed (ns)} & \\multicolumn{2}{c}{speed-up vs ring}\\\\\n"
-           "    size & ring & rec.\\ dbl. & meas. & model & meas. & model & apex & comp.\\\\")
-    return wrap("r rr rr rr rr", hdr, "\n".join(out))
+    out, worst_i, worst_b = [], 0.0, 0.0
+    for tag, key, d in (("single switch", 'single_switch', 1),
+                        ("three-tier", '3tier', 3)):
+        out.append(f"    \\multicolumn{{6}}{{l}}{{\\itshape {tag}}}\\\\")
+        for S in PICK_RSAG:
+            def get(algo):
+                x = [r for r in rows if key in r['su_topo']
+                     and int(r['msg_bytes']) == S and r['baseline_algo'] == algo]
+                return x[0] if x else None
+            ar, rd = get('ring'), get('rdouble')
+            if not ar:
+                continue
+            N = int(ar['group_size'])
+            m_inc, m_ring = float(ar['inc_ns']), float(ar['base_ns'])
+            p_inc, p_ring = inc_root(S, d), 2*ring(S, N, d)
+            worst_i = max(worst_i, abs(p_inc - m_inc))
+            worst_b = max(worst_b, abs(100*(p_ring - m_ring)/m_ring))
+            out.append(f"    {sizetag(S)} & {num(m_inc)} & {num(p_inc)} & "
+                       f"{num(m_ring)} & {num(p_ring)} & "
+                       f"{num(float(rd['base_ns'])) if rd else '---'}\\\\")
+    hdr = ("    & \\multicolumn{2}{c}{in-network (ns)}\n"
+           "    & \\multicolumn{2}{c}{ring (ns)} & rec.\\ dbl.\\ (ns)\\\\\n"
+           "    \\cmidrule(lr){2-3} \\cmidrule(lr){4-5} \\cmidrule(lr){6-6}\n"
+           "    size & meas. & model & meas. & model & meas.\\\\")
+    return wrap("r rr rr r", hdr, "\n".join(out)), worst_i, worst_b
 
 # ── Table 6: the pod-boundary step ──────────────────────────────────────────
 def table_podstep():
@@ -381,7 +398,8 @@ if __name__ == '__main__':
               ('tab_rsag_3tier_inc.tex', table_3tier_inc())]
     t4, sum_lam = table_3tier_ring()
     tables.append(('tab_rsag_3tier_ring.tex', t4))
-    tables.append(('tab_ar_validation.tex', table_ar()))
+    tar, wai, wab = table_ar()
+    tables.append(('tab_ar_validation.tex', tar))
     t5 = table_podstep()
     if t5: tables.append(('tab_rsag_podstep.tex', t5))
     for name, body in tables:
@@ -405,5 +423,6 @@ if __name__ == '__main__':
           + ", ".join(f"{sizetag(S).replace(chr(92)+',',' ')} {e:+.2f}" for S, e in wblk))
     print(f"duality: worst |Reduce - Broadcast| = {wd:.3f}% (in-network exactly 0 everywhere)")
     print(f"Broadcast, both fabrics: in-network {wbi:.2f} ns, ring {wbb:+.2f}%")
+    print(f"AllReduce, both fabrics: in-network {wai:.2f} ns, ring {wab:+.2f}%")
     print(f"lambda: d=1 {lam(1):.1f}  d=2 {lam(2):.1f}  d=3 {lam(3):.1f}")
     print(f"sum_lambda(3-tier,N=64) = {sum_lam:,.0f}   63*lambda(3) = {63*lam(3):,.0f}")

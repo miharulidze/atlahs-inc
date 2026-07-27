@@ -202,6 +202,17 @@ def _lam(d):   return 2*(2*d*_TL + (2*d-1)*_TSW) + (2*d-1)*_FRAME/_B
 def _tinc(d):  return 2*d*_TL + (2*d-1)*_TSW + 2*d*_FRAME/_B
 
 
+def _t_root(d):
+    """The chapter's t_d as printed in Equation (T-INC): 2d links, 2d-1 switches, and
+    2d-1 store-and-forward frames.
+
+    NOT _tinc(d), which charges 2d frames. That is the `fill` form, which the table
+    generator uses only as an intermediate and then subtracts the leading frame back out
+    of (inc_root = fill(d,w) + (f_w(S)-w)/B). The two differ by one frame time, 8.32 ns.
+    Use this one wherever a figure has to agree with a validation table to the digit."""
+    return 2*d*_TL + (2*d-1)*(_TSW + _FRAME/_B)
+
+
 def _census(N, per_leaf=4, per_pod=16):
     c = {1: 0, 2: 0, 3: 0}
     for i in range(N - 1):
@@ -295,6 +306,80 @@ def fig_rsag_regimes(main, fname, N=64):
     fig.legend(h, l, fontsize=9, ncol=3, loc="lower center",
                bbox_to_anchor=(0.5, -0.015), frameon=False)
     fig.tight_layout(rect=(0, 0.15, 1, 1))
+    fig.savefig(f"{OUT}/{fname}")
+    plt.close(fig)
+
+
+def fig_ar_speedup(main, fname, N=64):
+    """AllReduce speed-up against BOTH endpoint baselines, on both fabrics.
+
+    Same shape as fig_rsag_regimes, and the sibling of that figure in the AllReduce
+    section: two panels for the two depths, a model curve with its measured points, and
+    the two asymptotes the formula decays between.
+
+        speedup_ring(S) = (2(N-1) lam(d) + 2(N-1)/N T) / (t_d + T),   T = f_w(S)/B
+
+    which leaves 2(N-1)lam(d)/t_d and lands on 2(N-1)/N -- the one collective in the
+    chapter whose bandwidth bound is above 1, because the ring passes every byte over
+    the cycle twice and the tree carries it up once and back down once.
+
+    Both panels share a DENOMINATOR (one in-network AllReduce serves both baselines),
+    the mirror of fig_rsag_regimes, where two collectives shared a numerator. So the two
+    curves in a panel are directly comparable and their gap is exactly the ratio of the
+    two endpoint algorithms.
+
+    Recursive doubling is drawn MEASURED ONLY. The chapter states that it carries the
+    same bandwidth term as the ring but deliberately derives no completion-time model
+    for it, so there is no curve to draw; its points are joined by a faint line to show
+    the trend, not to assert a form. On the crossbar it does meet the ring's bandwidth
+    bound (1.99 measured against 1.969 at 256 MB); on the three-tier fabric it does not,
+    settling near 3x, because its partner distance doubles every round and the schedule
+    is topology-oblivious -- the same effect that puts its footprint at 4.09x there
+    against the ring's 1.999 (results/scaleup_coll_footprint).
+
+    The latency bound is 249x on BOTH fabrics, unlike Broadcast's 122/41 split: the ring
+    here is paced by lam(d_max) in every one of its N-1 rounds, so numerator and
+    denominator both scale with depth and the ratio does not. Broadcast's chain
+    activates one step at a time and is charged the census sum, which cheap same-leaf
+    steps dominate."""
+    sizes = [2**(k/4) for k in range(70, 118)]      # from the smallest legal shard up
+    fig, axes = plt.subplots(1, 2, figsize=(7.4, 3.9), sharey=True)
+    for ax, (tag, topo, d) in zip(axes, (
+            (r"(a)  single switch, $d{=}1$", SS, 1),
+            (r"(b)  three-tier, $d{=}3$",    FT, 3))):
+        lam_d, t_d = _lam(d), _t_root(d)
+        ax.plot(sizes,
+                [(2*(N-1)*lam_d + 2*(N-1)/N*_fw(S)/_B) / (t_d + _fw(S)/_B)
+                 for S in sizes],
+                color="#1f77b4", lw=1.7, label="ring, model")
+        m = series(main, "allreduce", topo=topo)
+        if m:
+            ax.plot([x[0] for x in m], [x[2]/x[1] for x in m], "o", ms=5,
+                    color="#1f77b4", mfc="white", mew=1.4, label="ring, measured")
+        rdb = series(main, "allreduce", topo=topo, algo="rdouble")
+        if rdb:
+            ax.plot([x[0] for x in rdb], [x[2]/x[1] for x in rdb], marker="^", ms=5,
+                    ls="--", lw=1.0, color=C["allreduce_rd"], mfc="white", mew=1.4,
+                    label="rec. doubling, measured (no model)")
+        ax.axhline(2*(N-1)*lam_d/t_d, color="#d62728", ls="--", lw=1.2,
+                   label="latency bound")
+        ax.axhline(2*(N-1)/N, color="#2ca02c", ls=":", lw=1.6, label="bandwidth bound")
+        ax.text(0.97, 0.93, f"{2*(N-1)*lam_d/t_d:.0f}$\\times$",
+                transform=ax.transAxes, ha="right", va="top",
+                fontsize=9, color="#d62728")
+        style(ax, ylabel=None)
+        plain_log_y(ax, [1, 2, 5, 10, 20, 50, 100, 200])
+        ax.set_xticks([262144, 4194304, 67108864])
+        ax.set_xticklabels(["256 KiB", "4 MiB", "64 MiB"], fontsize=9)
+        ax.set_xlim(2**17.4, 2**29.2)
+        ax.tick_params(axis="both", labelsize=9)
+        ax.set_xlabel("message size", fontsize=10)
+        ax.set_title(tag, fontsize=10)
+    axes[0].set_ylabel(r"speed-up  (endpoint $/$ in-network)", fontsize=10)
+    h, l = axes[0].get_legend_handles_labels()
+    fig.legend(h, l, fontsize=9, ncol=3, loc="lower center",
+               bbox_to_anchor=(0.5, -0.012), frameon=False)
+    fig.tight_layout(rect=(0, 0.13, 1, 1))
     fig.savefig(f"{OUT}/{fname}")
     plt.close(fig)
 
@@ -419,6 +504,7 @@ if __name__ == "__main__":
     fig_time(main, "allgather", "inc_allgather_time.pdf")
     fig_regimes(main, "inc_bcast_regimes.pdf")
     fig_rsag_regimes(main, "inc_rsag_regimes.pdf")
+    fig_ar_speedup(main, "inc_allreduce_speedup.pdf")
     fig_footprint("inc_footprint_bcast_reduce.pdf", ("bcast", "reduce"))
     fig_footprint("inc_footprint_rsag.pdf", ("reduce_scatter", "allgather"))
     fig_footprint("inc_footprint_allreduce.pdf", ("allreduce",))
