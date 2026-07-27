@@ -407,12 +407,107 @@ def check_shell_figure():
           f"{fill_gap:.0f} + {blk_gap:.0f} = {fill_gap + blk_gap:.0f} ns")
 
 
+# ── 5e. the recursion IS the model; the closed form is its unrolling ──────────
+def batches_of(r, N, per_leaf=4, per_pod=16):
+    """Depth batches as seen BY MEMBER r of a contiguous group of N ranks placed from
+    rank 0: batch s = the peers whose lowest switch in common with r sits at tier s.
+    Not the same census as M.census, which counts RING STEPS by depth."""
+    c = {1: 0, 2: 0, 3: 0}
+    for i in range(N):
+        if i != r:
+            c[1 if i//per_leaf == r//per_leaf
+              else (2 if i//per_pod == r//per_pod else 3)] += 1
+    return c
+
+
+def check_recursion():
+    """The chapter states the AllGather model as the busy-period recursion
+
+        F(s) = max(F(s-1), t_INC(s)) + |batch s| tau_b,   F(0) = 0,   T = F(d)
+
+    and derives the maximum from it by unrolling. Two claims to pin. (a) The two forms
+    agree -- unconditionally, not just for the pod-aligned groups 5c already checks
+    against the simulator. (b) The chapter's caveat is real: reading the bind off the
+    hand-over as 'the first batch that collides with its successor' needs the batches
+    BELOW THE DEEPEST to grow with s (the deepest one never enters a comparison), and
+    contiguous placement does not guarantee that. Also confirms no size this chapter
+    evaluates lands in a window where the shortcut would go wrong."""
+    print("\n5e. Recursion == closed form, and where the hand-over shortcut needs care")
+    w = M.MSS + M.H
+    tinc = {s: M.fill(s, w) - w/M.B for s in (1, 2, 3)}
+    delta = {1: tinc[2] - tinc[1], 2: tinc[3] - tinc[2]}
+
+    def recur(bat, tb):
+        t = 0.0
+        for s in (1, 2, 3):
+            t = max(t, tinc[s]) + bat[s]*tb
+        return t
+
+    def argmax(bat, tb):
+        c = {s: tinc[s] + sum(n for d, n in bat.items() if d >= s)*tb for s in (1, 2, 3)}
+        return max(c, key=c.get), max(c.values())
+
+    def shortcut(bat, tb):
+        return next((s for s in (1, 2) if bat[s]*tb >= delta[s]), 3)
+
+    # (a) the unrolling, over every member of every group size across the pod boundary
+    worst, n = 0.0, 0
+    for N in list(range(12, 25)) + [32, 64]:
+        for r in range(N):
+            bat = batches_of(r, N)
+            for k in range(14, 28):
+                tb = M.wire(max((1 << k)//N, 1))/M.B
+                worst = max(worst, abs(recur(bat, tb) - argmax(bat, tb)[1]))
+                n += 1
+    check("recursion == max over batches, under 0.01 ns", worst < 0.01,
+          f"worst {worst:.2e} ns over {n:,} (group, member, size) triples")
+
+    # (b) the premise the shortcut needs, and a contiguous group that violates it
+    bad = sorted({(N, tuple(batches_of(r, N)[s] for s in (1, 2, 3)))
+                  for N in range(12, 25) for r in range(N)
+                  if batches_of(r, N)[3] > 0
+                  and batches_of(r, N)[1] > batches_of(r, N)[2]})
+    check("contiguous placement can put a bigger batch above a smaller one", bool(bad),
+          f"{len(bad)} (|G|, batches) pairs, e.g. " +
+          ", ".join(f"|G|={N} sees {b}" for N, b in bad[:3]))
+
+    bat20 = batches_of(16, 20)                       # |G|=20 is in tab:rsag-podstep
+    lo = hi = None
+    tb = 1.0
+    while tb < 1600:
+        if shortcut(bat20, tb) != argmax(bat20, tb)[0]:
+            lo, hi = (tb if lo is None else lo), tb
+        tb += 0.1
+    check("|G|=20's stranded members break the shortcut, over the range the prose quotes",
+          lo is not None and abs(lo*M.B*20/1e6 - 2.4) < 0.2
+          and abs(hi*M.B*20/1e6 - 4.8) < 0.2,
+          f"batches {tuple(bat20[s] for s in (1,2,3))}, wrong for tau_b in "
+          f"[{lo:.0f},{hi:.0f}] ns, i.e. S ~ {lo*M.B*20/1e6:.1f}-{hi*M.B*20/1e6:.1f} MB")
+
+    # (c) nothing the chapter actually evaluates sits in such a window
+    hits = []
+    for N in (12, 14, 15, 16, 17, 18, 20, 24):
+        tb = M.wire(171360//N)/M.B                   # tab:rsag-podstep's single size
+        for r in range(N):
+            bat = batches_of(r, N)
+            if shortcut(bat, tb) != argmax(bat, tb)[0]:
+                hits.append((N, r))
+    for S in (262144, 4194304, 67108864):            # tab:rsag-validation, |G|=64
+        tb = M.wire(S//64)/M.B
+        bat = batches_of(0, 64)
+        if shortcut(bat, tb) != argmax(bat, tb)[0]:
+            hits.append((64, S))
+    check("no evaluated (group, size) point lands in one", not hits,
+          "podstep at 171,360 B and |G|=64 at 256 KiB / 4 MB / 64 MB all agree"
+          if not hits else f"{hits}")
+
+
 if __name__ == "__main__":
     print(f"Verifying the collective models against the committed CSVs under\n  {ROOT}")
     for fn in (check_single_switch, check_ring, check_podstep, check_naive_arm,
                check_fold_symmetry, check_three_tier, check_allreduce,
                check_shell_symmetry, check_busy_period, check_handover,
-               check_shell_figure):
+               check_recursion, check_shell_figure):
         fn()
     print()
     if FAILS:
