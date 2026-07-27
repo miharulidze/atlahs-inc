@@ -299,12 +299,22 @@ def fig_rsag_regimes(main, fname, N=64):
     plt.close(fig)
 
 
-def fig_footprint(fname, colls, ymin=1.0):
+def fig_footprint(fname, colls):
     """Network-footprint reduction: baseline byte-link-crossings / in-network ones.
 
     A CAPACITY result, orthogonal to the completion-time figures. The speed-up decays
     to ~1 once both arms are bandwidth-bound; this ratio does not, so at large messages
     the in-network path stops being faster while still moving half the bytes.
+
+    Grouped bars per group size, following Khalilov et al. SC24 Fig. 2, which this
+    reproduces. Their two bars are Ring and Recursive Doubling; ours are the
+    collectives, since we implement no recursive-doubling variant of these four and RD
+    is what makes the published figure climb with depth.
+
+    Bars START AT ZERO. The ratio's own floor is 1.0 (no reduction at all), so a
+    1.0-baselined axis would be defensible for lines, but a truncated bar chart
+    misrepresents the encoded quantity, which for bars is length. The analytic overlay
+    carries the comparison the eye needs instead.
 
     Two closed forms hold exactly on the crossbar, where every pair is two hops:
         Bcast / AllGather / AllReduce :  2 - 2/P      (P crossings, 2P for AllReduce)
@@ -313,40 +323,28 @@ def fig_footprint(fname, colls, ymin=1.0):
     ship their own contribution rather than keeping it local, which adds one block;
     Broadcast's root never receives its own data, so it has nothing to keep. Measured
     sits 1.54% above both, uniformly -- the ring pays a 64 B acknowledgement per 4160 B
-    frame and the multicast arm does not.
-
-    Drawn ONE PLOT PER RESULTS SECTION rather than one shared five-collective figure,
-    so each section's discussion has its curves on the same page instead of a
-    cross-reference several pages back.
-
-    Ring only. There is no recursive-doubling implementation for these collectives, and
-    RD is what makes the published version of this figure climb with depth."""
+    frame and the multicast arm does not."""
     rows = [r for r in load(FOOT) if r["baseline_algo"] == "ring"]
+    ps = [4, 8, 16, 32, 64]
+    x = list(range(len(ps)))
+    w = 0.8 / max(len(colls), 1)
     fig, axes = plt.subplots(1, 2, figsize=(7.4, 3.4), sharey=True)
-    # descending size + dashes so byte-identical series nest instead of painting over
-    marks = {"bcast": ("o", 7.5, "-"), "reduce": ("s", 6.0, "-"),
-             "reduce_scatter": ("^", 7.5, "-"), "allgather": ("v", 6.0, "-"),
-             "allreduce": ("D", 6.0, "-")}
     for ax, (tag, cls) in zip(axes, ((r"(a)  single switch, $d{=}1$", "single_switch"),
                                      (r"(b)  three-tier, $d{=}3$", "fat3tier"))):
-        for coll in colls:
-            pts = sorted((int(r["group_size"]), float(r["ratio_bytes"])) for r in rows
-                         if r["topology_class"] == cls and r["collective"] == coll
-                         and 4 <= int(r["group_size"]) <= 64)
-            if not pts:
-                continue
-            mk, ms, ls = marks[coll]
-            ax.plot([p[0] for p in pts], [p[1] for p in pts], marker=mk, ms=ms, lw=1.4,
-                    ls=ls, color=C[coll], mfc="none", mew=1.4, label=TITLE[coll])
-        ps = [4, 8, 16, 32, 64]
-        ax.plot(ps, [2 - 2/p for p in ps], color="black", ls="--", lw=1.0, zorder=0,
-                label=r"$2-2/P$")
-        ax.axhline(2.0, color="black", ls=":", lw=0.9, alpha=0.5)
-        ax.set_xscale("log", base=2)
-        ax.set_xticks(ps); ax.set_xticklabels(ps, fontsize=9)
-        ax.set_ylim(ymin, 2.12)
+        for k, coll in enumerate(colls):
+            d = {int(r["group_size"]): float(r["ratio_bytes"]) for r in rows
+                 if r["topology_class"] == cls and r["collective"] == coll}
+            off = (k - (len(colls) - 1) / 2) * w
+            ax.bar([xi + off for xi in x], [d.get(p, 0.0) for p in ps], w,
+                   color=C[coll], edgecolor="white", linewidth=0.5, label=TITLE[coll])
+        ax.plot(x, [2 - 2/p for p in ps], color="black", ls="--", lw=1.1,
+                marker="o", ms=3.5, label=r"analytic $2-2/P$")
+        ax.axhline(2.0, color="black", ls=":", lw=0.9, alpha=0.45)
+        ax.set_xticks(x); ax.set_xticklabels(ps, fontsize=9)
+        ax.set_ylim(0, 2.25)
         ax.tick_params(axis="both", labelsize=9)
-        ax.grid(True, which="major", ls=":", alpha=0.6)
+        ax.grid(True, axis="y", ls=":", alpha=0.6)
+        ax.set_axisbelow(True)
         ax.set_xlabel(r"group size $P$", fontsize=10)
         ax.set_title(tag, fontsize=10)
     axes[0].set_ylabel("footprint reduction\n(endpoint $/$ in-network)", fontsize=10)
@@ -423,7 +421,7 @@ if __name__ == "__main__":
     fig_rsag_regimes(main, "inc_rsag_regimes.pdf")
     fig_footprint("inc_footprint_bcast_reduce.pdf", ("bcast", "reduce"))
     fig_footprint("inc_footprint_rsag.pdf", ("reduce_scatter", "allgather"))
-    fig_footprint("inc_footprint_allreduce.pdf", ("allreduce",), ymin=1.4)
+    fig_footprint("inc_footprint_allreduce.pdf", ("allreduce",))
     fig_speedup_two_fabrics(main, "bcast", "inc_bcast_speedup.pdf",
                             r"Broadcast, $|G|=64$")
     fig_time(main, "bcast", "inc_bcast_time.pdf")
