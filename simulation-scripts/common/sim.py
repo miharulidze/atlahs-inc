@@ -61,7 +61,20 @@ MTU_DEFAULT = 4160
 # per-class or per-virtual-lane, which is finer-grained than a link-wide pause. PFC is what
 # htsim models, and Section 4.1 says so.
 FRAME_B = 4160
+# The 4000 Gbps instantiation of the headroom (used by parse_pfc_extras, whose
+# callers all run the 4000 Gbps fabrics). pfc_config() derives the headroom from
+# the topo's own rate via _headroom_frames(), which reproduces this exact value
+# at 4000 Gbps.
 PFC_HEADROOM_FRAMES = 50
+
+
+def _headroom_frames(t_l, t_sw, B):
+    """Pause-propagation headroom in frames: the data that keeps arriving after
+    XOFF is sent -- (2 x link_delay + switch_latency) of wire drain, plus one
+    frame in flight and one being serialised. Rate-derived so the thresholds
+    stay meaningful when the fabric rate is swept; at 4000 Gbps it reproduces
+    the documented 50 frames exactly (int((2*50+300)*500/4160)+2 == 50)."""
+    return int((2 * t_l + t_sw) * B / FRAME_B) + 2
 
 
 def pfc_config(su_topo):
@@ -88,7 +101,7 @@ def pfc_config(su_topo):
     thresholds (htsim_app_atlahs.cpp:1125). Verified inert here: with
     -intranode_cc none the window is constant, and sweeping -intranode_q from
     440 to 16,000 left every completion time byte-identical."""
-    tiers, t_l, t_sw, gbps, radix = 2, 50.0, 300.0, 4000.0, 16
+    tiers, t_l, t_sw, gbps, radix = 2, 50.0, 300.0, 4000.0, 0
     try:
         with open(su_topo) as f:
             for line in f:
@@ -102,10 +115,12 @@ def pfc_config(su_topo):
                         radix = max(radix, int(w[1]))
     except OSError:
         pass
+    if radix == 0:
+        radix = 16
     B = gbps / 8.0                                        # Gb/s -> B/ns
     rtt = 2 * (t_l * 2 * tiers + t_sw * (2 * tiers - 1))  # 2 x diameter latency
     bdp = int(rtt * B / (FRAME_B - 64))                   # reservation, packets, floored
-    high = max(2, bdp - PFC_HEADROOM_FRAMES)
+    high = max(2, bdp - _headroom_frames(t_l, t_sw, B))
     return high, max(1, int(high * 0.8)), radix * bdp
 
 # Primary metric: the makespan summary line (verified emitted by

@@ -37,10 +37,21 @@ and the INC gap scale ~linearly in depth, so the trend extrapolates to full 7B
 
 ## Topology / the sweep knob
 
-**Intranode (scale-up, swept):** `scaleup_single_switch_<TP>_12800Gbps.topo` — a
-single-switch crossbar with exactly `TP` hosts (must equal `-num_gpus_per_node`),
-pinned at the sweep **max**; `-intranode_linkspeed` and the topo pipe are in-series
-limiters, so with flag ≤ topo the flag governs at every point.
+**Intranode (scale-up, swept):** a single-switch crossbar with exactly `TP` hosts
+(must equal `-num_gpus_per_node`), **generated per swept rate** into the tmpdir
+(`scaleup_single_switch_<TP>_<Gbps>Gbps.topo`, 50 ns links / 300 ns switch — the
+thesis-standard latencies), so the fabric pipes and `-intranode_linkspeed` carry
+the **same** speed at every point: consistent link speed in the network *and* at
+the sender endpoints, no in-series ceiling. (The earlier harness pinned the topo
+at 12800 Gbps and swept only the flag, leaving the pipes at a different — and
+non-integer-ps/B — rate.)
+
+**Exact rates only.** htsim stores a link's rate as integer **picoseconds per
+byte** (ps/B = 8000/Gbps), so swept rates must divide 8000 to be exact on the
+wire — the default grid is `100, 200, 400, 800, 1600, 2000, 4000, 8000`
+(80…1 ps/B). 3200/3600/6400/12800 silently quantise and are rejected loudly;
+the NVLink 3600 Gbps line on the plots is a reference line, not a simulated
+point.
 
 **Scale-out (DP/PP, fixed per run, selectable via `--internode_gbps`):**
 `tree16_nonblocking_{100,200}Gbps.topo` — 16 hosts on one **non-blocking** switch.
@@ -63,9 +74,11 @@ run different CC (see `AA-plan-Intranode-CC-Bypass`):
   retransmits.
 - **Intranode (scale-up)** is **CC-FREE** (`-intranode_cc none`): it models NVLink,
   which has no end-to-end congestion control — only NIC line-rate serialization +
-  lossless PFC. The PFC pause threshold (`-lossless_high_pfc 1500`, resume `1200`,
-  ≈2.4× the 12800 Gbps BDP) sits below the 20 MB intranode queue so PAUSE fires
-  before overflow; validated drop-free across the sweep.
+  lossless PFC. PFC thresholds and the intranode queue are **derived per generated
+  fabric** by `sim.pfc_config()` (XOFF = 1 BDP at the fabric's own rate minus the
+  rate-derived pause-propagation headroom, XON = 0.8×XOFF, queue = radix×BDP — the
+  same shared-buffer provisioning rule as the isolation experiments, thesis
+  Table 4.1), recorded per row in `pfc_high`/`pfc_low`/`intranode_q`.
 
 **Fair INC endpoint.** The INC `coll` arm is paced through the **same intranode
 NIC** as the decomposed baseline (line-rate serialization, still ACK-less — no
@@ -87,7 +100,8 @@ docker run --rm -v "$(pwd)":/workspace atlahs-sim run intranode_linkspeed_sweep 
 ```
 
 Useful flags: `--internode_gbps {100,200}` (scale-out fabric bandwidth; default
-100), `--speeds 100,3600,12800` (subset), `--layers N`, `--iters N`, `--no-plot`,
+100), `--speeds 100,2000,8000` (subset; every value must divide 8000 — integer
+ps/B), `--layers N`, `--iters N`, `--no-plot`,
 `--only-plot` (re-render PNGs from an existing `sweep_ib<N>.csv` — pair with the
 matching `--internode_gbps`), `--speedup` (plot INC speedup = baseline/INC vs
 intranode speed for the PP=1 configs at `--internode_gbps`, two lines TP4·DP4 /
