@@ -55,7 +55,7 @@ def main():
     goal.compile_goal(g, b)
 
     # 3. Run the pcm-sdk simulator, single-domain isolation (nodes == gpus == n).
-    fin, drops, status, cmd = sim.run_sim(
+    fin, drops, status, cmd, _pfc = sim.run_sim(
         b, paths.topo(args.so_topo), paths.topo(args.su_topo),
         nodes=args.n, gpus_per_node=args.n, timeout=args.timeout)
 

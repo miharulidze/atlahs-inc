@@ -2,7 +2,8 @@
 # Orchestrator — runs the full isolation experiment matrix in priority order, all on the
 # pcm-sdk engine via the atlahs-sim Docker image (single-engine, coherent story).
 #
-# Priority (cheapest/most-verified first): E1 -> M-A time A/B -> X1 group sweep -> M-B footprint.
+# Priority (cheapest/most-verified first): E1 -> M-A time A/B -> X1 group sweep
+# -> M-B footprint -> X2 PFC validation (stress + census + controls + overdrive).
 # Each step is a frozen per-experiment run_thesis.sh; re-running regenerates that step's CSV.
 #
 # Prereqs: `docker run --rm -v $(pwd):/workspace atlahs-sim build` has produced the pcm binary

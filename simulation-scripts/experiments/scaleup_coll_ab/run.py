@@ -132,12 +132,12 @@ def run_exp(n, sizes, su_topo, so_topo, reduce_compute, tmpdir, timeout):
                 goal.compile_goal(inc, inc[:-5] + ".bin")
                 log = os.path.join(OUTPUT_DIR, "logs", f"{label}_{algo}_{n}_{s}.log")
                 os.makedirs(os.path.dirname(log), exist_ok=True)
-                ifin, idrop, ist, icmd = sim.run_sim(inc[:-5] + ".bin", so_topo, su_topo,
+                ifin, idrop, ist, icmd, _ = sim.run_sim(inc[:-5] + ".bin", so_topo, su_topo,
                                                      nodes=n, gpus_per_node=n, groups=grp,
                                                      reduce_compute=reduce_compute,
                                                      timeout=timeout,
                                                      intranode_linkspeed=INTRANODE_LINKSPEED)
-                bfin, bdrop, bst, _ = sim.run_sim(base[:-5] + ".bin", so_topo, su_topo,
+                bfin, bdrop, bst, _, _px = sim.run_sim(base[:-5] + ".bin", so_topo, su_topo,
                                                   nodes=n, gpus_per_node=n, timeout=timeout,
                                                   intranode_linkspeed=INTRANODE_LINKSPEED)
                 inc_ns = ifin - TAIL_NS if ifin else None

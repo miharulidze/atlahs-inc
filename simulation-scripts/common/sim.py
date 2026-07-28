@@ -116,6 +116,52 @@ HOSTLINE = re.compile(r"^Host \d+:\s*(\d+)", re.MULTILINE)
 DROP = re.compile(r"drop arriving|drop last from queue|dropped packet|Random Drop|"
                   r"Buffer Drop|Dropping packet|LOSSLESS not working", re.IGNORECASE)
 
+# PFC instrumentation summary lines (AA-plan-PFC-Validation). Emitted once at
+# teardown by the instrumented binary; absent on older binaries, in which case
+# parse_pfc_extras() returns only the resolved thresholds.
+PFC_INGRESS = re.compile(r"PFC_SUMMARY_INGRESS pauses_sent=(\d+) resumes_sent=(\d+) "
+                         r"peak_bytes=(\d+) high_bytes=(\d+) peak_queue=(.+)")
+PFC_EGRESS = re.compile(r"PFC_SUMMARY_EGRESS peak_bytes=(\d+) maxsize_bytes=(\d+) "
+                        r"peak_frac=([\d.]+) peak_queue=(.+)")
+NIC_GATE = re.compile(r"NIC_PFC_GATE honor=(\d+) pauses_seen=(\d+) "
+                      r"grants_declined=(\d+) redrives_held=(\d+)")
+
+
+def parse_pfc_extras(stdout, hi, lo, q):
+    """PFC engagement/occupancy evidence for one run, as a flat dict.
+
+    peak_ingress_frac divides the observed peak ingress charge by the
+    per-ingress RESERVATION (XOFF threshold + pause-propagation headroom =
+    1 BDP under pfc_config) -- the invariant PFC protects. The egress fraction
+    is computed in-binary against each queue's own provisioned cap."""
+    ex = {"pfc_high": hi, "pfc_low": lo, "intranode_q": q,
+          "pauses_sent": "", "resumes_sent": "",
+          "peak_ingress_bytes": "", "peak_ingress_frac": "", "peak_ingress_queue": "",
+          "peak_egress_bytes": "", "peak_egress_frac": "", "peak_egress_queue": "",
+          "nic_honor": "", "nic_pauses_seen": "", "nic_grants_declined": "",
+          "nic_redrives_held": ""}
+    m = PFC_INGRESS.search(stdout)
+    if m:
+        ex["pauses_sent"] = int(m.group(1))
+        ex["resumes_sent"] = int(m.group(2))
+        peak = int(m.group(3))
+        reservation = int(m.group(4)) + PFC_HEADROOM_FRAMES * FRAME_B
+        ex["peak_ingress_bytes"] = peak
+        ex["peak_ingress_frac"] = round(peak / reservation, 4) if reservation else ""
+        ex["peak_ingress_queue"] = m.group(5).strip()
+    m = PFC_EGRESS.search(stdout)
+    if m:
+        ex["peak_egress_bytes"] = int(m.group(1))
+        ex["peak_egress_frac"] = float(m.group(3))
+        ex["peak_egress_queue"] = m.group(4).strip()
+    m = NIC_GATE.search(stdout)
+    if m:
+        ex["nic_honor"] = int(m.group(1))
+        ex["nic_pauses_seen"] = int(m.group(2))
+        ex["nic_grants_declined"] = int(m.group(3))
+        ex["nic_redrives_held"] = int(m.group(4))
+    return ex
+
 
 def parse_makespan(stdout):
     m = MAXFIN.search(stdout)
@@ -128,13 +174,28 @@ def parse_makespan(stdout):
 def run_sim(binpath, so_topo, su_topo, nodes, gpus_per_node, groups=None,
             reduce_compute=0, timeout=600,
             intranode_linkspeed=INTRANODE_LINKSPEED_DEFAULT, end=100000000,
-            mcast_pin=-1, mtu=MTU_DEFAULT):
-    """One simulator run. Returns (makespan_ns|None, drop_count, status, command).
+            mcast_pin=-1, mtu=MTU_DEFAULT,
+            pfc_high=None, pfc_low=None, intranode_q=None,
+            pfc_trace=None, save_stdout=None):
+    """One simulator run. Returns (makespan_ns|None, drop_count, status, command,
+    pfc_extras_dict).
 
     mcast_pin: -1 (default) = round-robin INC tree placement; >=0 pins every tree onto
     one aggregation position + core (the PFC/backpressure experiment knob). Only appended
-    when >=0, so it needs a pcm binary built with the -mcast_pin flag (else it errors)."""
+    when >=0, so it needs a pcm binary built with the -mcast_pin flag (else it errors).
+
+    pfc_high/pfc_low/intranode_q override the pfc_config() derivation -- ONLY for the
+    deliberately mis-provisioned negative controls of AA-plan-PFC-Validation; presented
+    results always use the derived values. pfc_trace=<path> turns on the in-binary
+    PAUSE/RESUME + occupancy CSV. save_stdout=<path>.gz retains the full simulator
+    output (rigor plan H4, opt-in)."""
     _hi, _lo, _q = pfc_config(su_topo)
+    if pfc_high is not None:
+        _hi = pfc_high
+    if pfc_low is not None:
+        _lo = pfc_low
+    if intranode_q is not None:
+        _q = intranode_q
     cmd = [paths.PCM_APP_HTSIM_ATLAHS_EXEC_PATH, "-goal", binpath,
            "-nodes", str(nodes), "-num_gpus_per_node", str(gpus_per_node),
            "-topo", so_topo, "-intranode_topo", su_topo,
@@ -153,6 +214,8 @@ def run_sim(binpath, so_topo, su_topo, nodes, gpus_per_node, groups=None,
         cmd += ["-reduce_compute_latency", str(reduce_compute)]
     if mcast_pin >= 0:
         cmd += ["-mcast_pin", str(mcast_pin)]
+    if pfc_trace:
+        cmd += ["-pfc_trace", pfc_trace]
     # Escape hatch for datapath-policy flags under study (e.g. -rs_local_fold) so a
     # sensitivity run needs no harness edit. Space-separated, appended verbatim.
     if os.environ.get("SIM_EXTRA_FLAGS"):
@@ -160,11 +223,17 @@ def run_sim(binpath, so_topo, su_topo, nodes, gpus_per_node, groups=None,
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
-        return None, -1, "timeout", " ".join(cmd)
+        return None, -1, "timeout", " ".join(cmd), parse_pfc_extras("", _hi, _lo, _q)
     combined = p.stdout + "\n" + p.stderr
+    if save_stdout:
+        import gzip
+        os.makedirs(os.path.dirname(save_stdout), exist_ok=True)
+        with gzip.open(save_stdout, "wt") as zf:
+            zf.write(combined)
     drops = len(DROP.findall(combined))
     status = "ok" if p.returncode == 0 else f"rc={p.returncode}"
-    return parse_makespan(p.stdout), drops, status, " ".join(cmd)
+    return (parse_makespan(p.stdout), drops, status, " ".join(cmd),
+            parse_pfc_extras(p.stdout, _hi, _lo, _q))
 
 
 def _read_link_crosses(path):

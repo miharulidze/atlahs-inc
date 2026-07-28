@@ -7,7 +7,7 @@ working end-to-end demo of the experiment contract:
 1. two-line `sys.path` header, then `from common import goal, paths, report, sim`;
 2. synthesize a `.goal` trace (generator decomposition and/or INC `coll` ops);
 3. `goal.compile_goal()` -> canonical `.bin`;
-4. `sim.run_sim()` -> makespan/drops/status;
+4. `sim.run_sim()` -> makespan/drops/status/command/pfc-extras;
 5. `report.CsvAppender` -> `results/<your_name>/…csv`.
 
 Conventions:

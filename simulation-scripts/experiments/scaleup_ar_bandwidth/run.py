@@ -103,7 +103,7 @@ def run_exp(n, sizes, su_topo, so_topo, reduce_compute, tmpdir, timeout):
                 goal.compile_goal(g, g[:-5] + ".bin")
                 log = os.path.join(OUTPUT_DIR, "logs", f"{arm['label']}_{n}_{s}.log")
                 os.makedirs(os.path.dirname(log), exist_ok=True)
-                fin, drop, st, cmd = sim.run_sim(g[:-5] + ".bin", so_topo, su_topo,
+                fin, drop, st, cmd, _ = sim.run_sim(g[:-5] + ".bin", so_topo, su_topo,
                                                  nodes=n, gpus_per_node=n, groups=grp,
                                                  reduce_compute=reduce_compute,
                                                  timeout=timeout,
