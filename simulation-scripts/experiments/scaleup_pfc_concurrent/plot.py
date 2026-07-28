@@ -18,6 +18,7 @@ Measured-only except the two sanctioned reference lines. Run in the container:
 """
 import csv
 import os
+import re
 import sys
 from collections import defaultdict
 
@@ -32,6 +33,19 @@ from common import paths  # noqa: E402
 EXP = "scaleup_pfc_concurrent"
 OUTDIR = os.environ.get("SCALEUP_OUTPUT_DIR", paths.results_dir(EXP))
 FRAME_B = 4160
+
+# Trace queue names are VQ-<from>-><to>(<bank>); render them human-readable
+# for figure labels (SRC=host, LS=leaf, US=agg, CS=core).
+_TIER = {"SRC": "host", "LS": "leaf", "US": "agg", "CS": "core"}
+_VQ = re.compile(r"VQ-([A-Z]+)(\d+)->([A-Z]+)(\d+)\(\d+\)")
+
+
+def pretty(queue):
+    m = _VQ.fullmatch(queue)
+    if not m:
+        return queue
+    a, ai, b, bi = m.groups()
+    return f"{_TIER.get(a, a)} {ai} $\\rightarrow$ {_TIER.get(b, b)} {bi}"
 
 # CVD-validated pair (dataviz six-checks: worst adjacent dE 20.9 protan).
 ARM_STYLE = {
@@ -152,7 +166,8 @@ def fig_sawtooth(trace_name, hi_pkt, lo_pkt, headroom_frames=50):
         return
     fig, ax = plt.subplots(figsize=(7, 4.0))
     ax.plot([p[0] for p in pts], [p[1] / 1024 for p in pts],
-            lw=0.9, color="#1f77b4", label=f"ingress charge, {q}")
+            lw=0.9, color="#1f77b4",
+            label=f"ingress charge, {pretty(q)} link")
     for a, b in pauses[q]:
         ax.axvspan(a, b, color="#c0392b", alpha=0.14, lw=0)
     for pkt, ls, lbl in ((hi_pkt + headroom_frames, "-", "reservation (1 BDP)"),
@@ -189,7 +204,7 @@ def fig_raster(traces, top=14):
             ax.annotate(f"{share[q]*100:.1f}%", (t_end * 1.13, y), fontsize=7,
                         color="0.3", va="center", ha="right")
         ax.set_yticks(range(len(links)))
-        ax.set_yticklabels(links, fontsize=7)
+        ax.set_yticklabels([pretty(q) for q in links], fontsize=7)
         ax.set_xlim(0, t_end * 1.15)
         ax.set_ylim(-0.7, len(links) - 0.3 if links else 0.7)
         ax.set_xlabel("time [µs]")
