@@ -115,7 +115,11 @@ def _cfg_colors(cfgs):
 # 8000 or the wire quantises to a different speed than the flag (e.g. 3200 Gbps
 # -> 2.5 ps/B -> truncated, no longer the nominal rate). run_exp() rejects
 # non-divisors loudly.
-DEFAULT_SPEEDS_GBPS = [100, 200, 400, 800, 1600, 2000, 4000, 8000]
+# The grid STARTS at the inter-node base rate (200 Gbps, the standard scale-out
+# value from 2026-07-29 on): intranode linkspeed >= internode linkspeed must
+# always hold -- a scale-up fabric slower than the scale-out NIC is not a
+# meaningful design point. run_exp() enforces the invariant loudly.
+DEFAULT_SPEEDS_GBPS = [200, 400, 800, 1600, 2000, 4000, 8000]
 NVLINK_GBPS = 3600         # reference line only (NOT simulated: 3600 is not exact in ps/B)
 
 # Intranode (scale-up) topo: GENERATED per (TP, rate) -- a single-switch
@@ -548,6 +552,12 @@ def run_exp(speeds_gbps, layers, iters, tmpdir, timeout, do_plot, internode_gbps
     goal.require_generator()
     sim.require_simulator()
     _require_exact_rates(speeds_gbps, "intranode link")
+    # TODO guardrail (dev): a scale-up fabric slower than the scale-out NIC is
+    # not a meaningful design point (intranode >= internode must always hold).
+    slow = [g for g in speeds_gbps if g < internode_gbps]
+    if slow:
+        sys.exit(f"intranode speed(s) {slow} Gbps below the inter-node rate "
+                 f"({internode_gbps} Gbps): intranode >= internode must hold")
     if TOTAL_GPUS == 16:
         # the committed 16-host topos, for exact reproducibility of the recorded runs
         so_topo_name = SO_TOPO_BY_GBPS[internode_gbps]
@@ -867,6 +877,12 @@ def run_internode_exp(so_speeds, layers, iters, tmpdir, timeout, do_plot, intran
     sim.require_simulator()
     _require_exact_rates(so_speeds, "inter-node link")
     _require_exact_rates([intranode_gbps], "intranode link")
+    # TODO guardrail (dev): the same invariant, from the other side -- the swept
+    # inter-node rate must not exceed the fixed intranode rate.
+    fast = [g for g in so_speeds if g > intranode_gbps]
+    if fast:
+        sys.exit(f"inter-node speed(s) {fast} Gbps above the fixed intranode rate "
+                 f"({intranode_gbps} Gbps): intranode >= internode must hold")
     _preflight_cc()
 
     out_dir = paths.results_dir(EXP_NAME)
@@ -940,8 +956,9 @@ def main():
     ap.add_argument("--no-plot", action="store_true", help="write CSV only, skip PNGs")
     ap.add_argument("--only-plot", action="store_true",
                     help="re-plot from an existing results/<exp>/sweep_ib<N>.csv (no gen, no sim)")
-    ap.add_argument("--internode_gbps", type=int, default=100, choices=sorted(SO_TOPO_BY_GBPS),
-                    help="intranode mode: scale-out fabric bandwidth in Gbps (picks the SO topo)")
+    ap.add_argument("--internode_gbps", type=int, default=200, choices=sorted(SO_TOPO_BY_GBPS),
+                    help="intranode mode: scale-out fabric bandwidth in Gbps (picks the SO "
+                         "topo); 200 = the standard base value (2026-07-29)")
     ap.add_argument("--speedup", action="store_true",
                     help="plot INC speedup (baseline/INC) vs intranode speed for the PP=1 configs "
                          "at --internode_gbps (reads that sweep_ib<N>.csv; no gen, no sim)")
@@ -960,9 +977,9 @@ def main():
     ap.add_argument("--tps", default="4,2",
                     help="comma-separated TP degrees (= gpus/node = scale-up domain "
                          "width) to run; e.g. --total_gpus 32 --tps 8 = 4 nodes x 8 GPUs")
-    ap.add_argument("--pps", default="1,2",
-                    help="comma-separated pipeline degrees; --pps 1 = the PP=1 "
-                         "headline configs only")
+    ap.add_argument("--pps", default="1",
+                    help="comma-separated pipeline degrees; default PP=1 only "
+                         "(PP=2 retired from the deliverable 2026-07-29)")
     args = ap.parse_args()
     speeds = [int(x) for x in args.speeds.split(",")]
     configure_scale(args.total_gpus, [int(x) for x in args.tps.split(",")],
