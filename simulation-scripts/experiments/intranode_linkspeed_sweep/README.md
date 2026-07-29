@@ -123,7 +123,10 @@ docker run --rm -v "$(pwd)":/workspace atlahs-sim run intranode_linkspeed_sweep 
 
 Useful flags: `--internode_gbps {100,200}` (scale-out fabric bandwidth; default
 100), `--speeds 100,2000,8000` (subset; every value must divide 8000 — integer
-ps/B), `--layers N`, `--iters N`, `--no-plot`,
+ps/B), `--total_gpus N --tps T1,T2` (experiment scale: N endpoints split
+TP×DP×PP with gpus/node = TP; e.g. `--total_gpus 32 --tps 8` = 4 nodes × 8 GPUs,
+TP8·DP4·PP1 + TP8·DP2·PP2; non-16 scales suffix every output with `_g<N>` and
+generate the scale-out topo at N hosts), `--layers N`, `--iters N`, `--no-plot`,
 `--only-plot` (re-render PNGs from an existing `sweep_ib<N>.csv` — pair with the
 matching `--internode_gbps`), `--speedup` (plot INC speedup = baseline/INC vs
 intranode speed for the PP=1 configs at `--internode_gbps`, two lines TP4·DP4 /
