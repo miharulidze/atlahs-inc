@@ -653,6 +653,8 @@ def plot_from_rows(rows, out_dir, speeds_gbps, internode_gbps, cmap=None):
             ("pp2", f"Tuning Intranode Link Speed (PP=2, {TOTAL_GPUS} GPUs, "
                     f"inter-node {internode_gbps} Gbps)")):
         cfgs = [c for c in CONFIGS if c["plot"] == plot_key]
+        if not cfgs:
+            continue    # e.g. PP=2 retired: no configs -> no empty figure
         fig, ax = plt.subplots(figsize=(8, 6))
         for ci, cfg in enumerate(cfgs):
             color = colors[ci % len(colors)]
