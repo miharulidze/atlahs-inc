@@ -89,6 +89,28 @@ an unfair, misleading comparison.)
 
 `-nodes` = TOTAL GPUs (16); `-num_gpus_per_node` = TP; INC `.groups` are node-local.
 
+## Compute share (annotated on every plot)
+
+The generator's `calc` ops carry H100-roofline durations that depend only on the
+model math and the parallelism split — **not** on link speeds and **not** on the
+arm (both arms share the same calc ops). So per-rank compute per iteration is one
+fixed number per config, parsed from the generated `.goal` (`compute_ns_per_iter`
+= max rank, `_mean` also recorded) and annotated on each plot as the fixed
+compute time + its share range over the plotted makespans. The compute model is
+a coarse roofline (not representative in absolute terms); the share is reported
+to size the communication-dominance of the workload, ~5–10 % at these configs.
+
+## Internode sweep mode (`--mode internode`)
+
+The inverse experiment: intranode FIXED (`--intranode_gbps`, default 4000),
+inter-node link speed swept (`--so_speeds`, default `100,200,400,800,1600`; 800 ≈
+current-gen per-GPU scale-out NIC, 1600 next-gen; all must divide 8000). Both the
+generated scale-out topo pipes AND the scale-out NIC (`-linkspeed`) carry the
+swept rate — the same network/endpoint consistency rule as the intranode mode.
+Expectation: a faster scale-out fabric shrinks the fixed DP/PP floor, the TP
+collective becomes a larger share of the critical path, and INC's speedup RISES.
+Outputs: `sweep_internode_su<N>.csv`, `internode_linkspeed_{time,speedup}_pp1_su<N>.png`.
+
 ## Run (Docker)
 
 ```bash
