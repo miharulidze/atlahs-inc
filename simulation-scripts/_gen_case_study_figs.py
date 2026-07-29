@@ -132,7 +132,103 @@ def fig_b():
     print(f"fig B written ({plotted} operating points)")
 
 
+def _sweep_rows(name, cfg):
+    path = os.path.join(RES, f"{name}.csv")
+    if not os.path.isfile(path):
+        return []
+    return [r for r in csv.DictReader(open(path))
+            if r["config"] == cfg and r["time_per_iter_s"]]
+
+
+def fig_c():
+    """Consolidated intranode-sweep speedup: all three scales as lines on one
+    axes (inter-node fixed at the 400 Gbps H100-class base)."""
+    fig, ax = plt.subplots(figsize=(8, 5.2))
+    colors = {4: "#1f77b4", 8: "#ff7f0e", 16: "#2ca02c"}
+    for label, suffix, cfg, tp in SCALES:
+        rows = _sweep_rows(f"sweep_ib400{suffix}", cfg)
+        by = {}
+        for r in rows:
+            by.setdefault(int(r["intranode_linkspeed_gbps"]), {})[r["arm"]] = \
+                float(r["time_per_iter_s"])
+        pts = sorted((g, v["baseline"] / v["inc"]) for g, v in by.items()
+                     if "baseline" in v and "inc" in v)
+        if not pts:
+            print(f"fig C: no rows for {cfg}, skipped")
+            continue
+        xs, ys = zip(*pts)
+        ax.plot(xs, ys, marker="o", ms=6, color=colors[tp],
+                label=label.replace("\n", " "))
+    ax.axhline(1.0, color="grey", ls=":", lw=1.2, label="no speedup (1.0×)")
+    ax.set_xscale("log", base=2)
+    xs_all = sorted({x for l in ax.get_lines() for x in l.get_xdata()
+                     if isinstance(x, (int, float)) and x > 1})
+    if xs_all:
+        ax.set_xticks(xs_all)
+        ax.set_xticklabels([str(int(x)) for x in xs_all])
+        ax.minorticks_off()
+    ax.set_xlabel("Intranode Link Speed (Gbps)", fontsize=13)
+    ax.set_ylabel("End-to-end Speedup  (baseline / INC)", fontsize=13)
+    ax.set_title("INC Speedup vs Intranode Link Speed\n"
+                 "(inter-node 400 Gbps, three scale-up domain widths)",
+                 fontsize=13)
+    ax.grid(True, which="both", ls=":", alpha=0.5)
+    ax.legend(fontsize=10)
+    fig.tight_layout()
+    for ext in ("png", "pdf"):
+        fig.savefig(os.path.join(RES, f"case_study_intranode_speedup.{ext}"),
+                    dpi=150 if ext == "png" else None)
+    plt.close(fig)
+    print("fig C written")
+
+
+def fig_d():
+    """Consolidated internode-sweep speedup: three scales as lines, intranode
+    4000 solid + intranode 8000 dashed (generation-consistent markers)."""
+    fig, ax = plt.subplots(figsize=(8, 5.2))
+    colors = {4: "#1f77b4", 8: "#ff7f0e", 16: "#2ca02c"}
+    for su, ls in ((4000, "-"), (8000, "--")):
+        for label, suffix, cfg, tp in SCALES:
+            rows = _sweep_rows(f"sweep_internode_su{su}{suffix}", cfg)
+            by = {}
+            for r in rows:
+                by.setdefault(int(r["so_gbps"]), {})[r["arm"]] = \
+                    float(r["time_per_iter_s"])
+            pts = sorted((g, v["baseline"] / v["inc"]) for g, v in by.items()
+                         if "baseline" in v and "inc" in v)
+            if not pts:
+                print(f"fig D: no rows for su{su} {cfg}, skipped")
+                continue
+            xs, ys = zip(*pts)
+            ax.plot(xs, ys, marker="o" if su == 4000 else "^", ms=5,
+                    ls=ls, color=colors[tp],
+                    label=f"{label.splitlines()[0]}, intranode {su} Gbps")
+    ax.axhline(1.0, color="grey", ls=":", lw=1.2)
+    ax.set_xscale("log", base=2)
+    xs_all = sorted({int(x) for l in ax.get_lines() for x in l.get_xdata()
+                     if isinstance(x, (int, float)) and x > 1})
+    if xs_all:
+        ax.set_xticks(xs_all)
+        ax.set_xticklabels([str(x) for x in xs_all])
+        ax.minorticks_off()
+    ax.set_xlabel("Inter-node Link Speed (Gbps)", fontsize=13)
+    ax.set_ylabel("End-to-end Speedup  (baseline / INC)", fontsize=13)
+    ax.set_title("INC Speedup vs Inter-node Link Speed\n"
+                 "(three domain widths; solid = intranode 4000, dashed = 8000 Gbps)",
+                 fontsize=13)
+    ax.grid(True, which="both", ls=":", alpha=0.5)
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    for ext in ("png", "pdf"):
+        fig.savefig(os.path.join(RES, f"case_study_internode_speedup.{ext}"),
+                    dpi=150 if ext == "png" else None)
+    plt.close(fig)
+    print("fig D written")
+
+
 if __name__ == "__main__":
     fig_a()
     fig_b()
+    fig_c()
+    fig_d()
     sys.exit(0)
