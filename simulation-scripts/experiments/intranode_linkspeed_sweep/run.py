@@ -82,12 +82,12 @@ CONFIGS = [
 ]
 
 
-def configure_scale(total_gpus, tps):
+def configure_scale(total_gpus, tps, pps=(1, 2)):
     """Rebind TOTAL_GPUS + CONFIGS for a different experiment scale."""
     global TOTAL_GPUS, CONFIGS
     TOTAL_GPUS = total_gpus
     CONFIGS = []
-    for pp in (1, 2):
+    for pp in pps:
         for tp in tps:
             if total_gpus % (tp * pp):
                 sys.exit(f"--total_gpus {total_gpus} is not divisible by TP{tp} x PP{pp}")
@@ -960,9 +960,13 @@ def main():
     ap.add_argument("--tps", default="4,2",
                     help="comma-separated TP degrees (= gpus/node = scale-up domain "
                          "width) to run; e.g. --total_gpus 32 --tps 8 = 4 nodes x 8 GPUs")
+    ap.add_argument("--pps", default="1,2",
+                    help="comma-separated pipeline degrees; --pps 1 = the PP=1 "
+                         "headline configs only")
     args = ap.parse_args()
     speeds = [int(x) for x in args.speeds.split(",")]
-    configure_scale(args.total_gpus, [int(x) for x in args.tps.split(",")])
+    configure_scale(args.total_gpus, [int(x) for x in args.tps.split(",")],
+                    tuple(int(x) for x in args.pps.split(",")))
 
     if args.mode == "internode":
         so_speeds = [int(x) for x in args.so_speeds.split(",")]
