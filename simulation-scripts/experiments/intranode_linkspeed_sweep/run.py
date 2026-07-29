@@ -408,6 +408,18 @@ def _engine_id():
     return "pcm-sdk"
 
 
+def _run_cells(cells, fn, jobs):
+    """Run the sweep cells through fn, jobs at a time (each cell is one
+    single-threaded htsim subprocess, so a thread pool is the right shape).
+    Results come back in the original cell order regardless of completion
+    order, so the CSV layout is identical to a sequential run."""
+    if jobs <= 1:
+        return [fn(c) for c in cells]
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=jobs) as ex:
+        return list(ex.map(fn, cells))
+
+
 def _preflight_cc():
     """Loud preflight for the scale-out DCTCP stack shared by both sweep modes."""
     if not os.path.isfile(PCM_CC_CONFIG):
@@ -574,7 +586,8 @@ def validate(layers, iters, tmpdir):
     return 0 if ok else 1
 
 
-def run_exp(speeds_gbps, layers, iters, tmpdir, timeout, do_plot, internode_gbps):
+def run_exp(speeds_gbps, layers, iters, tmpdir, timeout, do_plot, internode_gbps,
+            jobs=1):
     goal.require_txt2bin()
     goal.require_generator()
     sim.require_simulator()
@@ -604,49 +617,52 @@ def run_exp(speeds_gbps, layers, iters, tmpdir, timeout, do_plot, internode_gbps
     rows = []
     cmap = {}
     engine = _engine_id()
+    cells = []
+    for cfg in CONFIGS:
+        gpn = cfg["tp"]
+        report.print_info(f"=== {cfg_tag(cfg)}  (gpus/node={gpn}, "
+                          f"domains={cfg['dp'] * cfg['pp']}, -nodes={TOTAL_GPUS}) ===")
+        arms = generate_arms(cfg, layers, iters, tmpdir)
+        if arms["compute_ns"] is not None:
+            cmap[cfg_tag(cfg)] = arms["compute_ns"]
+        for gbps in speeds_gbps:
+            su_topo = su_topo_for(gpn, gbps, tmpdir)
+            pfc = sim.pfc_config(su_topo)
+            for arm in ("baseline", "inc"):
+                cells.append(dict(cfg=cfg, arms=arms, gbps=gbps, su_topo=su_topo,
+                                  pfc=pfc, arm=arm))
+
+    def _run_cell(c):
+        cfg, arms, arm, gbps = c["cfg"], c["arms"], c["arm"], c["gbps"]
+        binp = arms["inc_bin"] if arm == "inc" else arms["base_bin"]
+        groups = arms["groups"] if arm == "inc" else None
+        fin, drops, status, cmd = run_one_sim(
+            binp, c["su_topo"], so_topo, cfg["tp"], groups, gbps * 1000,
+            c["pfc"], timeout, so_mbps=internode_gbps * 1000)
+        tpi = (fin / iters / 1e9) if (fin and status == "ok") else None
+        warn = f"  WARN drops={drops}" if drops else ""
+        print(f"  {cfg_tag(cfg)} {gbps:>6} Gbps {arm:>9} "
+              f"{f'{tpi:.9f}' if tpi is not None else '-':>13} s  {status}{warn}",
+              flush=True)
+        return {"plot": cfg["plot"], "config": cfg_tag(cfg),
+                "tp": cfg["tp"], "dp": cfg["dp"], "pp": cfg["pp"], "arm": arm,
+                "intranode_linkspeed_gbps": gbps,
+                "intranode_linkspeed_mbps": gbps * 1000,
+                "makespan_ns": fin or "", "iters": iters,
+                "time_per_iter_s": f"{tpi:.9f}" if tpi is not None else "",
+                "compute_ns_per_iter": arms["compute_ns"] or "",
+                "compute_ns_per_iter_mean": arms["compute_ns_mean"] or "",
+                "drops": drops, "status": status,
+                "su_topo": os.path.basename(c["su_topo"]),
+                "so_topo": so_topo_name, "so_gbps": internode_gbps,
+                "intranode_cc": INTRANODE_CC, "pfc_high": c["pfc"][0],
+                "pfc_low": c["pfc"][1], "intranode_q": c["pfc"][2],
+                "compute_model": COMPUTE_MODEL, "engine": engine, "command": cmd}
+
+    rows = _run_cells(cells, _run_cell, jobs)
     with report.CsvAppender(csv_path, CSV_FIELDS) as out:
-        for cfg in CONFIGS:
-            gpn = cfg["tp"]
-            report.print_info(f"=== {cfg_tag(cfg)}  (gpus/node={gpn}, "
-                              f"domains={cfg['dp'] * cfg['pp']}, -nodes={TOTAL_GPUS}) ===")
-            arms = generate_arms(cfg, layers, iters, tmpdir)
-            if arms["compute_ns"] is not None:
-                cmap[cfg_tag(cfg)] = arms["compute_ns"]
-            for gbps in speeds_gbps:
-                mbps = gbps * 1000
-                su_topo = su_topo_for(gpn, gbps, tmpdir)
-                pfc = sim.pfc_config(su_topo)
-                for arm in ("baseline", "inc"):
-                    binp = arms["inc_bin"] if arm == "inc" else arms["base_bin"]
-                    groups = arms["groups"] if arm == "inc" else None
-                    fin, drops, status, cmd = run_one_sim(
-                        binp, su_topo, so_topo, gpn, groups, mbps, pfc, timeout,
-                        so_mbps=internode_gbps * 1000)
-                    tpi = (fin / iters / 1e9) if (fin and status == "ok") else None
-                    row = {"plot": cfg["plot"], "config": cfg_tag(cfg),
-                           "tp": cfg["tp"], "dp": cfg["dp"], "pp": cfg["pp"], "arm": arm,
-                           "intranode_linkspeed_gbps": gbps, "intranode_linkspeed_mbps": mbps,
-                           "makespan_ns": fin or "", "iters": iters,
-                           "time_per_iter_s": f"{tpi:.9f}" if tpi is not None else "",
-                           "compute_ns_per_iter": arms["compute_ns"] or "",
-                           "compute_ns_per_iter_mean": arms["compute_ns_mean"] or "",
-                           "drops": drops, "status": status,
-                           "su_topo": os.path.basename(su_topo),
-                           "so_topo": so_topo_name, "so_gbps": internode_gbps,
-                           "intranode_cc": INTRANODE_CC, "pfc_high": pfc[0],
-                           "pfc_low": pfc[1], "intranode_q": pfc[2],
-                           "compute_model": COMPUTE_MODEL, "engine": engine, "command": cmd}
-                    out.write(row)
-                    rows.append(row)
-                b = next((r for r in rows if r["config"] == cfg_tag(cfg)
-                          and r["intranode_linkspeed_gbps"] == gbps and r["arm"] == "baseline"), None)
-                i = next((r for r in rows if r["config"] == cfg_tag(cfg)
-                          and r["intranode_linkspeed_gbps"] == gbps and r["arm"] == "inc"), None)
-                warn = ""
-                if (b and b["drops"]) or (i and i["drops"]):
-                    warn = f"  WARN drops b={b['drops'] if b else '-'} i={i['drops'] if i else '-'}"
-                print(f"  {gbps:>6} Gbps  base {str(b['time_per_iter_s']) if b else '-':>13} s  "
-                      f"INC {str(i['time_per_iter_s']) if i else '-':>13} s{warn}")
+        for row in rows:
+            out.write(row)
     report.print_success(f"wrote {len(rows)} rows to {csv_path}")
     if do_plot:
         plot_from_rows(rows, out_dir, speeds_gbps, internode_gbps, cmap)
@@ -913,7 +929,8 @@ def plot_internode(rows, out_dir, so_speeds, intranode_gbps, cmap):
     report.print_success("plots: " + ", ".join(made))
 
 
-def run_internode_exp(so_speeds, layers, iters, tmpdir, timeout, do_plot, intranode_gbps):
+def run_internode_exp(so_speeds, layers, iters, tmpdir, timeout, do_plot, intranode_gbps,
+                      jobs=1):
     """Fix the intranode (scale-up) rate, sweep the inter-node (scale-out) rate.
     Both the scale-out topo pipes AND the scale-out NIC (-linkspeed) carry the
     swept rate; the intranode topo pipes and -intranode_linkspeed carry the fixed
@@ -939,50 +956,53 @@ def run_internode_exp(so_speeds, layers, iters, tmpdir, timeout, do_plot, intran
     rows = []
     cmap = {}
     engine = _engine_id()
+    cells = []
+    for cfg in CONFIGS:
+        gpn = cfg["tp"]
+        su_topo = su_topo_for(gpn, intranode_gbps, tmpdir)
+        pfc = sim.pfc_config(su_topo)
+        report.print_info(f"=== {cfg_tag(cfg)}  (gpus/node={gpn}, "
+                          f"domains={cfg['dp'] * cfg['pp']}, intranode {intranode_gbps} Gbps) ===")
+        arms = generate_arms(cfg, layers, iters, tmpdir)
+        if arms["compute_ns"] is not None:
+            cmap[cfg_tag(cfg)] = arms["compute_ns"]
+        for so_gbps in so_speeds:
+            so_topo = so_topo_for(so_gbps, tmpdir)
+            for arm in ("baseline", "inc"):
+                cells.append(dict(cfg=cfg, arms=arms, su_topo=su_topo, pfc=pfc,
+                                  so_gbps=so_gbps, so_topo=so_topo, arm=arm))
+
+    def _run_cell(c):
+        cfg, arms, arm, so_gbps = c["cfg"], c["arms"], c["arm"], c["so_gbps"]
+        binp = arms["inc_bin"] if arm == "inc" else arms["base_bin"]
+        groups = arms["groups"] if arm == "inc" else None
+        fin, drops, status, cmd = run_one_sim(
+            binp, c["su_topo"], c["so_topo"], cfg["tp"], groups,
+            intranode_gbps * 1000, c["pfc"], timeout, so_mbps=so_gbps * 1000)
+        tpi = (fin / iters / 1e9) if (fin and status == "ok") else None
+        warn = f"  WARN drops={drops}" if drops else ""
+        print(f"  {cfg_tag(cfg)} so {so_gbps:>5} Gbps {arm:>9} "
+              f"{f'{tpi:.9f}' if tpi is not None else '-':>13} s  {status}{warn}",
+              flush=True)
+        return {"plot": cfg["plot"], "config": cfg_tag(cfg),
+                "tp": cfg["tp"], "dp": cfg["dp"], "pp": cfg["pp"], "arm": arm,
+                "intranode_linkspeed_gbps": intranode_gbps,
+                "intranode_linkspeed_mbps": intranode_gbps * 1000,
+                "makespan_ns": fin or "", "iters": iters,
+                "time_per_iter_s": f"{tpi:.9f}" if tpi is not None else "",
+                "compute_ns_per_iter": arms["compute_ns"] or "",
+                "compute_ns_per_iter_mean": arms["compute_ns_mean"] or "",
+                "drops": drops, "status": status,
+                "su_topo": os.path.basename(c["su_topo"]),
+                "so_topo": os.path.basename(c["so_topo"]), "so_gbps": so_gbps,
+                "intranode_cc": INTRANODE_CC, "pfc_high": c["pfc"][0],
+                "pfc_low": c["pfc"][1], "intranode_q": c["pfc"][2],
+                "compute_model": COMPUTE_MODEL, "engine": engine, "command": cmd}
+
+    rows = _run_cells(cells, _run_cell, jobs)
     with report.CsvAppender(csv_path, CSV_FIELDS) as out:
-        for cfg in CONFIGS:
-            gpn = cfg["tp"]
-            su_topo = su_topo_for(gpn, intranode_gbps, tmpdir)
-            pfc = sim.pfc_config(su_topo)
-            report.print_info(f"=== {cfg_tag(cfg)}  (gpus/node={gpn}, "
-                              f"domains={cfg['dp'] * cfg['pp']}, intranode {intranode_gbps} Gbps) ===")
-            arms = generate_arms(cfg, layers, iters, tmpdir)
-            if arms["compute_ns"] is not None:
-                cmap[cfg_tag(cfg)] = arms["compute_ns"]
-            for so_gbps in so_speeds:
-                so_topo = so_topo_for(so_gbps, tmpdir)
-                for arm in ("baseline", "inc"):
-                    binp = arms["inc_bin"] if arm == "inc" else arms["base_bin"]
-                    groups = arms["groups"] if arm == "inc" else None
-                    fin, drops, status, cmd = run_one_sim(
-                        binp, su_topo, so_topo, gpn, groups, intranode_gbps * 1000,
-                        pfc, timeout, so_mbps=so_gbps * 1000)
-                    tpi = (fin / iters / 1e9) if (fin and status == "ok") else None
-                    row = {"plot": cfg["plot"], "config": cfg_tag(cfg),
-                           "tp": cfg["tp"], "dp": cfg["dp"], "pp": cfg["pp"], "arm": arm,
-                           "intranode_linkspeed_gbps": intranode_gbps,
-                           "intranode_linkspeed_mbps": intranode_gbps * 1000,
-                           "makespan_ns": fin or "", "iters": iters,
-                           "time_per_iter_s": f"{tpi:.9f}" if tpi is not None else "",
-                           "compute_ns_per_iter": arms["compute_ns"] or "",
-                           "compute_ns_per_iter_mean": arms["compute_ns_mean"] or "",
-                           "drops": drops, "status": status,
-                           "su_topo": os.path.basename(su_topo),
-                           "so_topo": os.path.basename(so_topo), "so_gbps": so_gbps,
-                           "intranode_cc": INTRANODE_CC, "pfc_high": pfc[0],
-                           "pfc_low": pfc[1], "intranode_q": pfc[2],
-                           "compute_model": COMPUTE_MODEL, "engine": engine, "command": cmd}
-                    out.write(row)
-                    rows.append(row)
-                b = next((r for r in rows if r["config"] == cfg_tag(cfg)
-                          and r["so_gbps"] == so_gbps and r["arm"] == "baseline"), None)
-                i = next((r for r in rows if r["config"] == cfg_tag(cfg)
-                          and r["so_gbps"] == so_gbps and r["arm"] == "inc"), None)
-                warn = ""
-                if (b and b["drops"]) or (i and i["drops"]):
-                    warn = f"  WARN drops b={b['drops'] if b else '-'} i={i['drops'] if i else '-'}"
-                print(f"  so {so_gbps:>5} Gbps  base {str(b['time_per_iter_s']) if b else '-':>13} s  "
-                      f"INC {str(i['time_per_iter_s']) if i else '-':>13} s{warn}")
+        for row in rows:
+            out.write(row)
     report.print_success(f"wrote {len(rows)} rows to {csv_path}")
     if do_plot:
         plot_internode(rows, out_dir, so_speeds, intranode_gbps, cmap)
@@ -999,6 +1019,10 @@ def main():
                     help="micro-batch size; the network-level proxy for gradient "
                          "accumulation (TP activation traffic and compute scale "
                          "linearly with it, DP gradient traffic does NOT)")
+    ap.add_argument("--jobs", type=int, default=1,
+                    help="sweep cells run in parallel (each cell = one "
+                         "single-threaded htsim process; size by cores AND "
+                         "container memory -- ~6 for a 10-core/8GB Docker VM)")
     ap.add_argument("--iters", type=int, default=2, help="training iterations (metric divides this out)")
     ap.add_argument("--timeout", type=int, default=1800, help="per-sim-run timeout (s)")
     ap.add_argument("--tmpdir", default="/tmp/intranode_linkspeed_sweep")
@@ -1053,7 +1077,7 @@ def main():
             return validate(args.layers, args.iters, args.tmpdir)
         return run_internode_exp(so_speeds, args.layers, args.iters, args.tmpdir,
                                  args.timeout, do_plot=not args.no_plot,
-                                 intranode_gbps=args.intranode_gbps)
+                                 intranode_gbps=args.intranode_gbps, jobs=args.jobs)
 
     if args.speedup:
         out_dir = paths.results_dir(EXP_NAME)
@@ -1072,7 +1096,8 @@ def main():
     if args.validate:
         return validate(args.layers, args.iters, args.tmpdir)
     return run_exp(speeds, args.layers, args.iters, args.tmpdir, args.timeout,
-                   do_plot=not args.no_plot, internode_gbps=args.internode_gbps)
+                   do_plot=not args.no_plot, internode_gbps=args.internode_gbps,
+                   jobs=args.jobs)
 
 
 if __name__ == "__main__":
