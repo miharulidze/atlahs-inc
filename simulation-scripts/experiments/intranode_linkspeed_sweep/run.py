@@ -338,8 +338,22 @@ def _annotate_compute(ax, cfgs, cmap, rows, hlines, extra=None):
 SO_TOPO_BY_GBPS = {100: "tree16_nonblocking_100Gbps.topo",
                    200: "tree16_nonblocking_200Gbps.topo"}
 SIM_END_NS = 10 ** 12   # ceiling >> any iteration makespan; the sim stops at completion
-SO_LINKSPEED_MBPS = 200000   # scale-out NIC rate (200 Gbps); the fabric pipe caps the effective rate
-QSIZE = 1000000              # scale-out buffer (bytes)
+# Scale-out NIC rate is ALWAYS set equal to the scale-out fabric rate (the
+# same network==endpoint consistency rule as the intranode tier); run_one_sim
+# takes it per call. The scale-out queue scales with the rate instead of the
+# historical fixed -q 1000000: 1 MB (tuned for the original 100 Gbps runs) is
+# only ~20 us at 400 Gbps -- micro-batch >= 2 schedules overflowed it, and
+# each loss stalled behind the driver's queue-derived ~1 s min RTO (measured:
+# the batch-2 TP4 cell takes 9.0 s/2iter with Rtx=594 at 1 MB vs 84 ms with
+# Rtx=0 at 4 MB; 4 MB and 16 MB are byte-identical, so 4 MB is already past
+# convergence). 10 KB/Gbps reproduces the validated 4 MB at 400 Gbps and the
+# historical 1 MB at 100 Gbps. DCTCP's ECN thresholds derive from -q inside
+# the driver, so they scale along.
+SO_QSIZE_BYTES_PER_GBPS = 10000
+
+
+def so_qsize_bytes(so_gbps):
+    return SO_QSIZE_BYTES_PER_GBPS * so_gbps
 
 # Intranode CC bypass (AA-plan-Intranode-CC-Bypass): the scale-up domain models
 # NVLink, which has NO end-to-end congestion control -- only NIC line-rate
@@ -489,7 +503,7 @@ def generate_arms(cfg, layers, iters, tmpdir):
 
 
 def run_one_sim(binp, su_topo, so_topo, gpn, groups, mbps, pfc, timeout,
-                so_mbps=SO_LINKSPEED_MBPS):
+                so_mbps):
     """One multi-domain htsim run with PER-TIER CC. Two-tier: scale-out fabric
     (DP/PP) keeps DCTCP-via-PCM (lossy fabric); scale-up domain (TP, the swept
     intranode link) is CC-FREE (`-intranode_cc none`: line-rate NIC + lossless
@@ -502,7 +516,8 @@ def run_one_sim(binp, su_topo, so_topo, gpn, groups, mbps, pfc, timeout,
     pfc_high, pfc_low, intranode_q = pfc
     cmd = [paths.PCM_APP_HTSIM_ATLAHS_EXEC_PATH, "-goal", binp,
            "-nodes", str(TOTAL_GPUS), "-num_gpus_per_node", str(gpn),
-           "-topo", so_topo, "-linkspeed", str(so_mbps), "-q", str(QSIZE),
+           "-topo", so_topo, "-linkspeed", str(so_mbps),
+           "-q", str(so_qsize_bytes(so_mbps // 1000)),
            "-intranode_topo", su_topo, "-intranode_linkspeed", str(mbps),
            "-intranode_q", str(intranode_q), "-strat", "ecmp_host", "-seed", "42",
            "-mtu", str(sim.MTU_DEFAULT), "-paths", "128", "-end", str(SIM_END_NS),
@@ -527,6 +542,14 @@ def run_one_sim(binp, su_topo, so_topo, gpn, groups, mbps, pfc, timeout,
     # sim.DROP also matches "LOSSLESS not working" -> a nonzero count flags an
     # invalid (buffer-artifact) run, exactly what the CC config must prevent.
     drops = len(sim.DROP.findall(combined))
+    # Scale-out losses do NOT print a drop line the DROP regex matches -- they
+    # only surface as retransmissions in the end-of-run "New: ... Rtx: N"
+    # counters, and each one stalls behind the driver's queue-derived ~1 s min
+    # RTO (the batch>=2 9-second artifact of 2026-07-29). Count them as drops
+    # so the tripwire catches an undersized -q.
+    m = re.search(r"New: \d+ Rtx: (\d+) RTS: (\d+)", combined)
+    if m:
+        drops += int(m.group(1)) + int(m.group(2))
     status = "ok" if p.returncode == 0 else f"rc={p.returncode}"
     return sim.parse_makespan(p.stdout), drops, status, " ".join(cmd)
 
@@ -597,7 +620,8 @@ def run_exp(speeds_gbps, layers, iters, tmpdir, timeout, do_plot, internode_gbps
                     binp = arms["inc_bin"] if arm == "inc" else arms["base_bin"]
                     groups = arms["groups"] if arm == "inc" else None
                     fin, drops, status, cmd = run_one_sim(
-                        binp, su_topo, so_topo, gpn, groups, mbps, pfc, timeout)
+                        binp, su_topo, so_topo, gpn, groups, mbps, pfc, timeout,
+                        so_mbps=internode_gbps * 1000)
                     tpi = (fin / iters / 1e9) if (fin and status == "ok") else None
                     row = {"plot": cfg["plot"], "config": cfg_tag(cfg),
                            "tp": cfg["tp"], "dp": cfg["dp"], "pp": cfg["pp"], "arm": arm,
@@ -971,6 +995,10 @@ def main():
     ap.add_argument("--speeds", default=",".join(str(x) for x in DEFAULT_SPEEDS_GBPS),
                     help="comma-separated intranode link speeds in Gbps")
     ap.add_argument("--layers", type=int, default=2, help="transformer layers (depth-invariant y-scale)")
+    ap.add_argument("--batch", type=int, default=1,
+                    help="micro-batch size; the network-level proxy for gradient "
+                         "accumulation (TP activation traffic and compute scale "
+                         "linearly with it, DP gradient traffic does NOT)")
     ap.add_argument("--iters", type=int, default=2, help="training iterations (metric divides this out)")
     ap.add_argument("--timeout", type=int, default=1800, help="per-sim-run timeout (s)")
     ap.add_argument("--tmpdir", default="/tmp/intranode_linkspeed_sweep")
@@ -1005,6 +1033,7 @@ def main():
                          "(PP=2 retired from the deliverable 2026-07-29)")
     args = ap.parse_args()
     speeds = [int(x) for x in args.speeds.split(",")]
+    MODEL["batch"] = args.batch
     configure_scale(args.total_gpus, [int(x) for x in args.tps.split(",")],
                     tuple(int(x) for x in args.pps.split(",")))
 
