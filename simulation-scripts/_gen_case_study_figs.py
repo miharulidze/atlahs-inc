@@ -54,11 +54,19 @@ def cell(su, suffix, cfg, so):
 
 
 def fig_a():
-    """Anatomy bars at the H100-class point."""
+    """Anatomy bars at the H100-class point. When the skeleton-decomposition
+    CSV exists, the communication block splits causally into non-TP exposure
+    (the skeleton minus compute, identical in both arms by construction) and
+    TP-attributable exposure (full minus skeleton, the part INC changes)."""
+    skel = {}
+    spath = os.path.join(RES, "skeleton_decomposition.csv")
+    if os.path.isfile(spath):
+        skel = {int(r["tp"]): float(r["skeleton_ms"])
+                for r in csv.DictReader(open(spath))}
     fig, ax = plt.subplots(figsize=(8, 5.2))
     width, gap = 0.34, 0.06
     xs, labels = [], []
-    for i, (label, suffix, cfg, _tp) in enumerate(SCALES):
+    for i, (label, suffix, cfg, tp) in enumerate(SCALES):
         c = cell(4000, suffix, cfg, 400)
         if c is None:
             print(f"fig A: missing cell for {cfg}, skipped")
@@ -70,10 +78,18 @@ def fig_a():
             x = i + xoff
             ax.bar(x, comp_s, width, color="#bdbdbd",
                    label="compute (fixed)" if i == 0 and k == 0 else None)
-            ax.bar(x, total - comp_s, width, bottom=comp_s,
-                   color="#1f77b4" if t == "baseline" else "#ff7f0e",
-                   label=(f"{t}: communication + wait"
-                          if i == 0 else None))
+            if tp in skel:
+                other = skel[tp] - comp_s      # non-TP exposure, same both arms
+                ax.bar(x, other, width, bottom=comp_s, color="#8ecae6",
+                       label=("non-TP communication (skeleton)"
+                              if i == 0 and k == 0 else None))
+                ax.bar(x, total - skel[tp], width, bottom=skel[tp],
+                       color="#1f77b4" if t == "baseline" else "#ff7f0e",
+                       label=(f"{t}: TP-attributable" if i == 0 else None))
+            else:
+                ax.bar(x, total - comp_s, width, bottom=comp_s,
+                       color="#1f77b4" if t == "baseline" else "#ff7f0e",
+                       label=(f"{t}: communication + wait" if i == 0 else None))
             ax.text(x, total + 0.6, f"{total:.1f}", ha="center", fontsize=9)
         xs.append(i)
         labels.append(label)
