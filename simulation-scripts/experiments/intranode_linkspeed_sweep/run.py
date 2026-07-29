@@ -115,11 +115,12 @@ def _cfg_colors(cfgs):
 # 8000 or the wire quantises to a different speed than the flag (e.g. 3200 Gbps
 # -> 2.5 ps/B -> truncated, no longer the nominal rate). run_exp() rejects
 # non-divisors loudly.
-# The grid STARTS at the inter-node base rate (200 Gbps, the standard scale-out
-# value from 2026-07-29 on): intranode linkspeed >= internode linkspeed must
-# always hold -- a scale-up fabric slower than the scale-out NIC is not a
-# meaningful design point. run_exp() enforces the invariant loudly.
-DEFAULT_SPEEDS_GBPS = [200, 400, 800, 1600, 2000, 4000, 8000]
+# The grid STARTS at the inter-node base rate (400 Gbps = the realistic
+# H100-class per-GPU scale-out NIC, the standard pairing with the 4000 Gbps
+# scale-up rate): intranode linkspeed >= internode linkspeed must always hold
+# -- a scale-up fabric slower than the scale-out NIC is not a meaningful
+# design point. run_exp() enforces the invariant loudly.
+DEFAULT_SPEEDS_GBPS = [400, 800, 1600, 2000, 4000, 8000]
 NVLINK_GBPS = 3600         # reference line only (NOT simulated: 3600 is not exact in ps/B)
 
 # Intranode (scale-up) topo: GENERATED per (TP, rate) -- a single-switch
@@ -298,10 +299,11 @@ def compute_map_from_rows(rows, layers, iters, tmpdir):
     return cmap
 
 
-def _annotate_compute(ax, cfgs, cmap, rows, hlines):
+def _annotate_compute(ax, cfgs, cmap, rows, hlines, extra=None):
     """Corner box with the fixed per-rank compute time + its share range over the
     plotted makespans; optionally a dotted horizontal compute-floor line per config
-    (time plots only -- the y axis must be seconds/iteration)."""
+    (time plots only -- the y axis must be seconds/iteration). extra = additional
+    note lines appended to the box (e.g. the bandwidth-equivalence reading)."""
     colors = _cfg_colors(cfgs)
     lines = []
     for cfg in cfgs:
@@ -322,6 +324,8 @@ def _annotate_compute(ax, cfgs, cmap, rows, hlines):
         if hlines and ymin <= comp_s <= ymax:
             ax.axhline(comp_s, color=colors.get(tag, "grey"), ls=(0, (1, 2)),
                        lw=1.1, alpha=0.8)
+    if extra:
+        lines += list(extra)
     if lines:
         ax.text(0.02, 0.02, "per-rank compute / iter (fixed, max rank):\n" + "\n".join(lines),
                 transform=ax.transAxes, fontsize=8, va="bottom", ha="left",
@@ -552,21 +556,18 @@ def run_exp(speeds_gbps, layers, iters, tmpdir, timeout, do_plot, internode_gbps
     goal.require_generator()
     sim.require_simulator()
     _require_exact_rates(speeds_gbps, "intranode link")
+    _require_exact_rates([internode_gbps], "inter-node link")
     # TODO guardrail (dev): a scale-up fabric slower than the scale-out NIC is
     # not a meaningful design point (intranode >= internode must always hold).
     slow = [g for g in speeds_gbps if g < internode_gbps]
     if slow:
         sys.exit(f"intranode speed(s) {slow} Gbps below the inter-node rate "
                  f"({internode_gbps} Gbps): intranode >= internode must hold")
-    if TOTAL_GPUS == 16:
-        # the committed 16-host topos, for exact reproducibility of the recorded runs
-        so_topo_name = SO_TOPO_BY_GBPS[internode_gbps]
-        so_topo = paths.topo(so_topo_name)
-        if not os.path.isfile(so_topo):
-            sys.exit(f"topology not found: {so_topo}")
-    else:
-        so_topo = so_topo_for(internode_gbps, tmpdir)
-        so_topo_name = os.path.basename(so_topo)
+    # The scale-out topo is GENERATED at every scale (same non-blocking
+    # single-switch shape as the committed tree16 files, pipes at the chosen
+    # rate), so any exact inter-node rate works at any --total_gpus.
+    so_topo = so_topo_for(internode_gbps, tmpdir)
+    so_topo_name = os.path.basename(so_topo)
     _preflight_cc()
 
     out_dir = paths.results_dir(EXP_NAME)
@@ -688,8 +689,22 @@ def plot_from_rows(rows, out_dir, speeds_gbps, internode_gbps, cmap=None):
         ax.set_title(title, fontsize=14)
         ax.grid(True, which="both", ls=":", alpha=0.5)
         ax.legend(fontsize=9)
+        # Bandwidth-equivalence reading (P2, asymptote phrasing): compare the
+        # INC arm at 800 Gbps against the baseline at the top of the range.
+        eq = []
+        top = max(speeds_gbps)
+        for cfg in cfgs:
+            tag = cfg_tag(cfg)
+            def _t(arm, g, _tag=tag):
+                return next((val(r, "time_per_iter_s") for r in rows
+                             if r["config"] == _tag and r["arm"] == arm
+                             and int(r["intranode_linkspeed_gbps"]) == g), None)
+            i800, btop = _t("inc", 800), _t("baseline", top)
+            if i800 and btop and i800 <= btop:
+                eq.append(f"{cfg_label(cfg)}: INC@800 ≤ baseline@{top} Gbps")
         _annotate_compute(ax, cfgs, cmap or {},
-                          [r for r in rows if r["plot"] == plot_key], hlines=True)
+                          [r for r in rows if r["plot"] == plot_key], hlines=True,
+                          extra=eq)
         fig.tight_layout()
         png = os.path.join(out_dir,
                            f"intranode_linkspeed_{plot_key}_ib{internode_gbps}{_gtag()}.png")
@@ -772,7 +787,11 @@ def plot_speedup(out_dir, speeds_gbps, ib, layers, iters, tmpdir):
 # --- Internode sweep mode (fixed intranode rate) --------------------------------
 
 DEFAULT_SO_SPEEDS_GBPS = [100, 200, 400, 800, 1600]
-TODAY_NIC_GBPS = 800   # current-gen per-GPU scale-out NIC (XDR IB / 800GbE), plot marker
+# Generation-consistent per-GPU scale-out NICs, marked on the internode plots
+# (both real generations pair with their scale-up fabric at a ~10:1 ratio:
+# H100 = NVLink4 ~4000 + CX-7 400; GB200 = NVLink5 ~8000 + CX-8 800).
+OPERATING_POINT_NICS = {400: "H100-class NIC (400 Gbps)",
+                        800: "GB200-class NIC (800 Gbps)"}
 
 
 def plot_internode(rows, out_dir, so_speeds, intranode_gbps, cmap):
@@ -798,9 +817,10 @@ def plot_internode(rows, out_dir, so_speeds, intranode_gbps, cmap):
         ax.set_xticks(so_speeds)
         ax.set_xticklabels([str(s) for s in so_speeds])
         ax.minorticks_off()
-        if min(so_speeds) <= TODAY_NIC_GBPS <= max(so_speeds):
-            ax.axvline(TODAY_NIC_GBPS, color="#7b1fa2", ls="--", lw=1.3,
-                       label=f"current per-GPU NIC ({TODAY_NIC_GBPS} Gbps)")
+        for i, (gbps, label) in enumerate(sorted(OPERATING_POINT_NICS.items())):
+            if min(so_speeds) <= gbps <= max(so_speeds):
+                ax.axvline(gbps, color=("#7b1fa2", "#00695c")[i % 2], ls="--",
+                           lw=1.3, label=label)
         ax.set_xlabel("Inter-node Link Speed (Gbps)", fontsize=13)
         ax.grid(True, which="both", ls=":", alpha=0.5)
 
@@ -958,9 +978,10 @@ def main():
     ap.add_argument("--no-plot", action="store_true", help="write CSV only, skip PNGs")
     ap.add_argument("--only-plot", action="store_true",
                     help="re-plot from an existing results/<exp>/sweep_ib<N>.csv (no gen, no sim)")
-    ap.add_argument("--internode_gbps", type=int, default=200, choices=sorted(SO_TOPO_BY_GBPS),
-                    help="intranode mode: scale-out fabric bandwidth in Gbps (picks the SO "
-                         "topo); 200 = the standard base value (2026-07-29)")
+    ap.add_argument("--internode_gbps", type=int, default=400,
+                    help="intranode mode: scale-out fabric bandwidth in Gbps (the SO topo "
+                         "is generated at this rate); 400 = the realistic H100-class "
+                         "per-GPU NIC, the standard pairing (2026-07-29)")
     ap.add_argument("--speedup", action="store_true",
                     help="plot INC speedup (baseline/INC) vs intranode speed for the PP=1 configs "
                          "at --internode_gbps (reads that sweep_ib<N>.csv; no gen, no sim)")
