@@ -100,9 +100,16 @@ def configure_scale(total_gpus, tps, pps=(1, 2)):
         sys.exit(f"no valid configs for --total_gpus {total_gpus} --tps {tps}")
 
 
+OUT_SUFFIX = ""   # set from --out_suffix; isolates probe runs from sweep CSVs
+
+
 def _gtag():
-    """Output-name suffix for non-default scales ('' at 16 GPUs)."""
-    return "" if TOTAL_GPUS == 16 else f"_g{TOTAL_GPUS}"
+    """Output-name suffix: scale tag + probe suffix. Probe cells MUST pass
+    --out_suffix (e.g. _probe_b8): the CSV writer deletes its target at start,
+    so an unsuffixed probe silently destroys a finished sweep's results (this
+    happened twice on 2026-07-30 before the knob existed)."""
+    scale = "" if TOTAL_GPUS == 16 else f"_g{TOTAL_GPUS}"
+    return scale + OUT_SUFFIX
 
 
 _PALETTE = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
@@ -1025,6 +1032,9 @@ def main():
                     help="micro-batch size; the network-level proxy for gradient "
                          "accumulation (TP activation traffic and compute scale "
                          "linearly with it, DP gradient traffic does NOT)")
+    ap.add_argument("--out_suffix", default="",
+                    help="appended to every output filename; REQUIRED for probe "
+                         "cells so they cannot clobber a sweep's CSV")
     ap.add_argument("--jobs", type=int, default=1,
                     help="sweep cells run in parallel (each cell = one "
                          "single-threaded htsim process; size by cores AND "
@@ -1064,6 +1074,8 @@ def main():
     args = ap.parse_args()
     speeds = [int(x) for x in args.speeds.split(",")]
     MODEL["batch"] = args.batch
+    global OUT_SUFFIX
+    OUT_SUFFIX = args.out_suffix
     configure_scale(args.total_gpus, [int(x) for x in args.tps.split(",")],
                     tuple(int(x) for x in args.pps.split(",")))
 
