@@ -2,14 +2,15 @@
 """Case-study chapter figures A + B (AA-plan-Case-Study-Chapter, approved
 2026-07-29). Derived purely from the recorded sweep CSVs -- no simulation.
 
-Fig A (anatomy): per scale, baseline-vs-INC stacked bars splitting the
-iteration into the fixed per-rank compute floor (measured from the trace) and
-the communication+wait residual (makespan - compute), at the realistic
-H100-class operating point (intranode 4000, inter-node 400 Gbps).
+Fig A (anatomy): per scale, baseline-vs-in-network stacked bars splitting the
+iteration into the fixed per-rank compute floor (measured from the trace),
+the non-TP exposure (skeleton), and the TP-attributable exposure, at the
+chapter's single operating point (scale-up 4000, scale-out 400 Gbps --
+user ruling 2026-07-30: the 8000/800 comparison is dropped from the chapter;
+fig B is kept for review only).
 
-Fig B (scaling): end-to-end speedup vs scale-up domain width, grouped by
-operating point: (4000,400) H100-class, (4000,800), and (8000,800) GB200-class
-where measured. Missing cells are skipped with a note.
+Fig B (scaling, REVIEW ONLY -- not included in the thesis): end-to-end
+speedup vs scale-up domain width, grouped by operating point.
 
 Outputs PNG (review) + PDF (thesis-grade) side by side into
 results/intranode_linkspeed_sweep/.
@@ -73,7 +74,7 @@ def fig_a():
             continue
         base_s, inc_s, comp_s = (v * 1e3 for v in c)  # -> ms
         for k, (t, xoff) in enumerate((("baseline", -width / 2 - gap / 2),
-                                       ("INC", width / 2 + gap / 2))):
+                                       ("in-network", width / 2 + gap / 2))):
             total = base_s if t == "baseline" else inc_s
             x = i + xoff
             ax.bar(x, comp_s, width, color="#bdbdbd",
@@ -95,9 +96,7 @@ def fig_a():
         labels.append(label)
     ax.set_xticks(xs)
     ax.set_xticklabels(labels, fontsize=11)
-    ax.set_ylabel("Time / Training Iteration (ms)", fontsize=13)
-    ax.set_title("Anatomy of a Training Iteration — H100-class operating point\n"
-                 "(intranode 4000 Gbps, inter-node 400 Gbps)", fontsize=13)
+    ax.set_ylabel("Time per training iteration (ms)", fontsize=13)
     ax.grid(True, axis="y", ls=":", alpha=0.5)
     # headroom so the legend never covers a bar's value label
     ax.set_ylim(0, ax.get_ylim()[1] * 1.28)
@@ -176,6 +175,9 @@ def fig_c():
         ax.plot(xs, ys, marker="o", ms=6, color=colors[tp],
                 label=label.replace("\n", " "))
     ax.axhline(1.0, color="grey", ls=":", lw=1.2, label="no speedup (1.0×)")
+    ax.axvline(4000, color="grey", ls="--", lw=1.2, alpha=0.8)
+    ax.text(4000, 0.995, " operating point", rotation=90, va="bottom",
+            ha="right", fontsize=9, color="#555555")
     ax.set_xscale("log", base=2)
     xs_all = sorted({int(float(x)) for l in ax.get_lines()
                      for x in l.get_xdata() if float(x) > 1})
@@ -183,11 +185,8 @@ def fig_c():
         ax.set_xticks(xs_all)
         ax.set_xticklabels([str(x) for x in xs_all])
         ax.minorticks_off()
-    ax.set_xlabel("Intranode Link Speed (Gbps)", fontsize=13)
-    ax.set_ylabel("End-to-end Speedup  (baseline / INC)", fontsize=13)
-    ax.set_title("INC Speedup vs Intranode Link Speed\n"
-                 "(inter-node 400 Gbps, three scale-up domain widths)",
-                 fontsize=13)
+    ax.set_xlabel("Scale-up link rate (Gb/s)", fontsize=13)
+    ax.set_ylabel("End-to-end speedup  (baseline / in-network)", fontsize=13)
     ax.grid(True, which="both", ls=":", alpha=0.5)
     ax.legend(fontsize=10)
     fig.tight_layout()

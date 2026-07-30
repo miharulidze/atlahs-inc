@@ -75,22 +75,28 @@ def traffic_matrix(goal_path):
 
 
 def panel_a(ax, m):
-    im = ax.imshow(m / 1e9, norm=LogNorm(vmin=max(m[m > 0].min(), 1e6) / 1e9,
-                                         vmax=m.max() / 1e9),
-                   cmap="viridis", origin="upper", interpolation="nearest")
-    for d in range(1, DP):
-        ax.axhline(d * TP - 0.5, color="white", lw=0.6, alpha=0.6)
-        ax.axvline(d * TP - 0.5, color="white", lw=0.6, alpha=0.6)
-    ax.set_xlabel("destination rank", fontsize=10)
-    ax.set_ylabel("source rank", fontsize=10)
-    ax.set_title("(a) Traffic matrix of one iteration\n(measured from the trace)",
-                 fontsize=10)
+    # pcolormesh (vector quads), NOT imshow: the imshow raster silently fails
+    # to render in the thesis PDF toolchain (blank matrix in print). Masked
+    # zero cells stay white; the sparse ring diagonals stay crisp vectors.
+    mm = np.ma.masked_where(m <= 0, m) / 1e9
+    edges = np.arange(RANKS + 1) - 0.5
+    im = ax.pcolormesh(edges, edges, mm,
+                       norm=LogNorm(vmin=mm.min(), vmax=mm.max()),
+                       cmap="viridis")
+    ax.invert_yaxis()
+    ax.set_aspect("equal")
+    for d in range(DP):  # outline each scale-up domain's 16x16 block
+        ax.add_patch(Rectangle((d * TP - 0.5, d * TP - 0.5), TP, TP,
+                               fill=False, ec="#999999", lw=0.9))
+    ax.set_xlabel("destination rank", fontsize=12)
+    ax.set_ylabel("source rank", fontsize=12)
+    ax.set_title("(a)", fontsize=12, loc="left")
     ax.set_xticks([0, 15, 31, 47, 63])
     ax.set_yticks([0, 15, 31, 47, 63])
-    ax.tick_params(labelsize=8)
+    ax.tick_params(labelsize=10)
     cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.03)
-    cbar.set_label("GB sent", fontsize=9)
-    cbar.ax.tick_params(labelsize=8)
+    cbar.set_label("GB sent", fontsize=11)
+    cbar.ax.tick_params(labelsize=10)
 
 
 def panel_b(ax):
@@ -119,7 +125,7 @@ def panel_b(ax):
     for name, a, b_ in phase_spans:
         ax.annotate("", xy=(a + 0.08, 0.22), xytext=(b_ - 0.08, 0.22),
                     arrowprops=dict(arrowstyle="-", color="#555555", lw=0.9))
-        ax.text((a + b_) / 2, 0.10, name, ha="center", va="center", fontsize=8)
+        ax.text((a + b_) / 2, 0.08, name, ha="center", va="center", fontsize=10)
     # legend
     handles = [Rectangle((0, 0), 1, 1, fc=comp_c),
                Rectangle((0, 0), 1, 1, fc=tp_c),
@@ -128,16 +134,13 @@ def panel_b(ax):
               ["compute",
                "TP AllReduce (1.07 GB, inside the domain)",
                "DP gradient ring (across domains)"],
-              loc="upper center", bbox_to_anchor=(0.5, 1.02), ncol=3,
-              fontsize=8, frameon=False)
+              loc="upper center", bbox_to_anchor=(0.5, 1.16), ncol=2,
+              fontsize=10, frameon=False)
     ax.set_xlim(0, total)
     ax.set_ylim(0, 1.15)
     ax.axis("off")
-    ax.text(0, -0.06,
-            "(b) One rank's iteration structure (widths schematic, order exact):"
-            " two TP AllReduces per layer and direction, each fenced between the"
-            " computations that depend on it; DP once per step.",
-            ha="left", va="top", fontsize=9, transform=ax.get_yaxis_transform())
+    ax.text(-0.02, 0.55, "(b)", fontsize=12, ha="right", va="center",
+            transform=ax.transAxes)
 
 
 def main():
@@ -148,8 +151,8 @@ def main():
     dp_bytes = m.sum() - tp_bytes
     print(f"trace totals: TP {tp_bytes/1e9:.1f} GB "
           f"({100*tp_bytes/m.sum():.0f}%), DP {dp_bytes/1e9:.1f} GB")
-    fig = plt.figure(figsize=(8.4, 7.0))
-    gs = fig.add_gridspec(2, 1, height_ratios=[2.1, 1.0], hspace=0.32)
+    fig = plt.figure(figsize=(7.0, 7.6))
+    gs = fig.add_gridspec(2, 1, height_ratios=[2.5, 1.0], hspace=0.30)
     panel_a(fig.add_subplot(gs[0]), m)
     panel_b(fig.add_subplot(gs[1]))
     for ext in ("png", "pdf"):

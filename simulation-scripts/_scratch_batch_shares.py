@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Traffic-composition probe: TP vs DP bytes per rank per iteration as a
-function of micro-batch and depth (generator only, no sims). Run from
+"""TP/DP byte shares for the batch-sensitivity table (post zero1 fix):
+b in {1,8,16,32} at TP4/DP4 (2 layers), plus TP16/DP4 at b=32 for the
+workload-figure cross-check. Generator only, no sims. Run from
 goal_gen/ai/nccl_generator_v2 inside the sim image."""
 import collections
 import subprocess
@@ -12,10 +13,10 @@ import simple_sim2goal as SG
 from simple_sim.ir import CommOp as SimCommOp
 
 
-def gen(tp, dp, layers, batch, d):
+def gen(tp, dp, batch, d):
     subprocess.run([sys.executable, "-m", "simple_sim.llama3_training",
                     "--tp", str(tp), "--dp", str(dp), "--pp", "1",
-                    "--num-layers", str(layers), "--seq-len", "4096",
+                    "--num-layers", "2", "--seq-len", "4096",
                     "--ffn", "11008", "--hidden", "4096",
                     "--heads", "32", "--kv-heads", "32",
                     "--batch", str(batch), "--iters", "2",
@@ -23,11 +24,13 @@ def gen(tp, dp, layers, batch, d):
 
 
 ITERS = 2
-print("cfg              TP_GB/rank  DP_GB/rank  TP_share   ~TPt_ms  ~DPt_ms  comp_ms")
-for layers, batch in ((2, 1), (2, 4), (2, 8), (4, 4)):
-    d = f"/tmp/comp_l{layers}_b{batch}"
-    gen(4, 4, layers, batch, d)
+print("cfg            TP_GB/rank  DP_GB/rank  TP_share  TP_GB_total  DP_GB_total")
+for tp_deg, dp_deg, batch in ((4, 4, 1), (4, 4, 8), (4, 4, 16), (4, 4, 32),
+                              (16, 4, 32)):
+    d = f"/tmp/bshare_tp{tp_deg}_b{batch}"
+    gen(tp_deg, dp_deg, batch, d)
     rn = SG.get_graphs(Path(d))
+    nranks = tp_deg * dp_deg
     byctx = collections.Counter()
     for nodes in rn.values():
         for n in nodes:
@@ -41,12 +44,8 @@ for layers, batch in ((2, 1), (2, 4), (2, 8), (4, 4)):
                         and getattr(n.inputs[0], "tp_group", None) is not None):
                     sz //= n.inputs[0].tp_group.size
                 byctx[n.context] += sz
-    tp = byctx.get("tp", 0) / 16 / ITERS / 1e9
-    dp = byctx.get("zero1", 0) / 16 / ITERS / 1e9
-    # first-order serial times: ring 2(N-1)/N of S; TP over 4000 Gbps
-    # (500 B/ns), DP over 400 Gbps (50 B/ns)
-    tpt = tp * 1e9 * 1.5 / 500 / 1e6
-    dpt = dp * 1e9 * 1.5 / 50 / 1e6
-    comp_max, _ = SG.compute_ns_per_iter if False else (None, None)
-    print(f"l{layers} b{batch} tp4dp4    {tp:9.3f}  {dp:9.3f}  "
-          f"{100 * tp / (tp + dp):7.1f}%  {tpt:8.2f}  {dpt:7.2f}")
+    tp_gb = byctx.get("tp", 0) / nranks / ITERS / 1e9
+    dp_gb = byctx.get("zero1", 0) / nranks / ITERS / 1e9
+    print(f"tp{tp_deg} b{batch:<3}      {tp_gb:9.3f}  {dp_gb:9.3f}  "
+          f"{100 * tp_gb / (tp_gb + dp_gb):7.1f}%  "
+          f"{tp_gb * nranks * ITERS:10.1f}  {dp_gb * nranks * ITERS:10.1f}")
