@@ -529,7 +529,13 @@ def run_one_sim(binp, su_topo, so_topo, gpn, groups, mbps, pfc, timeout,
     cmd = [paths.PCM_APP_HTSIM_ATLAHS_EXEC_PATH, "-goal", binp,
            "-nodes", str(TOTAL_GPUS), "-num_gpus_per_node", str(gpn),
            "-topo", so_topo, "-linkspeed", str(so_mbps),
-           "-q", str(so_qsize_bytes(so_mbps // 1000)),
+           # -q is parsed by the driver in PACKETS (memFromPkt), not bytes --
+           # discovered 2026-07-30; the byte target is converted here so the
+           # simulated buffer really is so_qsize_bytes(). Verified: a true
+           # 4 MB @400G is byte-identical to the historical giant buffers
+           # (DCTCP holds the queue at its BDP-derived ECN band), and the
+           # queue-derived min-RTO becomes sane (~0.5 ms, was ~1 s).
+           "-q", str(max(2, so_qsize_bytes(so_mbps // 1000) // sim.FRAME_B)),
            "-intranode_topo", su_topo, "-intranode_linkspeed", str(mbps),
            "-intranode_q", str(intranode_q), "-strat", "ecmp_host", "-seed", "42",
            "-mtu", str(sim.MTU_DEFAULT), "-paths", "128", "-end", str(SIM_END_NS),
