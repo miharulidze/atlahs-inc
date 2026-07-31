@@ -170,9 +170,9 @@ def table_rsag_both():
             worst_b = max(worst_b, abs(100*(p_b - m_b)/m_b))
             out.append(f"    {sizetag(S)} & {num(m_rs)} & {num(p_rs)} & {num(m_ag)} & "
                        f"{num(p_ag)} & {num(m_b)} & {num(p_b)}\\\\")
-    hdr = ("    & \\multicolumn{2}{c}{Reduce-Scatter, in-net}\n"
-           "    & \\multicolumn{2}{c}{AllGather, in-net}\n"
-           "    & \\multicolumn{2}{c}{ring (both)}\\\\\n"
+    hdr = ("    & \\multicolumn{2}{c}{Reduce-Scatter, in-net [ns]}\n"
+           "    & \\multicolumn{2}{c}{AllGather, in-net [ns]}\n"
+           "    & \\multicolumn{2}{c}{ring (both) [ns]}\\\\\n"
            "    \\cmidrule(lr){2-3} \\cmidrule(lr){4-5} \\cmidrule(lr){6-7}\n"
            "    size & meas. & model & meas. & model & meas. & model\\\\")
     return (wrap("r rr rr rr", hdr, "\n".join(out)),
@@ -355,8 +355,8 @@ def table_ar():
             worst_b = max(worst_b, abs(100*(p_ring - m_ring)/m_ring))
             out.append(f"    {sizetag(S)} & {num(m_inc)} & {num(p_inc)} & "
                        f"{num(m_ring)} & {num(p_ring)}\\\\")
-    hdr = ("    & \\multicolumn{2}{c}{in-network (ns)}\n"
-           "    & \\multicolumn{2}{c}{ring (ns)}\\\\\n"
+    hdr = ("    & \\multicolumn{2}{c}{in-network [ns]}\n"
+           "    & \\multicolumn{2}{c}{ring [ns]}\\\\\n"
            "    \\cmidrule(lr){2-3} \\cmidrule(lr){4-5}\n"
            "    size & meas. & model & meas. & model\\\\")
     return wrap("r rr rr", hdr, "\n".join(out)), worst_i, worst_b
