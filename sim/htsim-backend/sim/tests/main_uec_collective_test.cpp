@@ -18,6 +18,8 @@
 #include "route.h"
 
 #include <cstdio>
+#include <iostream>
+#include <sstream>
 
 namespace {
 
@@ -216,6 +218,60 @@ int test_allgather_accumulates_peer_blocks() {
     return 0;
 }
 
+// One EventList per process (htsim asserts single instance); created lazily
+// so the sink-only tests above keep not needing it.
+EventList &the_eventlist() {
+    static EventList ev;
+    return ev;
+}
+
+// 6. Reduce-scatter block->owner mapping is stored verbatim, and
+//    set_reduce_root records the root for plain Reduce.
+int test_reduce_scatter_mapping() {
+    class TestableReduceSrc : public UecReduceSrc {
+      public:
+        TestableReduceSrc()
+                : UecReduceSrc(nullptr, nullptr, the_eventlist(),
+                               /*rtt=*/1000, /*bdp=*/4096,
+                               /*queueDrainTime=*/100, /*hops=*/6) {}
+        int root() const { return _reduce_root; }
+        bool rs() const { return _is_reduce_scatter; }
+        const std::vector<int> &owners() const { return _rs_owners; }
+        uint64_t block_bytes() const { return _rs_block_bytes; }
+    };
+    TestableReduceSrc src;
+    ASSERT(!src.rs() && src.root() == -1, "defaults: plain op, no root");
+
+    src.set_reduce_root(12);
+    ASSERT(src.root() == 12, "reduce root recorded");
+
+    // |G|=4 group {0,4,8,12}: block k is owned by the k-th member.
+    const std::vector<int> owners = {0, 4, 8, 12};
+    src.set_reduce_scatter(owners, /*block_bytes=*/4096);
+    ASSERT(src.rs(), "reduce-scatter mode set");
+    ASSERT(src.owners() == owners, "block->owner mapping stored in order");
+    ASSERT(src.block_bytes() == 4096, "block size stored");
+    return 0;
+}
+
+// 7. CollectiveCompletionRecorder emits the machine-parseable line that
+//    test_bcast.py and the sweep harnesses regex on. Pin the exact format.
+int test_recorder_format() {
+    std::stringstream captured;
+    std::streambuf *old = std::cout.rdbuf(captured.rdbuf());
+    CollectiveCompletionRecorder rec(the_eventlist(), "BCAST", "legs",
+                                     /*op_id=*/42, /*root=*/3, /*group_idx=*/7,
+                                     /*payload_bytes=*/4096, /*count=*/5,
+                                     /*scheduled_start=*/0);
+    rec.activate();
+    std::cout.rdbuf(old);
+    ASSERT(captured.str() ==
+           "BCAST_COMPLETE op_id=42 root=3 group=7 size=4096 legs=5"
+           " start_ns=0 complete_ns=0 duration_ns=0\n",
+           "recorder line format pinned");
+    return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -230,6 +286,8 @@ int main() {
             {"kind_isolation",            test_kind_isolation},
             {"allgather_accumulates_peer_blocks",
                                           test_allgather_accumulates_peer_blocks},
+            {"reduce_scatter_mapping",    test_reduce_scatter_mapping},
+            {"recorder_format",           test_recorder_format},
     };
     for (auto &t : tests) {
         if (t.fn() == 0) {

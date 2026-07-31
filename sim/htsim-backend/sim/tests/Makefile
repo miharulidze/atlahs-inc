@@ -6,7 +6,12 @@ CFLAGS = -Wall -std=c++11 -g -Wsign-compare
 #CFLAGS += -fsanitize=address -fno-omit-frame-pointer -fsanitize=undefined
 CFLAGS += -O2
 
-all:	htsim_dumbell_ndp htsim_dumbell_ndptunnel htsim_dumbell_tcp htsim_dumbell_swift htsim_multihop_swift htsim_multihop_swift2 htsim_bidir_swift htsim_bidir_ndp htsim_multipath_swift htsim_trigger_test htsim_dumbell_roce htsim_dumbell_hpcc htsim_dumbell_strack
+# INC unit tests: assert-based mains, exit 0 iff all pass. `make check` builds
+# and runs them all, propagating failures.
+INC_TESTS = htsim_uec_mcast_packet_test htsim_inc_fib_test htsim_uec_collective_test \
+            htsim_uec_mcast_sink_test htsim_cm_parse_test
+
+all:	htsim_dumbell_ndp htsim_dumbell_ndptunnel htsim_dumbell_tcp htsim_dumbell_swift htsim_multihop_swift htsim_multihop_swift2 htsim_bidir_swift htsim_bidir_ndp htsim_multipath_swift htsim_trigger_test htsim_dumbell_roce htsim_dumbell_hpcc htsim_dumbell_strack $(INC_TESTS)
 
 htsim_dumbell_ndp:  main_dumbell_ndp.o $(LIBDEP)
 	$(CC) $(CFLAGS) main_dumbell_ndp.o -o htsim_dumbell_ndp $(LIBS)
@@ -86,11 +91,6 @@ htsim_cm_parse_test:	main_cm_parse_test.o ../datacenter/connection_matrix.o $(LI
 
 ../datacenter/connection_matrix.o:
 	$(MAKE) -C ../datacenter connection_matrix.o
-
-# INC unit tests: assert-based mains, exit 0 iff all pass. `make check` builds
-# and runs them all, propagating failures.
-INC_TESTS = htsim_uec_mcast_packet_test htsim_inc_fib_test htsim_uec_collective_test \
-            htsim_uec_mcast_sink_test htsim_cm_parse_test
 
 .PHONY: check
 check: $(INC_TESTS)

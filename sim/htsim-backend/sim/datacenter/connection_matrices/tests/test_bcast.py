@@ -39,9 +39,10 @@ import tempfile
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
-# Default binary: ../../cmake-build-debug/htsim_uec relative to this file.
+# Default binary: the Makefile build of record at datacenter/htsim_uec
+# (two levels up from this file).
 DEFAULT_HTSIM = os.path.normpath(
-    os.path.join(_HERE, "..", "..", "..", "cmake-build-debug", "htsim_uec")
+    os.path.join(_HERE, "..", "..", "htsim_uec")
 )
 
 BCAST_RE = re.compile(
@@ -398,13 +399,17 @@ Connections 1
 def t_no_trigger_id_collision(htsim):
     # User declares triggers 1 and 2 explicitly; our synthesised
     # barriers should receive ids above max_triggerid() = 2.
+    # Every declared trigger needs a consumer: upstream htsim asserts
+    # (trigger.cpp) if a trigger fires with zero targets, so trigger 2
+    # feeds a third plain connection.
     cm = """\
 Nodes 16
 Grp 0 1 2 3
-Connections 2
+Connections 3
 Triggers 2
 0->0 id 1 start_bcast 0 size 4096 recv_done_trigger 1
 4->5 id 2 trigger 1 size 4096 send_done_trigger 2
+6->7 id 3 trigger 2 size 4096
 trigger id 1 oneshot
 trigger id 2 oneshot
 """
