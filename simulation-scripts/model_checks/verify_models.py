@@ -512,12 +512,75 @@ def check_recursion():
           if not hits else f"{hits}")
 
 
+def check_instantiation():
+    print("\n13. Hand-typed Ch.4 tables: tab:instantiation constants + tab:ring-rtt")
+    check("constants B/t_l/t_sw/H/MSS/frame",
+          (M.B, M.T_L, M.T_SW, M.H, M.MSS) == (500.0, 50.0, 300.0, 64, 4096)
+          and M.MSS + M.H == 4160,
+          f"B={M.B} t_l={M.T_L} t_sw={M.T_SW} H={M.H} MSS={M.MSS}")
+    lam_rounded = {d: round(M.lam(d)) for d in (1, 2, 3)}
+    check("ring-rtt lambda 808/2225/3642 ns",
+          lam_rounded == {1: 808, 2: 2225, 3: 3642}, f"{lam_rounded}")
+    check("ring-rtt census 48/12/3 at N=64",
+          M.census(64) == {1: 48, 2: 12, 3: 3}, f"{M.census(64)}")
+
+
+CH5_RUN = os.path.join(ROOT, "simulation-scripts", "results", "ch5_accumulation",
+                       "runs", "ch5-ga32-headline-iters1-mem16-4000-400-20260731T1405Z")
+
+
+def check_ch5_headline():
+    print("\n14. Ch.5 headline: quoted speedups + simulator-model TP factors")
+    csv_path = os.path.join(CH5_RUN, "tables", "results.csv")
+    if not os.path.exists(csv_path):
+        print("  [SKIP] canonical ch5 run CSV not present")
+        return
+    rows = [r for r in load(csv_path)
+            if r["workload"] == "corrected_mb1_ga32"
+            and r["su_gbps"] == "4000" and r["so_gbps"] == "400"]
+    speedups = {}
+    for tp in (4, 8, 16):
+        cell = {r["arm"]: r for r in rows if int(r["tp"]) == tp}
+        speedups[tp] = round(float(cell["baseline"]["time_per_iter_s"])
+                             / float(cell["inc"]["time_per_iter_s"]), 3)
+    check("quoted end-to-end speedups 1.101/1.232/1.405",
+          speedups == {4: 1.101, 8: 1.232, 16: 1.405}, f"{speedups}")
+    S = 32 * 1024 * 1024
+    factors = {n: round(2 * M.ring(S, n, 1) / M.inc_root(S, 1), 3) for n in (4, 8, 16)}
+    check("simulator-model TP factors 1.562/1.905/2.218",
+          factors == {4: 1.562, 8: 1.905, 16: 2.218}, f"{factors}")
+
+
+def check_pfc_instantiation():
+    print("\n15. tab:instantiation PFC row: thresholds + 1xBDP reservation (pfc_census.csv)")
+    p = os.path.join(ROOT, "simulation-scripts", "results",
+                     "scaleup_pfc_concurrent", "pfc_census.csv")
+    if not os.path.exists(p):
+        print("  [SKIP] pfc_census.csv not present")
+        return
+    combos = {}
+    for r in load(p):
+        combos.setdefault(r["su_topo"], set()).add(
+            (int(r["pfc_high"]), int(r["pfc_low"]), int(r["intranode_q"])))
+    ss = combos.get("scaleup_single_switch_64_4000Gbps.topo", set())
+    ft = combos.get("scaleup_3tier_256_4000Gbps.topo", set())
+    check("pause/resume pairs 218/174 (crossbar) and 389/311 (3-tier)",
+          {(h, l) for h, l, _ in ss} == {(218, 174)}
+          and {(h, l) for h, l, _ in ft} == {(389, 311)},
+          f"crossbar {sorted(ss)}, 3-tier {sorted(ft)}")
+    check("switch buffer = radix x BDP with BDP 268/439 packets",
+          {q // 64 for _, _, q in ss} == {268} and {q // 16 for _, _, q in ft} == {439},
+          f"crossbar q/64={sorted({q // 64 for _, _, q in ss})}, "
+          f"3-tier q/16={sorted({q // 16 for _, _, q in ft})}")
+
+
 if __name__ == "__main__":
     print(f"Verifying the collective models against the committed CSVs under\n  {ROOT}")
     for fn in (check_single_switch, check_ring, check_podstep, check_naive_arm,
                check_fold_symmetry, check_three_tier, check_allreduce,
                check_shell_symmetry, check_busy_period, check_handover,
-               check_recursion, check_shell_figure):
+               check_recursion, check_shell_figure,
+               check_instantiation, check_ch5_headline, check_pfc_instantiation):
         fn()
     print()
     if FAILS:
