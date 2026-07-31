@@ -81,3 +81,20 @@ htsim_uec_collective_test:	main_uec_collective_test.o $(LIBDEP)
 htsim_uec_mcast_sink_test:	main_uec_mcast_sink_test.o $(LIBDEP)
 	$(CC) $(CFLAGS) main_uec_mcast_sink_test.o -o htsim_uec_mcast_sink_test $(LIBS)
 
+htsim_cm_parse_test:	main_cm_parse_test.o ../datacenter/connection_matrix.o $(LIBDEP)
+	$(CC) $(CFLAGS) main_cm_parse_test.o ../datacenter/connection_matrix.o -o htsim_cm_parse_test $(LIBS)
+
+../datacenter/connection_matrix.o:
+	$(MAKE) -C ../datacenter connection_matrix.o
+
+# INC unit tests: assert-based mains, exit 0 iff all pass. `make check` builds
+# and runs them all, propagating failures.
+INC_TESTS = htsim_uec_mcast_packet_test htsim_inc_fib_test htsim_uec_collective_test \
+            htsim_uec_mcast_sink_test htsim_cm_parse_test
+
+.PHONY: check
+check: $(INC_TESTS)
+	@rc=0; for t in $(INC_TESTS); do \
+	  echo "== $$t =="; ./$$t || rc=1; \
+	done; exit $$rc
+
