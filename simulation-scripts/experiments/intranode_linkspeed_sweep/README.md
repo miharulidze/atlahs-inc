@@ -28,12 +28,33 @@ isolates TP data movement.
 
 ## Model
 
-Zhiyi-matched Llama-2 7B **per-layer** dims (hidden 4096, FFN 11008, 32 MHA
-heads, seq 4096, micro-batch 1) so message sizes place the bandwidth→latency knee
+Llama-2-7B-geometry **per-layer** dims (hidden 4096, FFN 11008, 32 MHA
+heads, seq 4096, configurable micro-batch) so message sizes place the bandwidth→latency knee
 in the plotted range, with a **shallow stack** (default 2 layers): iteration time
-and the INC gap scale ~linearly in depth, so the trend extrapolates to full 7B
-(a conservative bound — larger messages only favour INC via congestion).
-`COMPUTE_MODEL=h100` sets a realistic compute floor (cancels in the INC gap).
+and the INC gap scale approximately linearly in depth. The case-study headline
+uses a micro-batch of 32 per DP rank; the CLI default remains 1 so small
+validation runs stay cheap. Gradient accumulation is not modeled by this knob.
+
+The primary compute model is `COMPUTE_MODEL=h100_te`, an **optimized H100
+FP8-math/BF16-storage per-operation roofline**. It uses the dense FP8 tensor-core ceiling
+(1.979 PFLOP/s) for arithmetic, BF16/FP16 storage traffic (2 B/element) at the
+3.35 TB/s HBM3 ceiling:
+
+`Tcalc = Σi max(Fi / 1.979 PFLOP/s, 2·elementsi / 3.35 TB/s)`.
+
+Every `calc` node keeps its own roofline duration, placement and dependencies;
+one operation can never make another cheaper. The model deliberately does
+**not** apply an end-to-end model-FLOPs utilisation (MFU) inside every kernel.
+Communication, dependency stalls and overlap are already measured by the
+simulator; using MFU as a per-kernel derating counted part of them twice.
+
+`--compute_model h100` retains the old BF16 + 45%-MFU per-operation model only
+for reproduction and sensitivity. The new model is an optimistic analytical
+bound, not a claim of cycle-accurate GPU timing. The analytical IR does not
+carry kernel execution-precision metadata, so `h100_te` applies the FP8 ceiling
+to every arithmetic count and 2-byte storage to every element. Real kernels,
+especially attention and optimizer kernels, can be slower; the two models are
+best read as an optimized lower bound and a conservative sensitivity.
 
 ## Topology / the sweep knob
 
@@ -48,20 +69,20 @@ non-integer-ps/B — rate.)
 
 **Exact rates only.** htsim stores a link's rate as integer **picoseconds per
 byte** (ps/B = 8000/Gbps), so swept rates must divide 8000 to be exact on the
-wire — the default grid is `100, 200, 400, 800, 1600, 2000, 4000, 8000`
-(80…1 ps/B). 3200/3600/6400/12800 silently quantise and are rejected loudly;
+wire — the default grid is `400, 800, 1600, 2000, 4000, 8000`
+(20…1 ps/B). 3200/3600/6400/12800 silently quantise and are rejected loudly;
 the NVLink 3600 Gbps line on the plots is a reference line, not a simulated
 point.
 
-**Scale-out (DP/PP, fixed per run, selectable via `--internode_gbps`):**
-`tree16_nonblocking_{100,200}Gbps.topo` — 16 hosts on one **non-blocking** switch.
+**Scale-out (DP/PP, fixed per run, selected via `--internode_gbps`):** a
+generated `tree<N>_nonblocking_<rate>Gbps.topo` with all hosts on one
+**non-blocking** switch.
 The earlier 2:1-oversubscribed `tree16` penalised TP4 (its DP ring lands
 one-per-rack → 100 % cross-rack through the squeezed uplinks) and added ECMP
 routing noise; non-blocking removes both confounds without changing link speed
-(structure, not speed). `--internode_gbps 100` (default) or `200` sets the
-inter-node bandwidth; at 200 the fabric pipe matches the scale-out NIC exactly
-(`-linkspeed 200000`), so there is no NIC/fabric mismatch, at 100 the pipe is the
-binding constraint. Outputs are suffixed `_ib<N>` so both variants coexist.
+(structure, not speed). The default and main operating point is **400 Gbps**;
+the fabric pipe and scale-out NIC always carry the same selected rate. Outputs
+are suffixed `_ib<N>` so variants coexist.
 
 **Congestion control (per-tier).** The two tiers model different fabrics, so they
 run different CC (see `AA-plan-Intranode-CC-Bypass`):
@@ -87,18 +108,30 @@ A/B isolates the in-switch fan-out/reduce saving. (Previously the INC arm dumped
 straight onto the fabric pipe, so its makespan was byte-identical at every speed —
 an unfair, misleading comparison.)
 
-`-nodes` = TOTAL GPUs (16); `-num_gpus_per_node` = TP; INC `.groups` are node-local.
+`-nodes` = total GPUs; `-num_gpus_per_node` = TP; INC `.groups` are node-local.
 
-## Compute share (annotated on every plot)
+## Compute demand (annotated on every plot)
 
-The generator's `calc` ops carry H100-roofline durations that depend only on the
-model math and the parallelism split — **not** on link speeds and **not** on the
-arm (both arms share the same calc ops). So per-rank compute per iteration is one
-fixed number per config, parsed from the generated `.goal` (`compute_ns_per_iter`
-= max rank, `_mean` also recorded) and annotated on each plot as the fixed
-compute time + its share range over the plotted makespans. The compute model is
-a coarse roofline (not representative in absolute terms); the share is reported
-to size the communication-dominance of the workload, ~5–10 % at these configs.
+The generator's `calc` ops depend only on model math and parallelism — **not**
+on link speeds and **not** on the arm. Per-rank calc demand is parsed from the
+generated `.goal` (`compute_ns_per_iter` = max rank; `_mean` is also recorded)
+and annotated as `sum(calc) / makespan`. For the PP=1 case-study graph the calc
+nodes form the serial compute chain, so this ratio is the modeled compute share;
+for an arbitrary graph with parallel branches it is only a demand ratio.
+
+At the main **4000/400 Gbps** point with `--batch 32`, the revised model gives:
+
+| TP width | calc / iter | baseline share | INC share |
+|---:|---:|---:|---:|
+| 4  | 68.5 ms | 71.2% | 77.3% |
+| 8  | 43.5 ms | 57.9% | 68.8% |
+| 16 | 31.5 ms | 48.4% | 62.0% |
+
+The old model gave 234.3/129.6/77.2 ms and as much as 92.7% at this same
+point. The revised percentages are simulator outputs, not targets baked into
+the formula. TP4 INC remains compute-heavy even at the hardware ceiling; a
+lower value there would require a different workload or measured overlap, not
+another arbitrary efficiency constant.
 
 ## Internode sweep mode (`--mode internode`)
 
@@ -109,7 +142,8 @@ generated scale-out topo pipes AND the scale-out NIC (`-linkspeed`) carry the
 swept rate — the same network/endpoint consistency rule as the intranode mode.
 Expectation: a faster scale-out fabric shrinks the fixed DP/PP floor, the TP
 collective becomes a larger share of the critical path, and INC's speedup RISES.
-Outputs: `sweep_internode_su<N>.csv`, `internode_linkspeed_{time,speedup}_pp1_su<N>.png`.
+Outputs carry the model tag, for example `sweep_internode_su4000_h100_te.csv`
+and `internode_linkspeed_{time,speedup}_pp1_su4000_h100_te.png`.
 
 ## Run (Docker)
 
@@ -117,31 +151,42 @@ Outputs: `sweep_internode_su<N>.csv`, `internode_linkspeed_{time,speedup}_pp1_su
 docker build -f simulation-scripts/Dockerfile -t atlahs-sim .
 docker run --rm -v "$(pwd)":/workspace atlahs-sim build            # one-time
 docker run --rm -v "$(pwd)":/workspace atlahs-sim run intranode_linkspeed_sweep --validate
-docker run --rm -v "$(pwd)":/workspace atlahs-sim run intranode_linkspeed_sweep                      # inter-node 100 Gbps (default)
-docker run --rm -v "$(pwd)":/workspace atlahs-sim run intranode_linkspeed_sweep --internode_gbps 200 # inter-node 200 Gbps
+docker run --rm -v "$(pwd)":/workspace atlahs-sim run intranode_linkspeed_sweep --batch 32
+docker run --rm -v "$(pwd)":/workspace atlahs-sim run intranode_linkspeed_sweep --batch 32 --speeds 4000 # main 4000/400 point only
 ```
 
-Useful flags: `--internode_gbps {100,200}` (scale-out fabric bandwidth; default
-100), `--speeds 100,2000,8000` (subset; every value must divide 8000 — integer
+For the unattended thesis matrix (TP4/8/16 scale-up sweep, scale-out
+sensitivity at fixed 4000 Gbps, skeleton, consolidated figures):
+
+```bash
+ATLAHS_SIM_JOBS=4 simulation-scripts/experiments/intranode_linkspeed_sweep/run_case_study.sh
+```
+
+Set `ATLAHS_RUN_SU8000=1` to add the non-headline 8000-Gbps sensitivity.
+
+Useful flags: `--internode_gbps N` (scale-out fabric bandwidth; default 400),
+`--speeds 400,2000,8000` (subset; every value must divide 8000 — integer
 ps/B), `--total_gpus N --tps T1,T2` (experiment scale: N endpoints split
 TP×DP×PP with gpus/node = TP; e.g. `--total_gpus 32 --tps 8` = 4 nodes × 8 GPUs,
 TP8·DP4·PP1 + TP8·DP2·PP2; non-16 scales suffix every output with `_g<N>` and
-generate the scale-out topo at N hosts), `--layers N`, `--iters N`, `--no-plot`,
-`--only-plot` (re-render PNGs from an existing `sweep_ib<N>.csv` — pair with the
+generate the scale-out topo at N hosts), `--layers N`, `--iters N`,
+`--compute_model {h100_te,h100}` (every output carries its model suffix, so
+neither can overwrite the other or historical unsuffixed results), `--no-plot`,
+`--only-plot` (re-render PNGs from an existing model-tagged sweep CSV — pair with the
 matching `--internode_gbps`), `--speedup` (plot INC speedup = baseline/INC vs
 intranode speed for the PP=1 configs at `--internode_gbps`, two lines TP4·DP4 /
-TP2·DP8; reads that `sweep_ib<N>.csv`, no sim), `--validate` (build + check the
+TP2·DP8; no sim), `--validate` (build + check the
 16-GPU/INC-group layout, no sim).
 
 ## Output (`results/intranode_linkspeed_sweep/`)
 
-- `sweep_ib<N>.csv` (N = inter-node Gbps) — one row per (config, speed, arm);
+- `sweep_ib<N>_<model>.csv` (N = inter-node Gbps) — one row per
+  (config, speed, arm);
   columns include `time_per_iter_s`, `makespan_ns`, `drops`, `status`,
   `intranode_linkspeed_mbps`, `so_gbps`, `compute_model`, and the full simulator
   `command`.
-- `intranode_linkspeed_pp1_ib<N>.png`, `intranode_linkspeed_pp2_ib<N>.png` — one
-  pair per `--internode_gbps` value (e.g. `_ib100`, `_ib200`).
-- `intranode_linkspeed_speedup_pp1_ib<N>.png` (via `--speedup --internode_gbps N`)
+- `intranode_linkspeed_pp1_ib<N>_<model>.png` — one per bandwidth, scale and model.
+- `intranode_linkspeed_speedup_pp1_ib<N>_<model>.png` (via `--speedup --internode_gbps N`)
   — INC speedup (baseline/INC) vs intranode speed, PP=1, two lines (TP4·DP4,
   TP2·DP8) at that inter-node bandwidth.
 
@@ -157,9 +202,8 @@ TP2·DP8; reads that `sweep_ib<N>.csv`, no sim), `--validate` (build + check the
   longer link-speed-insensitive — the fair A/B), converging toward a common floor
   at high speed where the intranode link stops being the bottleneck and the fixed
   scale-out DP/PP floor dominates.
-- Caveat (the honest framing): the makespan is ~90 % DP/PP communication over the
-  scale-out fabric (compute is ~5–10 %), so the intranode sweep — and hence the INC
-  gap — is a MODEST slice of the iteration. This is a "how much INC survives when DP
-  is in play" embedding, not an isolated-collective benefit (that's `scaleup_coll_ab`).
-  Any residual baseline wiggle is ECMP routing/schedule sensitivity (a few %), not
-  physical bandwidth-dependence.
+- Caveat (the honest framing): `h100_te` is the optimized-compute bound of a
+  synthetic two-layer proxy. Keep `h100` as the conservative sensitivity and do
+  not describe either as measured GPU time. This is a "how much INC survives in
+  a training dependency graph" embedding, not an isolated-collective benefit
+  (that is `scaleup_coll_ab`).

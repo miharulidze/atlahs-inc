@@ -29,17 +29,18 @@ LAYERS = 2
 ITERS = 2
 SO_GBPS = 400          # H100-class operating point
 SU_GBPS = 4000
+COMPUTE_MODEL = "h100_te"
 TMP = "/tmp/skel_decomp"
 
 SCALES = [  # (total_gpus, tp, full-results csv, config tag)
-    (16, 4, "sweep_internode_su4000", "pp1_tp4_dp4_pp1"),
-    (32, 8, "sweep_internode_su4000_g32", "pp1_tp8_dp4_pp1"),
-    (64, 16, "sweep_internode_su4000_g64", "pp1_tp16_dp4_pp1"),
+    (16, 4, "sweep_internode_su4000_h100_te", "pp1_tp4_dp4_pp1"),
+    (32, 8, "sweep_internode_su4000_g32_h100_te", "pp1_tp8_dp4_pp1"),
+    (64, 16, "sweep_internode_su4000_g64_h100_te", "pp1_tp16_dp4_pp1"),
 ]
 
 
 def gen_goal(tp, dp, graphs, out_goal, emit_inc, skeleton):
-    env = dict(os.environ, COMPUTE_MODEL="h100", INC_CONTEXTS="tp",
+    env = dict(os.environ, COMPUTE_MODEL=COMPUTE_MODEL, INC_CONTEXTS="tp",
                EMIT_INC="1" if emit_inc else "0",
                SKELETON_CONTEXTS="tp" if skeleton else "")
     cmd = [sys.executable, "simple_sim2goal.py", "--graphs-dir", graphs,
@@ -56,8 +57,11 @@ def full_times(csv_name, cfg):
     rows = [r for r in csv.DictReader(
         open(os.path.join(paths.results_dir("intranode_linkspeed_sweep"),
                           csv_name + ".csv")))
-            if r["config"] == cfg and int(r["so_gbps"]) == SO_GBPS]
+            if r["config"] == cfg and int(r["so_gbps"]) == SO_GBPS
+            and r.get("compute_model") == COMPUTE_MODEL]
     by = {r["arm"]: r for r in rows}
+    if set(by) != {"baseline", "inc"}:
+        sys.exit(f"{csv_name}: missing {COMPUTE_MODEL} 4000/400 rows for {cfg}")
     return (float(by["baseline"]["time_per_iter_s"]),
             float(by["inc"]["time_per_iter_s"]),
             int(by["baseline"]["compute_ns_per_iter"]) / 1e9)
@@ -72,7 +76,7 @@ def main():
         d = os.path.join(TMP, f"tp{tp}")
         graphs = os.path.join(d, "graphs")
         os.makedirs(graphs, exist_ok=True)
-        env = dict(os.environ, COMPUTE_MODEL="h100")
+        env = dict(os.environ, COMPUTE_MODEL=COMPUTE_MODEL)
         r = subprocess.run(
             [sys.executable, "-m", "simple_sim.llama3_training",
              "--tp", str(tp), "--dp", str(dp), "--pp", "1",
@@ -115,7 +119,8 @@ def main():
         n_ar = 4 * LAYERS                                 # ARs per iteration
         ring_serial = n_ar * 2 * (tp - 1) / tp * S / 500 / 1e9   # s @500 B/ns
         inc_serial = n_ar * S / 500 / 1e9
-        row = dict(tp=tp, skeleton_ms=skel_s * 1e3,
+        row = dict(compute_model=COMPUTE_MODEL, tp=tp,
+                   skeleton_ms=skel_s * 1e3,
                    base_full_ms=base_s * 1e3, inc_full_ms=inc_s * 1e3,
                    compute_ms=comp_s * 1e3,
                    tp_attr_base_ms=(base_s - skel_s) * 1e3,
@@ -133,10 +138,12 @@ def main():
 
     out = os.path.join(paths.results_dir("intranode_linkspeed_sweep"),
                        "skeleton_decomposition.csv")
-    with open(out, "w", newline="") as f:
+    out_tmp = out + ".tmp"
+    with open(out_tmp, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(results[0].keys()))
         w.writeheader()
         w.writerows(results)
+    os.replace(out_tmp, out)
     print("wrote", out)
 
 

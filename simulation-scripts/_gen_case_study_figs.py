@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
-"""Case-study chapter figures A + B (AA-plan-Case-Study-Chapter, approved
-2026-07-29). Derived purely from the recorded sweep CSVs -- no simulation.
+"""Case-study figures derived from recorded sweep CSVs -- no simulation.
 
-Fig A (anatomy): per scale, baseline-vs-in-network stacked bars splitting the
-iteration into the fixed per-rank compute floor (measured from the trace),
-the non-TP exposure (skeleton), and the TP-attributable exposure, at the
-chapter's single operating point (scale-up 4000, scale-out 400 Gbps --
-user ruling 2026-07-30: the 8000/800 comparison is dropped from the chapter;
-fig B is kept for review only).
+Fig A is the chapter's result summary.  Paired stacked bars show absolute
+baseline and in-network iteration time, modeled-compute/communication shares,
+and the resulting speedup at the 4000/400-Gb/s reference point.
 
 Fig B (scaling, REVIEW ONLY -- not included in the thesis): end-to-end
 speedup vs scale-up domain width, grouped by operating point.
@@ -25,17 +21,18 @@ import matplotlib.pyplot as plt
 
 RES = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                    "results", "intranode_linkspeed_sweep")
+COMPUTE_MODEL = "h100_te"
 
 SCALES = [  # (label, internode-sweep csv suffix, config tag, TP width)
-    ("TP4·DP4\n(16 GPUs)", "", "pp1_tp4_dp4_pp1", 4),
-    ("TP8·DP4\n(32 GPUs)", "_g32", "pp1_tp8_dp4_pp1", 8),
-    ("TP16·DP4\n(64 GPUs)", "_g64", "pp1_tp16_dp4_pp1", 16),
+    ("TP4·DP4\n(16 GPUs)", "_h100_te", "pp1_tp4_dp4_pp1", 4),
+    ("TP8·DP4\n(32 GPUs)", "_g32_h100_te", "pp1_tp8_dp4_pp1", 8),
+    ("TP16·DP4\n(64 GPUs)", "_g64_h100_te", "pp1_tp16_dp4_pp1", 16),
 ]
 # operating points: (fixed intranode Gbps, swept so Gbps, label, bar color)
 POINTS = [
-    (4000, 400, "H100-class (4000 / 400 Gbps)", "#1f77b4"),
-    (4000, 800, "faster NIC (4000 / 800 Gbps)", "#5fa2d3"),
-    (8000, 800, "GB200-class (8000 / 800 Gbps)", "#ff7f0e"),
+    (4000, 400, "reference (4000 / 400 Gbps)", "#1f77b4"),
+    (4000, 800, "faster scale-out (4000 / 800 Gbps)", "#5fa2d3"),
+    (8000, 800, "faster two-tier point (8000 / 800 Gbps)", "#ff7f0e"),
 ]
 
 
@@ -45,7 +42,8 @@ def cell(su, suffix, cfg, so):
     if not os.path.isfile(path):
         return None
     rows = [r for r in csv.DictReader(open(path))
-            if r["config"] == cfg and int(r["so_gbps"]) == so]
+            if r["config"] == cfg and int(r["so_gbps"]) == so
+            and r.get("compute_model") == COMPUTE_MODEL]
     by = {r["arm"]: r for r in rows if r["time_per_iter_s"]}
     if "baseline" not in by or "inc" not in by:
         return None
@@ -55,55 +53,67 @@ def cell(su, suffix, cfg, so):
 
 
 def fig_a():
-    """Anatomy bars at the H100-class point. When the skeleton-decomposition
-    CSV exists, the communication block splits causally into non-TP exposure
-    (the skeleton minus compute, identical in both arms by construction) and
-    TP-attributable exposure (full minus skeleton, the part INC changes)."""
-    skel = {}
-    spath = os.path.join(RES, "skeleton_decomposition.csv")
-    if os.path.isfile(spath):
-        skel = {int(r["tp"]): float(r["skeleton_ms"])
-                for r in csv.DictReader(open(spath))}
-    fig, ax = plt.subplots(figsize=(8, 5.2))
-    width, gap = 0.34, 0.06
-    xs, labels = [], []
-    for i, (label, suffix, cfg, tp) in enumerate(SCALES):
+    """Absolute outcome, time composition, and speedup in one plot."""
+    fig, ax = plt.subplots(figsize=(8.6, 4.9))
+    rows = []
+    for label, suffix, cfg, tp in SCALES:
         c = cell(4000, suffix, cfg, 400)
         if c is None:
             print(f"fig A: missing cell for {cfg}, skipped")
             continue
-        base_s, inc_s, comp_s = (v * 1e3 for v in c)  # -> ms
-        for k, (t, xoff) in enumerate((("baseline", -width / 2 - gap / 2),
-                                       ("in-network", width / 2 + gap / 2))):
-            total = base_s if t == "baseline" else inc_s
-            x = i + xoff
-            ax.bar(x, comp_s, width, color="#bdbdbd",
-                   label="compute (fixed)" if i == 0 and k == 0 else None)
-            if tp in skel:
-                other = skel[tp] - comp_s      # non-TP exposure, same both arms
-                ax.bar(x, other, width, bottom=comp_s, color="#8ecae6",
-                       label=("non-TP communication (skeleton)"
-                              if i == 0 and k == 0 else None))
-                ax.bar(x, total - skel[tp], width, bottom=skel[tp],
-                       color="#1f77b4" if t == "baseline" else "#ff7f0e",
-                       label=(f"{t}: TP-attributable" if i == 0 else None))
-            else:
-                ax.bar(x, total - comp_s, width, bottom=comp_s,
-                       color="#1f77b4" if t == "baseline" else "#ff7f0e",
-                       label=(f"{t}: communication + wait" if i == 0 else None))
-            ax.text(x, total + 0.6, f"{total:.1f}", ha="center", fontsize=9)
-        xs.append(i)
-        labels.append(label)
-    ax.set_xticks(xs)
-    ax.set_xticklabels(labels, fontsize=11)
-    ax.set_ylabel("Time per training iteration (ms)", fontsize=13)
-    ax.grid(True, axis="y", ls=":", alpha=0.5)
-    # headroom so the legend never covers a bar's value label
-    ax.set_ylim(0, ax.get_ylim()[1] * 1.28)
-    ax.legend(fontsize=10, loc="upper right")
+        base_ms, inc_ms, comp_ms = (v * 1e3 for v in c)
+        rows.append((tp, base_ms, inc_ms, comp_ms))
+
+    compute_color = "#bdbdbd"
+    communication_color = "#6baed6"
+    bar_width = 0.72
+    pair_offset = 0.43
+    centers = [i * 2.35 for i in range(len(rows))]
+    xticks, xlabels = [], []
+
+    for i, ((tp, base_ms, inc_ms, comp_ms), center) in enumerate(zip(rows, centers)):
+        pair = (("baseline", base_ms, center - pair_offset),
+                ("in-network", inc_ms, center + pair_offset))
+        for arm, total_ms, x in pair:
+            comm_ms = total_ms - comp_ms
+            compute_pct = 100 * comp_ms / total_ms
+            comm_pct = 100 - compute_pct
+            ax.bar(x, comp_ms, width=bar_width, color=compute_color,
+                   edgecolor="white", linewidth=0.6,
+                   label="modeled compute" if i == 0 and arm == "baseline" else None)
+            ax.bar(x, comm_ms, bottom=comp_ms, width=bar_width,
+                   color=communication_color, edgecolor="white", linewidth=0.6,
+                   label="exposed communication" if i == 0 and arm == "baseline" else None)
+            ax.text(x, comp_ms / 2, f"{compute_pct:.1f}%",
+                    ha="center", va="center", fontsize=10)
+            ax.text(x, comp_ms + comm_ms / 2, f"{comm_pct:.1f}%",
+                    ha="center", va="center", fontsize=10, color="#102a43")
+            ax.text(x, total_ms + 1.1, f"{total_ms:.1f} ms",
+                    ha="center", va="bottom", fontsize=9.2)
+            xticks.append(x)
+            xlabels.append(f"TP{tp}\n{arm}")
+
+        bracket_y = max(base_ms, inc_ms) + 8.0
+        left, right = center - pair_offset, center + pair_offset
+        ax.plot([left, left, right, right],
+                [bracket_y - 1.2, bracket_y, bracket_y, bracket_y - 1.2],
+                color="#333333", lw=1.0, clip_on=False)
+        ax.text(center, bracket_y + 1.0, f"{base_ms / inc_ms:.3f}×",
+                ha="center", va="bottom", fontsize=12, fontweight="bold")
+
+    ax.set_xticks(xticks)
+    ax.set_xticklabels(xlabels, fontsize=9.5)
+    ax.set_ylabel("Iteration time (ms)", fontsize=12)
+    ax.set_title("End-to-end outcome at 4000/400 Gb/s", fontsize=13)
+    ax.set_ylim(0, max(r[1] for r in rows) * 1.20)
+    ax.set_xlim(centers[0] - 1.05, centers[-1] + 1.05)
+    ax.grid(True, axis="y", ls=":", alpha=0.45)
+    ax.set_axisbelow(True)
+    ax.legend(fontsize=9.5, loc="upper right", frameon=False)
+
     fig.tight_layout()
     for ext in ("png", "pdf"):
-        fig.savefig(os.path.join(RES, f"case_study_anatomy.{ext}"),
+        fig.savefig(os.path.join(RES, f"case_study_result_summary.{ext}"),
                     dpi=150 if ext == "png" else None)
     plt.close(fig)
     print("fig A written")
@@ -152,12 +162,13 @@ def _sweep_rows(name, cfg):
     if not os.path.isfile(path):
         return []
     return [r for r in csv.DictReader(open(path))
-            if r["config"] == cfg and r["time_per_iter_s"]]
+            if r["config"] == cfg and r["time_per_iter_s"]
+            and r.get("compute_model") == COMPUTE_MODEL]
 
 
 def fig_c():
     """Consolidated intranode-sweep speedup: all three scales as lines on one
-    axes (inter-node fixed at the 400 Gbps H100-class base)."""
+    axes (inter-node fixed at the 400-Gb/s reference rate)."""
     fig, ax = plt.subplots(figsize=(8, 5.2))
     colors = {4: "#1f77b4", 8: "#ff7f0e", 16: "#2ca02c"}
     for label, suffix, cfg, tp in SCALES:
@@ -174,6 +185,13 @@ def fig_c():
         xs, ys = zip(*pts)
         ax.plot(xs, ys, marker="o", ms=6, color=colors[tp],
                 label=label.replace("\n", " "))
+        for x, y in pts:
+            if x == 4000:
+                ax.scatter(x, y, s=58, color=colors[tp], edgecolor="white",
+                           linewidth=0.8, zorder=4)
+                ax.annotate(f"{y:.3f}×", (x, y), xytext=(7, 2),
+                            textcoords="offset points", fontsize=8,
+                            color=colors[tp], fontweight="bold")
     ax.axhline(1.0, color="grey", ls=":", lw=1.2, label="no speedup (1.0×)")
     ax.axvline(4000, color="grey", ls="--", lw=1.2, alpha=0.8)
     ax.text(4000, 0.995, " operating point", rotation=90, va="bottom",
@@ -185,7 +203,7 @@ def fig_c():
         ax.set_xticks(xs_all)
         ax.set_xticklabels([str(x) for x in xs_all])
         ax.minorticks_off()
-    ax.set_xlabel("Scale-up link rate (Gb/s)", fontsize=13)
+    ax.set_xlabel("Nominal scale-up link rate (Gb/s)", fontsize=13)
     ax.set_ylabel("End-to-end speedup  (baseline / in-network)", fontsize=13)
     ax.grid(True, which="both", ls=":", alpha=0.5)
     ax.legend(fontsize=10)
@@ -198,10 +216,10 @@ def fig_c():
 
 
 def fig_d():
-    """Consolidated internode-sweep speedup: three scales as lines, intranode
-    4000 solid + intranode 8000 dashed (generation-consistent markers)."""
+    """Consolidated internode-sweep speedup for every available SU rate."""
     fig, ax = plt.subplots(figsize=(8, 5.2))
     colors = {4: "#1f77b4", 8: "#ff7f0e", 16: "#2ca02c"}
+    plotted_su = set()
     for su, ls in ((4000, "-"), (8000, "--")):
         for label, suffix, cfg, tp in SCALES:
             rows = _sweep_rows(f"sweep_internode_su{su}{suffix}", cfg)
@@ -218,6 +236,7 @@ def fig_d():
             ax.plot(xs, ys, marker="o" if su == 4000 else "^", ms=5,
                     ls=ls, color=colors[tp],
                     label=f"{label.splitlines()[0]}, intranode {su} Gbps")
+            plotted_su.add(su)
     ax.axhline(1.0, color="grey", ls=":", lw=1.2)
     ax.set_xscale("log", base=2)
     xs_all = sorted({int(float(x)) for l in ax.get_lines()
@@ -228,9 +247,11 @@ def fig_d():
         ax.minorticks_off()
     ax.set_xlabel("Inter-node Link Speed (Gbps)", fontsize=13)
     ax.set_ylabel("End-to-end Speedup  (baseline / INC)", fontsize=13)
-    ax.set_title("INC Speedup vs Inter-node Link Speed\n"
-                 "(three domain widths; solid = intranode 4000, dashed = 8000 Gbps)",
-                 fontsize=13)
+    if plotted_su == {4000}:
+        subtitle = "three domain widths; intranode fixed at 4000 Gbps"
+    else:
+        subtitle = "solid = intranode 4000, dashed = 8000 Gbps"
+    ax.set_title(f"INC Speedup vs Inter-node Link Speed\n({subtitle})", fontsize=13)
     ax.grid(True, which="both", ls=":", alpha=0.5)
     ax.legend(fontsize=8)
     fig.tight_layout()

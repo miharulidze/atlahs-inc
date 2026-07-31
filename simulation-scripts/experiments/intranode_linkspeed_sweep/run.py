@@ -13,17 +13,21 @@ one training iteration on the pcm-sdk two-tier simulator.
 
 Layout is multi-domain and falls out of the generator: `simple_sim2goal`
 derives the scale-up-domain width from the TP group size, so
-  gpus_per_node = TP,  nodes = 16 / TP  (= DP*PP).
+  gpus_per_node = TP,  nodes = TOTAL_GPUS / TP  (= DP*PP).
 TP collectives live INSIDE a node (the swept intranode link); DP/PP cross nodes
 on the fixed scale-out fabric (SO_TOPO). Only TP collectives go INC
 (INC_CONTEXTS=tp), so DP/PP contribute the same fixed floor to both arms and the
 INC-vs-baseline gap isolates the TP data movement.
 
-Model: Zhiyi-matched Llama-2 7B PER-LAYER dims (hidden 4096, FFN 11008, 32 MHA
+Model: Llama-2-7B-geometry PER-LAYER dims (hidden 4096, FFN 11008, 32 MHA
 heads, seq 4096, micro-batch 1) so message sizes place the bandwidth->latency
 knee in the plotted range, but a SHALLOW stack (default 2 layers): iteration time
 and the INC gap scale ~linearly in depth, so the trend extrapolates to full 7B.
-COMPUTE_MODEL=h100 gives a realistic compute floor (cancels in the INC gap).
+COMPUTE_MODEL=h100_te prices each analytical operation at the dense H100 FP8
+math and BF16-storage roofline ceilings.  The legacy h100 model is
+kept as a sensitivity/reproduction option; it is not the default because its
+whole-training MFU already contains communication and stalls that this
+experiment simulates explicitly.
 
 The swept x-axis is `-intranode_linkspeed` (Mbps = Gbps*1000). The intranode
 .topo is GENERATED PER RATE so the fabric pipes and the NIC/copy-engine flag
@@ -35,19 +39,19 @@ picoseconds per byte (ps/B = 8000/Gbps), so only these rates are exact on the
 wire -- 3200/3600/6400/12800 silently quantise. PFC thresholds and the
 intranode queue are DERIVED per generated fabric via sim.pfc_config() (1x BDP
 ingress reservation, rate-derived headroom, radix x BDP egress cap), and
--mtu 4160 keeps the payload MSS at a round 4096 B (sim.MTU_DEFAULT). Two PNGs,
-split by PP; each: 2 configs x {baseline solid, INC dashed} + the NVLink line.
+-mtu 4160 keeps the payload MSS at a round 4096 B (sim.MTU_DEFAULT). Plotting
+emits one PNG per selected PP degree.
 
 The fixed scale-out (inter-node) fabric bandwidth is selectable via
-`--internode_gbps {100,200}` (default 100). Outputs are suffixed `_ib<N>` so the
-variants coexist; at 200 the fabric pipe matches the scale-out NIC exactly.
+`--internode_gbps` (default 400 Gbps). The fabric and endpoint injection use
+the same exact rate, and every output name carries the bandwidth and model.
 
 Reproduce (Docker, sim-only image):
   docker build -f simulation-scripts/Dockerfile -t atlahs-sim .
   docker run --rm -v $(pwd):/workspace atlahs-sim build
   docker run --rm -v $(pwd):/workspace atlahs-sim run intranode_linkspeed_sweep --validate
-  docker run --rm -v $(pwd):/workspace atlahs-sim run intranode_linkspeed_sweep                      # inter-node 100 Gbps
-  docker run --rm -v $(pwd):/workspace atlahs-sim run intranode_linkspeed_sweep --internode_gbps 200 # inter-node 200 Gbps
+  docker run --rm -v $(pwd):/workspace atlahs-sim run intranode_linkspeed_sweep --batch 32
+  docker run --rm -v $(pwd):/workspace atlahs-sim run intranode_linkspeed_sweep --batch 32 --speeds 4000
 Local (binaries built in-tree; needs numpy/scipy/tqdm/matplotlib on PATH python):
   python3 experiments/intranode_linkspeed_sweep/run.py --validate
 """
@@ -62,9 +66,9 @@ from common import goal, paths, report, sim  # noqa: E402
 
 EXP_NAME = "intranode_linkspeed_sweep"
 
-# Zhiyi-matched Llama-2 7B per-layer dims (see module docstring).
+# Llama-2-7B-geometry per-layer dimensions (see module docstring).
 MODEL = dict(hidden=4096, ffn=11008, heads=32, kv_heads=32, seq_len=4096, batch=1)
-COMPUTE_MODEL = "h100"     # realistic compute floor; identical in both arms
+COMPUTE_MODEL = "h100_te"  # optimized per-op peak roofline; identical in both arms
 INC_CONTEXTS = "tp"        # INC only on tensor-parallel collectives
 
 # Scale of the experiment: TOTAL_GPUS endpoints split TP x DP x PP, gpus/node =
@@ -104,12 +108,15 @@ OUT_SUFFIX = ""   # set from --out_suffix; isolates probe runs from sweep CSVs
 
 
 def _gtag():
-    """Output-name suffix: scale tag + probe suffix. Probe cells MUST pass
-    --out_suffix (e.g. _probe_b8): the CSV writer deletes its target at start,
-    so an unsuffixed probe silently destroys a finished sweep's results (this
-    happened twice on 2026-07-30 before the knob existed)."""
+    """Output suffix: scale + compute model + optional probe tag.
+
+    Every model is explicit so a new default cannot overwrite historical
+    unsuffixed CSVs.  Probe cells must still pass --out_suffix (for example,
+    _probe_b8) so they cannot replace a completed result for the same model.
+    """
     scale = "" if TOTAL_GPUS == 16 else f"_g{TOTAL_GPUS}"
-    return scale + OUT_SUFFIX
+    model = f"_{COMPUTE_MODEL}"
+    return scale + model + OUT_SUFFIX
 
 
 _PALETTE = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
@@ -182,11 +189,9 @@ def su_topo_for(tp, gbps, tmpdir):
     return p
 
 
-# Scale-out topo for the INTERNODE sweep: same 16-host non-blocking single
-# switch as the committed tree16_nonblocking_{100,200}Gbps.topo, generated per
-# swept rate so the fabric pipes AND the scale-out NIC (-linkspeed) carry the
-# same speed (the intranode-sweep mode keeps its fixed 100/200 topos + 200 Gbps
-# NIC untouched, for comparability with the existing sweep_ib<N>.csv results).
+# Scale-out topology for the internode sweep: a generated non-blocking switch
+# with one port per endpoint.  It is regenerated at each swept rate so the
+# fabric pipes and scale-out NIC (-linkspeed) always carry the same speed.
 SO_TOPO_TEMPLATE = """\
 # tree{hosts}_nonblocking_{gbps}Gbps.topo (generated by {exp})
 # Scale-out fabric: all {hosts} hosts on ONE non-blocking switch (Podsize==Nodes==
@@ -237,12 +242,13 @@ def _require_exact_rates(speeds_gbps, what):
 
 
 # --- Compute time from the trace ------------------------------------------------
-# The generator's calc ops carry H100-roofline durations (ns) that depend only on
-# the model math and the parallelism split -- NOT on the swept link speeds and NOT
-# on the arm (baseline and INC traces share the same calc ops). So the per-rank
-# compute per iteration is one fixed number per config, parsed once per config
-# from the generated .goal and annotated on every plot as the compute/communication
-# split.
+# The generator's calc ops carry durations (ns) from the selected compute model.
+# They depend only on the model math and parallelism split -- NOT on swept link
+# speeds and NOT on the arm (baseline and INC share identical calc ops).  The
+# per-rank calc demand is therefore one fixed number per config, parsed once and
+# reported relative to the simulated makespan.  In this PP=1 workload the calc
+# nodes form a serial chain; for arbitrary graphs, sum(calc)/makespan should be
+# read as a demand ratio rather than a resource-utilisation measurement.
 _CALC = re.compile(r"^l\d+: calc (\d+)\b")
 
 
@@ -295,8 +301,19 @@ def compute_map_from_rows(rows, layers, iters, tmpdir):
     for cfg in CONFIGS:
         if cfg_tag(cfg) not in tags:
             continue
-        vals = {r.get("compute_ns_per_iter", "") for r in rows if r["config"] == cfg_tag(cfg)}
+        cfg_rows = [r for r in rows if r["config"] == cfg_tag(cfg)]
+        models = {r.get("compute_model", "") for r in cfg_rows}
+        models.discard("")
+        if len(models) > 1:
+            sys.exit(f"{cfg_tag(cfg)} mixes compute models {sorted(models)} in one CSV")
+        if models and models != {COMPUTE_MODEL}:
+            sys.exit(f"{cfg_tag(cfg)} was generated with compute model "
+                     f"{next(iter(models))!r}, but this run selects {COMPUTE_MODEL!r}; "
+                     "rerun the sweep instead of combining stale compute annotations")
+        vals = {r.get("compute_ns_per_iter", "") for r in cfg_rows}
         vals.discard("")
+        if len(vals) > 1:
+            sys.exit(f"{cfg_tag(cfg)} mixes compute totals {sorted(vals)} in one CSV")
         if vals:
             cmap[cfg_tag(cfg)] = int(float(next(iter(vals))))
         else:
@@ -307,7 +324,7 @@ def compute_map_from_rows(rows, layers, iters, tmpdir):
 
 
 def _annotate_compute(ax, cfgs, cmap, rows, hlines, extra=None):
-    """Corner box with the fixed per-rank compute time + its share range over the
+    """Corner box with fixed per-rank calc demand + its makespan-ratio range over the
     plotted makespans; optionally a dotted horizontal compute-floor line per config
     (time plots only -- the y axis must be seconds/iteration). extra = additional
     note lines appended to the box (e.g. the bandwidth-equivalence reading)."""
@@ -323,7 +340,7 @@ def _annotate_compute(ax, cfgs, cmap, rows, hlines, extra=None):
         if not tpis:
             continue
         lo, hi = 100 * comp_s / max(tpis), 100 * comp_s / min(tpis)
-        lines.append(f"{cfg_label(cfg)}: {comp_s * 1e3:.2f} ms ({lo:.1f}–{hi:.1f}% of iter)")
+        lines.append(f"{cfg_label(cfg)}: {comp_s * 1e3:.2f} ms ({lo:.1f}–{hi:.1f}% of makespan)")
         # Draw the compute floor only when it lands inside the plotted range --
         # at a few % share it sits far below the makespans and a line would
         # either be invisible or squash the axis.
@@ -334,7 +351,7 @@ def _annotate_compute(ax, cfgs, cmap, rows, hlines, extra=None):
     if extra:
         lines += list(extra)
     if lines:
-        ax.text(0.02, 0.02, "per-rank compute / iter (fixed, max rank):\n" + "\n".join(lines),
+        ax.text(0.02, 0.02, "modeled calc demand / iter (fixed, max rank):\n" + "\n".join(lines),
                 transform=ax.transAxes, fontsize=8, va="bottom", ha="left",
                 bbox=dict(boxstyle="round,pad=0.35", fc="white", ec="#999999", alpha=0.85))
 # Scale-out (inter-node) fabric, selectable via --internode_gbps. Non-blocking
@@ -516,6 +533,10 @@ def generate_arms(cfg, layers, iters, tmpdir):
                 f"{cfg_tag(cfg)}: INC group {sorted(g)} spans scale-up domains {sorted(domains)}"
             f.write(" ".join(str(r % gpn) for r in sorted(g)) + "\n")
     comp_max, comp_mean = compute_ns_per_iter(base_goal, iters)
+    inc_comp_max, inc_comp_mean = compute_ns_per_iter(inc_goal, iters)
+    assert (comp_max, comp_mean) == (inc_comp_max, inc_comp_mean), (
+        f"{cfg_tag(cfg)}: compute differs between baseline "
+        f"{(comp_max, comp_mean)} and INC {(inc_comp_max, inc_comp_mean)}")
     return dict(base_bin=base_bin, inc_bin=inc_bin, groups=local_groups,
                 n_groups=n_groups, group_size=gpn,
                 compute_ns=comp_max, compute_ns_mean=comp_mean)
@@ -621,12 +642,13 @@ def run_exp(speeds_gbps, layers, iters, tmpdir, timeout, do_plot, internode_gbps
 
     out_dir = paths.results_dir(EXP_NAME)
     os.makedirs(out_dir, exist_ok=True)
-    # Suffix outputs by inter-node bandwidth so the 100 and 200 Gbps variants coexist.
+    # Bandwidth, scale and model are all encoded so result sets coexist.
     csv_path = os.path.join(out_dir, f"sweep_ib{internode_gbps}{_gtag()}.csv")
-    # A full sweep is one self-contained result set: start a FRESH CSV (CsvAppender
-    # appends, so without this a re-run would mix rows from the previous config).
-    if os.path.exists(csv_path):
-        os.remove(csv_path)
+    csv_tmp = csv_path + ".tmp"
+    # CsvAppender appends, so only the staging file is cleared.  The completed
+    # prior CSV remains intact until os.replace() commits the full new sweep.
+    if os.path.exists(csv_tmp):
+        os.remove(csv_tmp)
     rows = []
     cmap = {}
     engine = _engine_id()
@@ -673,9 +695,10 @@ def run_exp(speeds_gbps, layers, iters, tmpdir, timeout, do_plot, internode_gbps
                 "compute_model": COMPUTE_MODEL, "engine": engine, "command": cmd}
 
     rows = _run_cells(cells, _run_cell, jobs)
-    with report.CsvAppender(csv_path, CSV_FIELDS) as out:
+    with report.CsvAppender(csv_tmp, CSV_FIELDS) as out:
         for row in rows:
             out.write(row)
+    os.replace(csv_tmp, csv_path)
     report.print_success(f"wrote {len(rows)} rows to {csv_path}")
     if do_plot:
         plot_from_rows(rows, out_dir, speeds_gbps, internode_gbps, cmap)
@@ -769,8 +792,8 @@ def plot_from_rows(rows, out_dir, speeds_gbps, internode_gbps, cmap=None):
 
 def plot_speedup(out_dir, speeds_gbps, ib, layers, iters, tmpdir):
     """Plot INC speedup (baseline_time / INC_time) vs intranode link speed for the
-    PP=1 configs at a SINGLE inter-node bandwidth (reads sweep_ib<ib>.csv). Two
-    lines: TP4·DP4 and TP2·DP8. 1.0 = no speedup; >1 = INC faster. No sim (the
+    PP=1 configs at a single inter-node bandwidth (reads the model-tagged CSV).
+    1.0 = no speedup; >1 = INC faster. No sim (the
     compute-share annotation regenerates traces if the CSV predates the compute
     columns)."""
     import matplotlib
@@ -964,8 +987,9 @@ def run_internode_exp(so_speeds, layers, iters, tmpdir, timeout, do_plot, intran
     out_dir = paths.results_dir(EXP_NAME)
     os.makedirs(out_dir, exist_ok=True)
     csv_path = os.path.join(out_dir, f"sweep_internode_su{intranode_gbps}{_gtag()}.csv")
-    if os.path.exists(csv_path):
-        os.remove(csv_path)
+    csv_tmp = csv_path + ".tmp"
+    if os.path.exists(csv_tmp):
+        os.remove(csv_tmp)
     rows = []
     cmap = {}
     engine = _engine_id()
@@ -1013,9 +1037,10 @@ def run_internode_exp(so_speeds, layers, iters, tmpdir, timeout, do_plot, intran
                 "compute_model": COMPUTE_MODEL, "engine": engine, "command": cmd}
 
     rows = _run_cells(cells, _run_cell, jobs)
-    with report.CsvAppender(csv_path, CSV_FIELDS) as out:
+    with report.CsvAppender(csv_tmp, CSV_FIELDS) as out:
         for row in rows:
             out.write(row)
+    os.replace(csv_tmp, csv_path)
     report.print_success(f"wrote {len(rows)} rows to {csv_path}")
     if do_plot:
         plot_internode(rows, out_dir, so_speeds, intranode_gbps, cmap)
@@ -1029,9 +1054,13 @@ def main():
                     help="comma-separated intranode link speeds in Gbps")
     ap.add_argument("--layers", type=int, default=2, help="transformer layers (depth-invariant y-scale)")
     ap.add_argument("--batch", type=int, default=1,
-                    help="micro-batch size; the network-level proxy for gradient "
-                         "accumulation (TP activation traffic and compute scale "
-                         "linearly with it, DP gradient traffic does NOT)")
+                    help="micro-batch size per DP rank (TP activation traffic and "
+                         "compute scale with it; parameter-sized DP traffic does not)")
+    ap.add_argument("--compute_model", choices=("h100_te", "h100"),
+                    default="h100_te",
+                    help="calc-duration model: optimized per-op H100 FP8/BF16 peak "
+                         "roofline (default), or the legacy BF16+whole-training-MFU "
+                         "model for reproduction/sensitivity")
     ap.add_argument("--out_suffix", default="",
                     help="appended to every output filename; REQUIRED for probe "
                          "cells so they cannot clobber a sweep's CSV")
@@ -1045,14 +1074,14 @@ def main():
     ap.add_argument("--validate", action="store_true", help="build + check layout, no sim")
     ap.add_argument("--no-plot", action="store_true", help="write CSV only, skip PNGs")
     ap.add_argument("--only-plot", action="store_true",
-                    help="re-plot from an existing results/<exp>/sweep_ib<N>.csv (no gen, no sim)")
+                    help="re-plot from an existing model-tagged CSV (no gen, no sim)")
     ap.add_argument("--internode_gbps", type=int, default=400,
                     help="intranode mode: scale-out fabric bandwidth in Gbps (the SO topo "
                          "is generated at this rate); 400 = the realistic H100-class "
                          "per-GPU NIC, the standard pairing (2026-07-29)")
     ap.add_argument("--speedup", action="store_true",
                     help="plot INC speedup (baseline/INC) vs intranode speed for the PP=1 configs "
-                         "at --internode_gbps (reads that sweep_ib<N>.csv; no gen, no sim)")
+                         "at --internode_gbps (reads that model-tagged CSV; no gen, no sim)")
     ap.add_argument("--mode", choices=("intranode", "internode"), default="intranode",
                     help="which link speed to sweep: intranode (default; scale-out fixed via "
                          "--internode_gbps) or internode (intranode fixed via --intranode_gbps, "
@@ -1074,6 +1103,8 @@ def main():
     args = ap.parse_args()
     speeds = [int(x) for x in args.speeds.split(",")]
     MODEL["batch"] = args.batch
+    global COMPUTE_MODEL
+    COMPUTE_MODEL = args.compute_model
     global OUT_SUFFIX
     OUT_SUFFIX = args.out_suffix
     configure_scale(args.total_gpus, [int(x) for x in args.tps.split(",")],
@@ -1104,7 +1135,8 @@ def main():
         return 0
     if args.only_plot:
         out_dir = paths.results_dir(EXP_NAME)
-        csv_path = os.path.join(out_dir, f"sweep_ib{args.internode_gbps}.csv")
+        csv_path = os.path.join(out_dir,
+                                f"sweep_ib{args.internode_gbps}{_gtag()}.csv")
         if not os.path.isfile(csv_path):
             sys.exit(f"no CSV to plot: {csv_path}")
         rows = _read_csv(csv_path)

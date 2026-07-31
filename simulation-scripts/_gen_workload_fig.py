@@ -41,7 +41,7 @@ def build_trace():
     if os.path.isfile(goal_path):
         return goal_path
     os.makedirs(graphs, exist_ok=True)
-    env = dict(os.environ, COMPUTE_MODEL="h100", INC_CONTEXTS="tp", EMIT_INC="0")
+    env = dict(os.environ, COMPUTE_MODEL="h100_te", INC_CONTEXTS="tp", EMIT_INC="0")
     subprocess.run([sys.executable, "-m", "simple_sim.llama3_training",
                     "--tp", str(TP), "--dp", str(DP), "--pp", "1",
                     "--num-layers", "2", "--seq-len", "4096", "--ffn", "11008",
