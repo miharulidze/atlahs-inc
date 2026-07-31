@@ -12,6 +12,7 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 from pathlib import Path
 
 import matplotlib
@@ -22,6 +23,39 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 TPS = (4, 8, 16)
 WORKLOAD = "corrected_mb1_ga32"
+
+# Single-switch collective model — constants and forms mirror
+# simulation-scripts/_gen_rsag_tables.py (wire/lam/fill/ring/inc_root);
+# model_checks/verify_models.py cross-checks the factors against that module.
+T_L, T_SW, B_LINK, HDR, MSS = 50.0, 300.0, 500.0, 64, 4096
+FRAME = MSS + HDR
+TP_AR_BYTES = 32 * 1024 * 1024  # logical TP AllReduce payload (32 MiB)
+
+
+def _wire(x: int) -> float:
+    return x + HDR * math.ceil(x / MSS)
+
+
+def _lam(d: int) -> float:
+    return 2 * (2 * d * T_L + (2 * d - 1) * T_SW) + (2 * d - 1) * FRAME / B_LINK
+
+
+def _fill(d: int, w: float) -> float:
+    return 2 * d * T_L + (2 * d - 1) * T_SW + 2 * d * w / B_LINK
+
+
+def _ring(S: int, N: int, d: int) -> float:
+    return (N - 1) * (_lam(d) + _wire(S // N) / B_LINK)
+
+
+def _inc_root(S: int, d: int) -> float:
+    w = min(S, MSS) + HDR
+    return _fill(d, w) + (_wire(S) - w) / B_LINK
+
+
+def _model_tp_factor(n: int) -> float:
+    """T_ring^AR / T_inc^AR (eq:ar-speedup) at S = 32 MiB on the single switch (d=1)."""
+    return 2 * _ring(TP_AR_BYTES, n, 1) / _inc_root(TP_AR_BYTES, 1)
 
 
 def _sha256(path: Path) -> str:
@@ -180,22 +214,76 @@ def _plot(rows: list[dict], output_dir: Path) -> None:
     plt.close(fig)
 
 
-def _write_tables(rows: list[dict], output_dir: Path) -> None:
+def _collectives_table(run_dir: Path) -> str:
+    """Build tab_case_study_collectives from the run's audited emission record.
+
+    Counts, AllReduce size, ZeRO-1 payload sums and the total come from
+    audits.json / manifest.json; only the per-call ZeRO-1 size RANGE strings
+    are workload constants (per-call shard sizes are not in the audit record).
+    """
+    audits = json.loads((run_dir / "audits.json").read_text(encoding="utf-8"))
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    dp = int(manifest["configuration"]["dp"])
+    by_tp = {int(a["tp"]): a for a in audits}
+    if sorted(by_tp) != sorted(TPS):
+        raise SystemExit(f"audits.json TPs {sorted(by_tp)} != expected {sorted(TPS)}")
+
+    def _uniq(vals, what):
+        s = set(vals)
+        if len(s) != 1:
+            raise SystemExit(f"audits.json: non-uniform {what}: {s}")
+        return s.pop()
+
+    n_ar = _uniq((a["actual_tp_allreduces"] for a in by_tp.values()), "AR count")
+    s_ar = _uniq((s for a in by_tp.values() for s in a["actual_tp_allreduce_sizes"]),
+                 "AR size")
+    n_z = _uniq([a["actual_zero1_reduce_scatters"] for a in by_tp.values()]
+                + [a["actual_zero1_allgathers"] for a in by_tp.values()], "zero1 count")
+    mib = 1024 * 1024
+    fmt = lambda v: f"{v:g}"  # noqa: E731
+    z_sums = [by_tp[tp]["emitted_zero1_baseline"]["physical_declared_bytes_each_per_iter"] / mib
+              for tp in TPS]
+    ar_call = fmt(s_ar / mib)
+    ar_sum = fmt(n_ar * s_ar / mib)
+    z_sum_str = " / ".join(fmt(z) for z in z_sums)
+    total_str = " / ".join(fmt(n_ar * s_ar / mib + 2 * z) for z in z_sums)
+    # Per-call ZeRO-1 ranges: workload constants (uneven physical-TP shard sizes).
+    z_range = "8--24 / 4--12 / 2--6"
+    return (
+        "\\begin{tabular}{l r r c c}\n"
+        "  \\toprule\n"
+        "  operation & \\shortstack{count per\\\\rank/iteration} & $|G|$\n"
+        "  & \\shortstack{payload per call\\\\TP4/TP8/TP16 [MiB]}\n"
+        "  & \\shortstack{payload sum\\\\TP4/TP8/TP16 [MiB]} \\\\\n"
+        "  \\midrule\n"
+        f"  TP AllReduce         & {n_ar} & $N$ & {ar_call} / {ar_call} / {ar_call}"
+        f" & {ar_sum} / {ar_sum} / {ar_sum} \\\\\n"
+        f"  ZeRO-1 ReduceScatter &  {n_z} & {dp}   & {z_range} & {z_sum_str} \\\\\n"
+        f"  ZeRO-1 AllGather     &  {n_z} & {dp}   & {z_range} & {z_sum_str} \\\\\n"
+        "  \\midrule\n"
+        f"  total                & {n_ar + 2 * n_z} & --- & --- & {total_str} \\\\\n"
+        "  \\bottomrule\n"
+        "\\end{tabular}\n"
+    )
+
+
+def _write_tables(rows: list[dict], run_dir: Path, output_dir: Path) -> None:
     communication = [
         r"\begin{tabular}{r r r r r}",
         r"  \toprule",
-        r"  & \shortstack{ideal TP\\factor}",
+        r"  & \shortstack{simulator-model\\TP factor}",
         r"  & \multicolumn{2}{c}{exposed time $E=M-C$ [ms]}",
         r"  & \shortstack{exposed-time\\speedup} \\",
         r"  \cmidrule(lr){3-4}",
-        r"  $N$ & $2(N-1)/N$ & baseline & in-network & $E_{\mathrm{base}}/E_{\mathrm{in}}$ \\",
+        r"  $N$ & $T_{\mathrm{ring}}^{\mathrm{AR}}/T_{\mathrm{inc}}^{\mathrm{AR}}$",
+        r"      & baseline & in-network & $E_{\mathrm{base}}/E_{\mathrm{in}}$ \\",
         r"  \midrule",
     ]
     for row in rows:
-        ideal = 2 * (row["tp"] - 1) / row["tp"]
+        factor = _model_tp_factor(row["tp"])
         exposed_speedup = row["baseline_exposed_ms"] / row["inc_exposed_ms"]
         communication.append(
-            f"  {row['tp']:2d} & {ideal:.3f} & {row['baseline_exposed_ms']:.1f} & "
+            f"  {row['tp']:2d} & {factor:.3f} & {row['baseline_exposed_ms']:.1f} & "
             f"{row['inc_exposed_ms']:.1f} & {exposed_speedup:.3f} \\\\"
         )
     communication.extend([r"  \bottomrule", r"\end{tabular}", ""])
@@ -203,22 +291,8 @@ def _write_tables(rows: list[dict], output_dir: Path) -> None:
         "\n".join(communication), encoding="utf-8"
     )
 
-    collectives = r"""\begin{tabular}{l r r c c}
-  \toprule
-  operation & \shortstack{count per\\rank/iteration} & $|G|$
-  & \shortstack{payload per call\\TP4/TP8/TP16 [MiB]}
-  & \shortstack{payload sum\\TP4/TP8/TP16 [MiB]} \\
-  \midrule
-  TP AllReduce         & 256 & $N$ & 32 / 32 / 32 & 8192 / 8192 / 8192 \\
-  ZeRO-1 ReduceScatter &  10 & 4   & 8--24 / 4--12 / 2--6 & 193 / 96.5 / 48.25 \\
-  ZeRO-1 AllGather     &  10 & 4   & 8--24 / 4--12 / 2--6 & 193 / 96.5 / 48.25 \\
-  \midrule
-  total                & 276 & --- & --- & 8578 / 8385 / 8288.5 \\
-  \bottomrule
-\end{tabular}
-"""
     (output_dir / "tab_case_study_collectives.tex").write_text(
-        collectives, encoding="utf-8"
+        _collectives_table(run_dir), encoding="utf-8"
     )
 
 
@@ -234,7 +308,7 @@ def main() -> None:
         raise SystemExit(f"headline must contain one isolated iteration, found {headline['iters']}")
     headline_rows = _metrics(headline)
     _plot(headline_rows, args.output_dir)
-    _write_tables(headline_rows, args.output_dir)
+    _write_tables(headline_rows, headline["run_dir"], args.output_dir)
 
     summary = {
         "headline": headline_rows,
