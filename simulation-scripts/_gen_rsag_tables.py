@@ -48,7 +48,9 @@ Models
 """
 import csv, math, os
 
-ROOT = "/Users/wstaempfli/CLionProjects/atlahs"
+ROOT = os.environ.get(
+    "ATLAHS_ROOT",
+    os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")))
 OUT  = os.environ.get("RSAG_OUT",
        os.path.expanduser("~/CLionProjects/thesis-skeleton/figures"))
 T_L, T_SW, B, H, MSS = 50.0, 300.0, 500.0, 64, 4096

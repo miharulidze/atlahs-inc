@@ -6,8 +6,9 @@ import base64
 import csv
 import os
 
-PLOTS = "/Users/wstaempfli/CLionProjects/atlahs/simulation-scripts/isolation-plots"
-OUT = "/private/tmp/claude-501/-Users-wstaempfli-CLionProjects-atlahs/30984ddf-9d6e-478e-80c4-f0162f62f6d1/scratchpad/deck.html"
+_HERE = os.path.dirname(os.path.abspath(__file__))
+PLOTS = _HERE
+OUT = os.environ.get("ISOPLOTS_DECK_OUT", os.path.join(_HERE, "deck.html"))
 
 
 def uri(name):
@@ -41,7 +42,8 @@ def coll_slide(eyebrow, title, takeaway, stats_html, figs_html):
 </section>"""
 
 
-AB_CSV = "/Users/wstaempfli/CLionProjects/atlahs/simulation-scripts/results/scaleup_coll_ab/scaleup_coll_ab.csv"
+AB_CSV = os.path.normpath(os.path.join(
+    _HERE, "..", "results", "scaleup_coll_ab", "scaleup_coll_ab.csv"))
 
 
 def _load_ab():
