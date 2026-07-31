@@ -4,6 +4,7 @@
 // leaf-TOR delivery endpoint). Verifies: single-op completion,
 // wrong-type drop, multi-op concurrency on the same persistent
 // (host, group) sink.
+// Expected bytes are PAYLOAD units (the sink subtracts the per-packet header).
 
 #include "uec_collectives.h"
 #include "uecpacket.h"
@@ -56,7 +57,7 @@ PacketFlow &flow_for_op(uint32_t op_id) {
 int test_single_op_completion() {
     TestableSink sink(/*host=*/0, /*group=*/7);
     sink.register_mcast_op(/*op_id=*/100,
-                           /*expected=*/4096 + UecMcastPacket::acksize,
+                           /*expected=*/4096,  // payload units (sink subtracts acksize)
                            /*end_trigger=*/nullptr);
 
     UecMcastPacket *p = UecMcastPacket::newpkt(flow_for_op(100),
@@ -72,7 +73,7 @@ int test_single_op_completion() {
 //    without affecting the per-op state.
 int test_wrong_packet_type_dropped() {
     TestableSink sink(/*host=*/0, /*group=*/7);
-    sink.register_mcast_op(/*op_id=*/100, /*expected=*/4160,
+    sink.register_mcast_op(/*op_id=*/100, /*expected=*/4096,
                            /*end_trigger=*/nullptr);
 
     UecPacket *p = UecPacket::newpkt(flow_for_op(100), empty_route(),
@@ -89,8 +90,8 @@ int test_wrong_packet_type_dropped() {
 //    distinct op_flow_ids do not contaminate each other.
 int test_multi_op_concurrent() {
     TestableSink sink(/*host=*/0, /*group=*/7);
-    sink.register_mcast_op(7, 4160, nullptr);
-    sink.register_mcast_op(9, 4160, nullptr);
+    sink.register_mcast_op(7, 4096, nullptr);
+    sink.register_mcast_op(9, 4096, nullptr);
 
     UecMcastPacket *p7 = UecMcastPacket::newpkt(flow_for_op(7),
                                                 empty_route(),
