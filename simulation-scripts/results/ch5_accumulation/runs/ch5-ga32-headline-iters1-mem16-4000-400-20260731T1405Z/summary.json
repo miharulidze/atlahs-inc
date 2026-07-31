@@ -1,0 +1,7 @@
+{
+  "audited_configurations": 3,
+  "completed_utc": "2026-07-31T14:17:58Z",
+  "mode": "simulate",
+  "simulator_cells": 6,
+  "table": "tables/results.csv"
+}

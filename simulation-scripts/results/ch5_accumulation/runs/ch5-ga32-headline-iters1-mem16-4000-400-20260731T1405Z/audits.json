@@ -1,0 +1,149 @@
+[
+  {
+    "accumulation": 32,
+    "actual_tp_allreduce_sizes": [
+      33554432
+    ],
+    "actual_tp_allreduces": 256,
+    "actual_zero1_allgathers": 10,
+    "actual_zero1_reduce_scatters": 10,
+    "checks": {
+      "emitted_zero1_baseline_bytes": true,
+      "emitted_zero1_inc_bytes": true,
+      "tp_allreduce_count": true,
+      "tp_allreduce_size": true,
+      "zero1_allgather_once_per_iteration": true,
+      "zero1_reduce_scatter_once_per_iteration": true
+    },
+    "emitted_zero1_baseline": {
+      "actual_ring_send_count": 60,
+      "actual_ring_wire_bytes": 303562752,
+      "checks": {
+        "send_count": true,
+        "wire_bytes": true
+      },
+      "expected_ring_send_count": 60,
+      "expected_ring_wire_bytes": 303562752,
+      "pass": true,
+      "physical_declared_bytes_each_per_iter": 202375168
+    },
+    "emitted_zero1_inc": {
+      "actual_ring_send_count": 60,
+      "actual_ring_wire_bytes": 303562752,
+      "checks": {
+        "send_count": true,
+        "wire_bytes": true
+      },
+      "expected_ring_send_count": 60,
+      "expected_ring_wire_bytes": 303562752,
+      "pass": true,
+      "physical_declared_bytes_each_per_iter": 202375168
+    },
+    "expected_tp_allreduce_bytes": 33554432,
+    "expected_tp_allreduces": 256,
+    "expected_zero1_collectives_each": 10,
+    "microbatch": 1,
+    "pass": true,
+    "skeleton_equal": true,
+    "tag": "tp4_g16_mb1_ga32",
+    "tp": 4
+  },
+  {
+    "accumulation": 32,
+    "actual_tp_allreduce_sizes": [
+      33554432
+    ],
+    "actual_tp_allreduces": 256,
+    "actual_zero1_allgathers": 10,
+    "actual_zero1_reduce_scatters": 10,
+    "checks": {
+      "emitted_zero1_baseline_bytes": true,
+      "emitted_zero1_inc_bytes": true,
+      "tp_allreduce_count": true,
+      "tp_allreduce_size": true,
+      "zero1_allgather_once_per_iteration": true,
+      "zero1_reduce_scatter_once_per_iteration": true
+    },
+    "emitted_zero1_baseline": {
+      "actual_ring_send_count": 60,
+      "actual_ring_wire_bytes": 151781376,
+      "checks": {
+        "send_count": true,
+        "wire_bytes": true
+      },
+      "expected_ring_send_count": 60,
+      "expected_ring_wire_bytes": 151781376,
+      "pass": true,
+      "physical_declared_bytes_each_per_iter": 101187584
+    },
+    "emitted_zero1_inc": {
+      "actual_ring_send_count": 60,
+      "actual_ring_wire_bytes": 151781376,
+      "checks": {
+        "send_count": true,
+        "wire_bytes": true
+      },
+      "expected_ring_send_count": 60,
+      "expected_ring_wire_bytes": 151781376,
+      "pass": true,
+      "physical_declared_bytes_each_per_iter": 101187584
+    },
+    "expected_tp_allreduce_bytes": 33554432,
+    "expected_tp_allreduces": 256,
+    "expected_zero1_collectives_each": 10,
+    "microbatch": 1,
+    "pass": true,
+    "skeleton_equal": true,
+    "tag": "tp8_g32_mb1_ga32",
+    "tp": 8
+  },
+  {
+    "accumulation": 32,
+    "actual_tp_allreduce_sizes": [
+      33554432
+    ],
+    "actual_tp_allreduces": 256,
+    "actual_zero1_allgathers": 10,
+    "actual_zero1_reduce_scatters": 10,
+    "checks": {
+      "emitted_zero1_baseline_bytes": true,
+      "emitted_zero1_inc_bytes": true,
+      "tp_allreduce_count": true,
+      "tp_allreduce_size": true,
+      "zero1_allgather_once_per_iteration": true,
+      "zero1_reduce_scatter_once_per_iteration": true
+    },
+    "emitted_zero1_baseline": {
+      "actual_ring_send_count": 60,
+      "actual_ring_wire_bytes": 75890688,
+      "checks": {
+        "send_count": true,
+        "wire_bytes": true
+      },
+      "expected_ring_send_count": 60,
+      "expected_ring_wire_bytes": 75890688,
+      "pass": true,
+      "physical_declared_bytes_each_per_iter": 50593792
+    },
+    "emitted_zero1_inc": {
+      "actual_ring_send_count": 60,
+      "actual_ring_wire_bytes": 75890688,
+      "checks": {
+        "send_count": true,
+        "wire_bytes": true
+      },
+      "expected_ring_send_count": 60,
+      "expected_ring_wire_bytes": 75890688,
+      "pass": true,
+      "physical_declared_bytes_each_per_iter": 50593792
+    },
+    "expected_tp_allreduce_bytes": 33554432,
+    "expected_tp_allreduces": 256,
+    "expected_zero1_collectives_each": 10,
+    "microbatch": 1,
+    "pass": true,
+    "skeleton_equal": true,
+    "tag": "tp16_g64_mb1_ga32",
+    "tp": 16
+  }
+]

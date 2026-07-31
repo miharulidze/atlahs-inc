@@ -1,0 +1,13 @@
+\begin{tabular}{l r r c c}
+  \toprule
+  operation & \shortstack{count per\\rank/iteration} & $|G|$
+  & \shortstack{payload per call\\TP4/TP8/TP16 [MiB]}
+  & \shortstack{payload sum\\TP4/TP8/TP16 [MiB]} \\
+  \midrule
+  TP AllReduce         & 256 & $N$ & 32 / 32 / 32 & 8192 / 8192 / 8192 \\
+  ZeRO-1 ReduceScatter &  10 & 4   & 8--24 / 4--12 / 2--6 & 193 / 96.5 / 48.25 \\
+  ZeRO-1 AllGather     &  10 & 4   & 8--24 / 4--12 / 2--6 & 193 / 96.5 / 48.25 \\
+  \midrule
+  total                & 276 & --- & --- & 8578 / 8385 / 8288.5 \\
+  \bottomrule
+\end{tabular}
