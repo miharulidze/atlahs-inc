@@ -41,4 +41,6 @@ tools/loggopsim-coll/LogGOPSim-1.1/
 tools/loggopsim-coll/LogGOPSim-1.1.tgz
 # editor / tool caches
 .cache/
-.idea/scopes/
+**/.idea/scopes/
+# macOS Finder junk (the two already-tracked .DS_Store stay tracked; this stops new ones)
+.DS_Store

@@ -1,9 +1,9 @@
 # scaleup_ar_bandwidth — fused apex vs composed RS+AG (reduction bandwidth)
 
-**Status: WIRED, NOT YET RUN.** The code is complete and runnable, but no results are
-produced yet — reduction-bandwidth numbers wait on the in-flight `B_inc != B_ring`
-bandwidth fix. (See "Bug independence" below: the *ratio* is common-mode and would survive
-the fix, but per instruction we hold results until it lands.)
+**Status: RUN 2026-07-26.** Results are tracked (`results/scaleup_ar_bandwidth/`:
+`scaleup_ar_bandwidth.csv`, `ar_bandwidth.pdf/png`). Supplementary material — not a
+thesis asset; the thesis quotes only the isolation-deck summary of this experiment.
+(See "Bug independence" below for why the apex/composed ratio is exact either way.)
 
 ## What this measures
 
@@ -63,7 +63,7 @@ sweep here is the figure; these 3 points are the cross-check.
 # generate + compile both INC arms, NO sim (safe now):
 python3 experiments/scaleup_ar_bandwidth/run.py --validate
 
-# full sweep (RUN ONLY AFTER the B_inc!=B_ring fix lands):
+# full sweep:
 python3 experiments/scaleup_ar_bandwidth/run.py --su-topo scaleup_single_switch_64_4000Gbps.topo
 
 # plot (needs matplotlib; container):
