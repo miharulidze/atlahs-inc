@@ -535,8 +535,10 @@ if __name__ == "__main__":
     fig_ar_speedup(main, "inc_allreduce_speedup.pdf")
     fig_footprint("inc_footprint_bcast_reduce.pdf", ("bcast", "reduce"),
                   group_symbol="N", show_fixed_depth=False)
-    fig_footprint("inc_footprint_rsag.pdf", ("reduce_scatter", "allgather"))
-    fig_footprint("inc_footprint_allreduce.pdf", ("allreduce",))
+    fig_footprint("inc_footprint_rsag.pdf", ("reduce_scatter", "allgather"),
+                  group_symbol="N", show_fixed_depth=False)
+    fig_footprint("inc_footprint_allreduce.pdf", ("allreduce",),
+                  group_symbol="N", show_fixed_depth=False)
     fig_speedup_two_fabrics(main, "bcast", "inc_bcast_speedup.pdf",
                             r"Broadcast, $|G|=64$")
     fig_time(main, "bcast", "inc_bcast_time.pdf")
