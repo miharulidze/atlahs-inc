@@ -72,7 +72,9 @@ def shard_ok(S, N):
     return S // N >= MSS
 
 def wire(x):     return x + H*math.ceil(x/MSS)
-def lam(d):      return 2*(2*d*T_L + (2*d-1)*T_SW) + (2*d-1)*FRAME/B
+def tpkt(x):     return wire(min(x, MSS)) / B
+def lam(d, x=MSS):
+    return 2*(2*d*T_L + (2*d-1)*T_SW) + (2*d-1)*tpkt(x)
 def fill(d, w):  return 2*d*T_L + (2*d-1)*T_SW + 2*d*w/B
 
 def inc_rs(S, N, d, blocks=None):
@@ -109,7 +111,7 @@ def census(N, per_leaf=4, per_pod=16):
     return c
 
 def sizetag(S):
-    for unit, div in (("MB", 1<<20), ("KB", 1<<10)):
+    for unit, div in (("MiB", 1<<20), ("KiB", 1<<10)):
         if S >= div and S % div == 0:
             return f"{S//div}\\,{unit}"
     return f"{S:,}".replace(",", "{,}") + "\\,B"
@@ -248,10 +250,12 @@ PICK_RSAG = (262144, 4194304, 67108864)  # ditto, but every shard >= one MSS at 
 
 def ring_chain(S, N, dmax=None, cen=None):
     """Rooted pipelined chain: K chunks, fill the N-1 stages then drain the rest.
-    On a multi-tier fabric only ONE step is active at a time, so each is charged at its
-    own depth: pass the per-depth step census. On the crossbar every step is d=1."""
-    K = max(N, math.ceil(S / SEG)); c = S // K
-    lat = (N - 1) * lam(dmax) if cen is None else sum(n * lam(d) for d, n in cen.items())
+    The leading chunk crosses the steps sequentially, so each is charged at its own
+    depth: pass the per-depth step census. On the crossbar every step is d=1."""
+    K = max(N, S // SEG); c = S // K
+    assert c * K == S, f"chain size {S} is not divisible by K={K}"
+    lat = ((N - 1) * lam(dmax, c) if cen is None
+           else sum(n * lam(d, c) for d, n in cen.items()))
     return lat + (N + K - 2) * wire(c) / B
 
 def table_duality():
@@ -285,8 +289,8 @@ def table_duality():
 def table_bcast_both():
     """Broadcast on BOTH fabrics in one table, at three message sizes.
 
-    Three sizes rather than nine: one latency-bound (4 KB), one in the knee (256 KB) and
-    one bandwidth-bound (64 MB) is enough to pin two models on two fabrics without
+    Three sizes rather than nine: one latency-bound (4 KiB), one in the knee (256 KiB) and
+    one bandwidth-bound (64 MiB) is enough to pin two models on two fabrics without
     burying the reader in near-identical digits. The two fabrics differ in exactly two
     constants -- t_INC(1) vs t_INC(3) for the tree, and (N-1)lambda vs the step census
     sum_i lambda_i for the chain -- so putting them side by side is what makes the
@@ -306,13 +310,13 @@ def table_bcast_both():
             mi, mb = float(r['inc_ns']), float(r['base_ns'])
             pi = inc_root(S, d)
             pb = ring_chain(S, N, dmax=d, cen=c)
-            K = max(N, math.ceil(S / SEG))
+            K = max(N, S // SEG)
             worst_i = max(worst_i, abs(pi - mi))
             worst_b = max(worst_b, abs(100 * (pb - mb) / mb))
             out.append(f"    {sizetag(S)} & {K} & {num(mi)} & {num(pi)} & "
                        f"{num(mb)} & {num(pb)}\\\\")
     hdr = ("    & & \\multicolumn{2}{c}{$T_{\\mathrm{inc}}$ [ns]}\n"
-           "    & \\multicolumn{2}{c}{$T_{\\mathrm{ring}}^{(1)}$ [ns]}\\\\\n"
+           "    & \\multicolumn{2}{c}{$T_{\\mathrm{ring}}$ [ns]}\\\\\n"
            "    \\cmidrule(lr){3-4} \\cmidrule(lr){5-6}\n"
            "    size & $K$ & meas. & model & meas. & model\\\\")
     return wrap("r r rr rr", hdr, "\n".join(out)), worst_i, worst_b

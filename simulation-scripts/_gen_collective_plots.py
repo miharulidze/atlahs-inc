@@ -202,6 +202,35 @@ def _lam(d):   return 2*(2*d*_TL + (2*d-1)*_TSW) + (2*d-1)*_FRAME/_B
 def _tinc(d):  return 2*d*_TL + (2*d-1)*_TSW + 2*d*_FRAME/_B
 
 
+def _t_pkt(x):
+    """Serialization time of the leading packet of an x-byte stream."""
+    return _fw(min(x, _MSS)) / _B
+
+
+def _lam_chunk(d, x):
+    """Residual round-trip latency after injecting an x-byte ring chunk."""
+    return 2*(2*d*_TL + (2*d-1)*_TSW) + (2*d-1)*_t_pkt(x)
+
+
+def _delta(d, x):
+    """Residual one-way path latency after injecting an x-byte stream."""
+    return 2*d*_TL + (2*d-1)*_TSW + (2*d-1)*_t_pkt(x)
+
+
+def _wire_knee(d):
+    """Smallest integer S for which f_w(S)/B >= delta(d, S)."""
+    lo, hi = 1, _MSS
+    while _fw(hi) / _B < _delta(d, hi):
+        hi *= 2
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if _fw(mid) / _B < _delta(d, mid):
+            lo = mid + 1
+        else:
+            hi = mid
+    return lo
+
+
 def _t_root(d):
     """The chapter's delta(d) as printed in Equation (T-INC): 2d links, 2d-1 switches,
     and 2d-1 store-and-forward frames.
@@ -368,7 +397,7 @@ def fig_ar_speedup(main, fname, N=64):
     plt.close(fig)
 
 
-def fig_footprint(fname, colls):
+def fig_footprint(fname, colls, *, group_symbol="P", show_fixed_depth=True):
     """Network-footprint reduction: baseline byte-link-crossings / in-network ones.
 
     A CAPACITY result, orthogonal to the completion-time figures. The speed-up decays
@@ -400,8 +429,13 @@ def fig_footprint(fname, colls):
     x = list(range(len(ps)))
     w = 0.8 / max(len(colls), 1)
     fig, axes = plt.subplots(1, 2, figsize=(7.4, 3.4), sharey=True)
-    for ax, (tag, cls) in zip(axes, ((r"(a)  single switch, $d{=}1$", "single_switch"),
-                                     (r"(b)  three-tier, $d{=}3$", "fat3tier"))):
+    if show_fixed_depth:
+        panels = ((r"(a)  single switch, $d{=}1$", "single_switch"),
+                  (r"(b)  three-tier, $d{=}3$", "fat3tier"))
+    else:
+        panels = ((r"(a)  single switch", "single_switch"),
+                  (r"(b)  three-tier fat tree", "fat3tier"))
+    for ax, (tag, cls) in zip(axes, panels):
         for k, coll in enumerate(colls):
             d = {int(r["group_size"]): float(r["ratio_bytes"]) for r in rows
                  if r["topology_class"] == cls and r["collective"] == coll}
@@ -414,7 +448,7 @@ def fig_footprint(fname, colls):
         ax.tick_params(axis="both", labelsize=9)
         ax.grid(True, axis="y", ls=":", alpha=0.6)
         ax.set_axisbelow(True)
-        ax.set_xlabel(r"group size $P$", fontsize=10)
+        ax.set_xlabel(f"group size ${group_symbol}$", fontsize=10)
         ax.set_title(tag, fontsize=10)
     axes[0].set_ylabel("footprint reduction\n(endpoint $/$ in-network)", fontsize=10)
     h, l = axes[0].get_legend_handles_labels()
@@ -428,44 +462,54 @@ def fig_footprint(fname, colls):
 def fig_regimes(main, fname, N=64):
     """Where the speed-up formula hands over from its latency bound to its bandwidth one.
 
-        speedup(S) = (L_ring + c(S) T) / (L_inc + T),   T = f_w(S)/B,  c = (N+K-2)/K
+        x = S/K,  K = max(N, floor(S/SEG))
+        speedup(S) = [sum_i lambda_i(x) + (N+K-2) f_w(x)/B]
+                     / [delta(d,S) + f_w(S)/B]
 
-    monotonically decays from L_ring/L_inc to c, because L_ring/L_inc >> c. Both ends are
-    drawn as asymptotes and the hand-over is marked at T = L_inc, the size at which the
-    in-network arm stops being latency-bound. That size scales with tree depth, which is
-    what makes the two fabrics' curves cross."""
+    The red line is the small-positive-payload latency limit. The green line is the exact
+    ratio of the two serialization terms; once chunks are MSS-aligned it equals
+    (N+K-2)/K. The hand-over is marked at the exact integer payload for which
+    f_w(S)/B reaches delta(d,S)."""
     sizes = [2**k for k in range(12, 29)]
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.6), sharey=True)
-    for ax, (tag, topo, d, Lr) in zip(axes, (
-            (r"(a)  single switch, $d{=}1$", SS, 1, (N-1)*_lam(1)),
-            (r"(b)  three-tier, $d{=}3$",    FT, 3,
-             sum(n*_lam(dd) for dd, n in _census(N).items())))):
-        Li = _t_root(d)
+    for ax, (tag, topo, d, census) in zip(axes, (
+            (r"(a)  single switch, $d{=}1$", SS, 1, {1: N-1}),
+            (r"(b)  three-tier, $d{=}3$",    FT, 3, _census(N)))):
         model, bw = [], []
         for S in sizes:
-            K = max(N, math.ceil(S / _SEG))
-            T = _fw(S) / _B
-            c = (N + K - 2) / K
-            model.append((Lr + c*T) / (Li + T))
-            bw.append(c)
+            K = max(N, S // _SEG)
+            assert S % K == 0, f"rooted-ring size {S} is not divisible by K={K}"
+            chunk = S // K
+            Lr = sum(count * _lam_chunk(depth, chunk)
+                     for depth, count in census.items())
+            ring = Lr + (N + K - 2) * _fw(chunk) / _B
+            inc = _delta(d, S) + _fw(S) / _B
+            model.append(ring / inc)
+            bw.append((N + K - 2) * _fw(chunk) / _fw(S))
         ax.plot(sizes, model, color="#1f77b4", lw=1.9, label="model")
         m = series(main, "bcast", topo=topo)
         if m:
             ax.plot([x[0] for x in m], [x[2]/x[1] for x in m], "o", ms=5,
                     color="#1f77b4", mfc="white", mew=1.4, label="measured")
-        ax.axhline(Lr/Li, color="#d62728", ls="--", lw=1.2,
-                   label=r"latency bound $\sum_i\lambda_i / \delta(d)$")
+        header_ser = _H / _B
+        Lr_small = sum(count * (2*(2*depth*_TL + (2*depth-1)*_TSW)
+                                + (2*depth-1)*header_ser)
+                       for depth, count in census.items())
+        Li_small = 2*d*_TL + (2*d-1)*(_TSW + header_ser)
+        latency_bound = Lr_small / Li_small
+        ax.axhline(latency_bound, color="#d62728", ls="--", lw=1.2,
+                   label=r"small-message limit")
         ax.plot(sizes, bw, color="#2ca02c", ls=":", lw=1.6,
-                label=r"bandwidth bound $(N{+}K{-}2)/K$")
-        Sk = Li * _B
+                label="exact serialization ratio")
+        Sk = _wire_knee(d)
         ax.axvline(Sk, color="black", lw=0.8, ls="-.", alpha=0.55)
         # Label the CONDITION that fixes this x-position, not a bare "T": the chapter
         # uses T with subscripts for completion TIMES, so "T = t_INC" reads as the
         # completion time equalling its own floor, which happens only at S = 0.
-        ax.annotate(f"$f_w(S)/B = \\delta(d)$\n{Sk/1024:.0f} KiB",
+        ax.annotate(f"$f_w(S)/B = \\delta(d,S)$\n{Sk/1024:.0f} KiB",
                     xy=(Sk, 2.6), xytext=(Sk*1.45, 3.2), fontsize=7, color="black",
                     va="center")
-        ax.text(0.97, 0.93, f"{Lr/Li:.0f}$\\times$", transform=ax.transAxes,
+        ax.text(0.97, 0.93, f"{latency_bound:.0f}$\\times$", transform=ax.transAxes,
                 ha="right", va="top", fontsize=8, color="#d62728")
         style(ax, ylabel=None)
         plain_log_y(ax, [1, 2, 5, 10, 20, 50, 100, 200])
@@ -489,7 +533,8 @@ if __name__ == "__main__":
     fig_regimes(main, "inc_bcast_regimes.pdf")
     fig_rsag_regimes(main, "inc_rsag_regimes.pdf")
     fig_ar_speedup(main, "inc_allreduce_speedup.pdf")
-    fig_footprint("inc_footprint_bcast_reduce.pdf", ("bcast", "reduce"))
+    fig_footprint("inc_footprint_bcast_reduce.pdf", ("bcast", "reduce"),
+                  group_symbol="N", show_fixed_depth=False)
     fig_footprint("inc_footprint_rsag.pdf", ("reduce_scatter", "allgather"))
     fig_footprint("inc_footprint_allreduce.pdf", ("allreduce",))
     fig_speedup_two_fabrics(main, "bcast", "inc_bcast_speedup.pdf",
