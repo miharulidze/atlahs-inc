@@ -7,7 +7,7 @@
 # 4000 Gbps and move ONLY the NIC gate.  If the floor is the gate it scales with it; if it
 # is fabric serialisation or latency it does not move at all.
 set -uo pipefail
-R=/Users/wstaempfli/CLionProjects/atlahs
+R="$(cd "$(dirname "$0")/../.." && pwd)"
 for RATE in 2000000 4000000 8000000 16000000; do
   OUT=/workspace/simulation-scripts/results/_floorprobe_$RATE
   rm -rf "$R/simulation-scripts/results/_floorprobe_$RATE"

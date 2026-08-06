@@ -1,11 +1,9 @@
-from calendar import c
 import os
 import argparse
 import sys
 import subprocess
 
 LOGGOPSIM_DIR = "sim/LogGOPSim"
-HTSIM_DIR = "sim/htsim-backend/sim"
 ASTRASIM_DIR = "apps/ai/astra-sim"
 HPC_GOAL_GEN_DIR = "goal_gen/hpc"
 HPC_APPS_DIR = "apps/hpc"
@@ -59,25 +57,6 @@ def build_loggopsim(verbose: bool = True) -> None:
     os.chdir(CURR_DIR)
     
 
-def build_htsim(verbose: bool = True) -> None:
-    print_info("Building the HTSim...", verbose)
-    assert os.path.exists(HTSIM_DIR), "HTSim not found"
-    os.chdir(HTSIM_DIR)
-
-    # Build the HTSim binary
-    subprocess.run(
-        "make clean && cd datacenter/ && make clean && cd .. && "
-        "make -j 8 && cd datacenter/ && make -j 8 && cd ..",
-        shell=True,
-        check=True,
-        stdout=sys.stderr,
-        stderr=sys.stderr
-    )
-    print_success("HTSim built successfully", verbose)
-
-    os.chdir(CURR_DIR)
-
-
 def build_astrasim(verbose: bool = True) -> None:
     print_info("Building the AstraSim...", verbose)
     assert os.path.exists(ASTRASIM_DIR), "AstraSim not found"
@@ -108,7 +87,6 @@ def build_astrasim(verbose: bool = True) -> None:
 def build_sims(verbose: bool = True) -> None:
     print_info("Building the simulators...")
     build_loggopsim(verbose)
-    build_htsim(verbose)
     build_astrasim(verbose)
 
 

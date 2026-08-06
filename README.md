@@ -11,13 +11,38 @@ An Application-centric Network Simulator Toolchain for AI, HPC, and Distributed 
 ## Warning
 This repository is still under active development. The code is not yet stable, and the documentation is not yet finalized.
 
+## Thesis simulation artifact
+
+The CPU-only experiment harness used for the in-network-collective thesis work is
+maintained separately from the full GPU tracing environment:
+
+- [`simulation-scripts/README.md`](simulation-scripts/README.md) defines the supported
+  experiment scope and model boundaries.
+- [`simulation-scripts/REPRODUCING.md`](simulation-scripts/REPRODUCING.md) gives the
+  frozen Chapter 4 and Chapter 5 recipes and maps the tracked data to figures and tables.
+- [`simulation-scripts/REFERENCE_DATA.md`](simulation-scripts/REFERENCE_DATA.md) records
+  dataset lineage and the historical-versus-release timing policy.
+- [`simulation-scripts/PUBLICATION_CHECKLIST.md`](simulation-scripts/PUBLICATION_CHECKLIST.md)
+  lists the remaining source, licensing, and rerun gates for a public handoff.
+- [`wstaempfli/pcm-sdk`](https://github.com/wstaempfli/pcm-sdk/tree/wanja/inc-port)
+  publishes the exact PCM/HTSim backend used by the harness; this repository pins the
+  tested revision as `sim/pcm-sdk_zhiyi`.
+- [`wstaempfli/nccl_generator_v2`](https://github.com/wstaempfli/nccl_generator_v2/tree/simple-sim-coll)
+  publishes the matching NCCL/`simple_sim` GOAL generator pinned at
+  `goal_gen/ai/nccl_generator_v2`.
+
+Use the `atlahs-sim` image described there for these experiments. The top-level
+`atlahs` image below is the full ATLAHS tracing and generation toolchain and is not
+needed to reproduce the thesis simulations.
+
 ## Overview
 ![Overview](docs/overview.png)
 
 This repository contains the source code for ATLAHS, a network simulator toolchain for AI, HPC, and storage applications. It contains the following components, detailed documentation of which can be found in their corresponding directories:
 - Applications (`apps/`): A collection of applications that are used to test the toolchain.
 - GOAL (Group Operation Assembly Language) generators (`goal_gen/`): Tools that trace AI, HPC, and storage applications and converts them into network workloads usable by network simulators.
-- Simulation backends (`backends/`): Various backends for simulating network workloads, including LogGOPSim, HTSim, and NS-3 (in progress).
+- Simulation backends (`sim/`): LogGOPSim plus the public PCM/HTSim submodule used by
+  the thesis artifact. The former standalone HTSim development copy was retired.
 
 ## Custom NCCL builds (NVTX / tracing)
 
@@ -63,7 +88,8 @@ docker run --user $(id -u):$(id -g) -v $(pwd):/workspace atlahs run -q
 This fetches a small subset of the ATLAHS traces from the SPCL storage server,
 and tests the functionality of the ATLAHS toolchain. It converts the raw traces of
 AI (nsys-reports) and HPC (PMPI traces) applications into the [GOAL format](https://ieeexplore.ieee.org/document/5362477),
-and simulates the workloads with different backends (e.g., LogGOPSim, htsim) in ATLAHS.
+and runs the maintained validation path. The thesis PCM experiments use the separately
+documented `simulation-scripts/` entrypoint.
 
 ## Citation
 

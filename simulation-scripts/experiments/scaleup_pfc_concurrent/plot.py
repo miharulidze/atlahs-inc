@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Figures + validation table for the PFC backpressure suite (AA-plan-PFC-Validation).
+"""Figures and validation table for the PFC backpressure release suite.
 
 Emits into the results dir:
   pfc_backpressure.pdf/.png   completion vs N, pinned vs distributed, 2 sizes,

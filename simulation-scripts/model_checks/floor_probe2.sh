@@ -4,7 +4,7 @@
 # ONE parameter doubled each.  Latency x2 -> lambda goes 808.3 -> 1608.3; rate x2 -> tau_b
 # and t_ser halve.  Whichever the floor follows identifies it.
 set -uo pipefail
-R=/Users/wstaempfli/CLionProjects/atlahs
+R="$(cd "$(dirname "$0")/../.." && pwd)"
 for T in _probe_single_switch_64_lat2x _probe_single_switch_64_bw2x; do
   OUT=/workspace/simulation-scripts/results/_floorprobe2_$T
   rm -rf "$R/simulation-scripts/results/_floorprobe2_$T"

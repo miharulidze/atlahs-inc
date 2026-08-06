@@ -1,2 +1,20 @@
-results/
+# Runtime results are ignored unless they are already tracked reference data.
+results/*
+
+# Preserve the surviving exact-source snapshot for the historical Chapter 5
+# data-of-record run. The adjacent provenance note explains its limitations.
+!results/ch5_accumulation/
+results/ch5_accumulation/*
+!results/ch5_accumulation/runs/
+results/ch5_accumulation/runs/*
+!results/ch5_accumulation/runs/ch5-ga32-headline-iters1-mem16-4000-400-20260731T1405Z/
+results/ch5_accumulation/runs/ch5-ga32-headline-iters1-mem16-4000-400-20260731T1405Z/*
+!results/ch5_accumulation/runs/ch5-ga32-headline-iters1-mem16-4000-400-20260731T1405Z/PROVENANCE.md
+!results/ch5_accumulation/runs/ch5-ga32-headline-iters1-mem16-4000-400-20260731T1405Z/source_snapshot/
+!results/ch5_accumulation/runs/ch5-ga32-headline-iters1-mem16-4000-400-20260731T1405Z/source_snapshot/**
 __pycache__/
+
+# Generated convenience figures and self-contained slide deck. The source CSVs and
+# experiment-local plotting scripts are tracked.
+isolation-plots/*.png
+isolation-plots/deck.html

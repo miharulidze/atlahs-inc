@@ -1,5 +1,8 @@
 # intranode_linkspeed_sweep — INC vs baseline, trace-free Llama iteration
 
+**Status: superseded.** This runner is retained for provenance and sensitivity studies.
+Use `../ch5_accumulation/` for the canonical Chapter 5 experiment.
+
 Reproduces the shape of the *"Tuning Intranode Link Speed"* figure as a purely
 **synthetic** INC-vs-endpoint A/B (no captured trace, no GPU). For each
 parallelism config we synthesize one Llama-2-7B training iteration with the
@@ -85,7 +88,7 @@ the fabric pipe and scale-out NIC always carry the same selected rate. Outputs
 are suffixed `_ib<N>` so variants coexist.
 
 **Congestion control (per-tier).** The two tiers model different fabrics, so they
-run different CC (see `AA-plan-Intranode-CC-Bypass`, local, untracked):
+run different congestion-control treatments:
 
 - **Scale-out (DP/PP)** keeps **DCTCP** via PCM (`-pcm_enable` +
   `pcm_cc_config_all_uec_dctcp_v2.json`, loading `libuec_dctcp_v2.so` from
@@ -148,11 +151,11 @@ and `internode_linkspeed_{time,speedup}_pp1_su4000_h100_te.png`.
 ## Run (Docker)
 
 ```bash
-docker build -f simulation-scripts/Dockerfile -t atlahs-sim .
-docker run --rm -v "$(pwd)":/workspace atlahs-sim build            # one-time
-docker run --rm -v "$(pwd)":/workspace atlahs-sim run intranode_linkspeed_sweep --validate
-docker run --rm -v "$(pwd)":/workspace atlahs-sim run intranode_linkspeed_sweep --batch 32
-docker run --rm -v "$(pwd)":/workspace atlahs-sim run intranode_linkspeed_sweep --batch 32 --speeds 4000 # main 4000/400 point only
+docker build -t atlahs-sim simulation-scripts/
+docker run --rm --user "$(id -u):$(id -g)" -v "$(pwd)":/workspace atlahs-sim build
+docker run --rm --user "$(id -u):$(id -g)" -v "$(pwd)":/workspace atlahs-sim run intranode_linkspeed_sweep --validate
+docker run --rm --user "$(id -u):$(id -g)" -v "$(pwd)":/workspace atlahs-sim run intranode_linkspeed_sweep --batch 32
+docker run --rm --user "$(id -u):$(id -g)" -v "$(pwd)":/workspace atlahs-sim run intranode_linkspeed_sweep --batch 32 --speeds 4000
 ```
 
 For the unattended thesis matrix (TP4/8/16 scale-up sweep, scale-out

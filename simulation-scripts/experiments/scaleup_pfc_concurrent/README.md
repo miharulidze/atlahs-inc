@@ -1,6 +1,7 @@
 # scaleup_pfc_concurrent — PFC / lossless-backpressure validation
 
-**Status: COMPLETE (2026-07-28). Requires the instrumented pcm build
+**Status: historical validation bundle completed 2026-07-28. A publication release must
+rerun it on the exact public backend commit. Requires the instrumented pcm build
 (`-mcast_pin`, PFC counters, `-pfc_trace`).**
 
 ## What this validates
@@ -17,6 +18,10 @@ provides the three-legged proof:
    radix×BDP shared-buffer egress cap).
 3. **Tripwire liveness** — deliberately mis-provisioned controls make the warn lines
    reappear, so the zeros elsewhere are measurements, not blind spots.
+
+This validates the simulator's one-class, link-wide PFC-style abstraction for the
+tested workloads. It is not standards PFC, per-VC CBFC, or a deadlock proof for arbitrary
+mixed traffic.
 
 ## Measured outcome (2026-07-28)
 
@@ -71,7 +76,8 @@ contended resource.
 - `HTSIM_spcl-patch/queue_lossless_input.{h,cpp}` + `queue_lossless_output.{h,cpp}`:
   pause/resume counters, per-class peak-occupancy watermarks, `-pfc_trace` event log
   (`PFC_SUMMARY_INGRESS/_EGRESS` printed at teardown next to `NIC_PFC_GATE`).
-  Timing-neutral: 21/21 archived `scaleup_coll_ab` cells reproduce bit-exact.
+  The counters do not intentionally alter queue scheduling; timing compatibility is
+  nevertheless checked by rerunning the release matrices, not assumed from old cells.
 - `HTSIM_spcl-patch/datacenter/fat_tree_topology.cpp`: accountants named
   `VQ-<from>-><to>(<bank>)` for the trace/raster labels.
 - `pcm/apps/htsim_atlahs/htsim_app_atlahs.cpp`: `-pfc_trace` flag; teardown dumps.
@@ -80,15 +86,16 @@ contended resource.
 ## Reproduce
 
 ```bash
-docker run --rm -v $(pwd):/workspace atlahs-sim build            # instrumented binary
-docker run --rm -v $(pwd):/workspace atlahs-sim run scaleup_pfc_concurrent --validate
-experiments/scaleup_pfc_concurrent/run_thesis.sh                 # stress+census+controls+overdrive
-docker run --rm -v $(pwd):/workspace --entrypoint python3 atlahs-sim \
+docker run --rm --user "$(id -u):$(id -g)" -v "$(pwd)":/workspace atlahs-sim build
+docker run --rm --user "$(id -u):$(id -g)" -v "$(pwd)":/workspace atlahs-sim run scaleup_pfc_concurrent --validate
+simulation-scripts/experiments/scaleup_pfc_concurrent/run_thesis.sh  # stress+census+controls+overdrive
+docker run --rm --user "$(id -u):$(id -g)" -v "$(pwd)":/workspace --entrypoint python3 atlahs-sim \
     /workspace/simulation-scripts/experiments/scaleup_pfc_concurrent/plot.py
 ```
 
-Outputs in `simulation-scripts/results/scaleup_pfc_concurrent/`:
+Tracked reference outputs in `simulation-scripts/results/scaleup_pfc_concurrent/`:
 `scaleup_pfc_concurrent.csv` (stress), `pfc_census.csv`, `pfc_controls.csv`,
-`pfc_overdrive.csv`, `traces/*.csv`, `pfc_backpressure|pfc_sawtooth|pfc_raster.pdf`,
-`tab_pfc_validation.tex`. Full stdout per run is retained gzipped under `logs/`.
-Design + findings: `simulation-scripts/AA-plan-PFC-Validation/plan.md` (local, untracked).
+`pfc_overdrive.csv`, selected `traces/*.csv.gz`, `pfc_backpressure|pfc_sawtooth|pfc_raster.pdf`,
+`tab_pfc_validation.tex`. Fresh runs retain gzipped stdout under ignored `logs/`; those
+logs are not part of the tracked reference bundle. The selected compressed traces used
+by the figures are tracked.

@@ -47,7 +47,7 @@ The fixed scale-out (inter-node) fabric bandwidth is selectable via
 the same exact rate, and every output name carries the bandwidth and model.
 
 Reproduce (Docker, sim-only image):
-  docker build -f simulation-scripts/Dockerfile -t atlahs-sim .
+  docker build -t atlahs-sim simulation-scripts/
   docker run --rm -v $(pwd):/workspace atlahs-sim build
   docker run --rm -v $(pwd):/workspace atlahs-sim run intranode_linkspeed_sweep --validate
   docker run --rm -v $(pwd):/workspace atlahs-sim run intranode_linkspeed_sweep --batch 32
@@ -379,7 +379,7 @@ SO_QSIZE_BYTES_PER_GBPS = 10000
 def so_qsize_bytes(so_gbps):
     return SO_QSIZE_BYTES_PER_GBPS * so_gbps
 
-# Intranode CC bypass (AA-plan-Intranode-CC-Bypass): the scale-up domain models
+# Intranode CC bypass: the scale-up domain models
 # NVLink, which has NO end-to-end congestion control -- only NIC line-rate
 # serialization + lossless PFC. So the intranode tier runs `-intranode_cc none`
 # (plain UecSrc, native CONSTANT no-op window), while the scale-out fabric KEEPS
@@ -514,9 +514,9 @@ def generate_arms(cfg, layers, iters, tmpdir):
     goal.compile_goal(base_goal, base_bin)
     goal.compile_goal(inc_goal, inc_bin)
 
-    # Validate the derived scale-up grouping = the TP groups, then convert the
-    # generator's GLOBAL-rank groups to the NODE-LOCAL ids the simulator expects
-    # (rank % gpn), asserting each group is contained in one scale-up domain.
+    # Validate the derived scale-up grouping = the TP groups. Current generators
+    # already emit node-local hosts; the modulo conversion remains idempotent and
+    # keeps old cached traces with global-rank sidecars usable.
     gpn = cfg["tp"]
     with open(groups) as f:
         grp = [[int(x) for x in ln.split()] for ln in f if ln.strip()]

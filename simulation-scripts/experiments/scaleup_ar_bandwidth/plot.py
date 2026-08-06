@@ -5,8 +5,8 @@ Reduction bandwidth 8*S/T (Gbit/s) vs message size, one line per in-network
 structure, with the wire-speed reference line. Measured-only -- no theory/model
 curves (per the 2026-07-23 thesis decision to keep the plots measured-only).
 
-Emits ar_bandwidth.pdf (+ .png preview) into the results dir. Copy the PDF into
-thesis-skeleton/figures/matplotlib/ for the manuscript.
+Emits ar_bandwidth.pdf (+ .png preview) into the results directory. A paper checkout
+may copy the PDF into its own manuscript asset tree.
 
 Run in the container (matplotlib lives there):
   docker run --rm -v "$(pwd)":/workspace --entrypoint python3 atlahs-sim \

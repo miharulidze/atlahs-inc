@@ -1,5 +1,0 @@
-# K=16, |G|=3, all on one TOR (hosts 0-7 share TOR 0).
-Nodes 1024
-Grp 0 1 2
-Connections 1
-0->0 id 1 start_bcast 0 size 4096

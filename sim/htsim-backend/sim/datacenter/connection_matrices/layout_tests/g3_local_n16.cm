@@ -1,5 +1,0 @@
-# K=4, |G|=3, all on TOR 0 (pod 0). Best-case fabric latency.
-Nodes 16
-Grp 0 1 2
-Connections 1
-0->0 id 1 start_bcast 0 size 4096

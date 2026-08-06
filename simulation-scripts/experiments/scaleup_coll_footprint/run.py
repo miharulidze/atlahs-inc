@@ -15,7 +15,7 @@ Ring / Recursive-Doubling decomposition. The INC footprint is algorithm-independ
 so per (collective, P, topology) we run ONE INC arm and one baseline per algorithm;
 Ring and RD share the same INC denominator (exactly the paper's two-bar structure).
 
-TWO topology classes (see AA-plan-Footprint-Reduction/plan.md):
+Two thesis topology classes:
   * single-switch (one 64-host crossbar): every pair is 2 hops, so Ring == RD ==
     2-2/P (flat plateau at 2x). The constant-hop control.
   * 3-tier fat-tree (one 256-host tree, 4 hosts/leaf x 4 leaves/pod x 16 pods):
@@ -39,9 +39,9 @@ ceil-quantization drift. The footprint ratio is size-independent (paper's "N can
 so mult=1 is the cheap default; --size-mults sweeps a control to show the plateau.
 
 Reproduce (Docker, sim-only image; the pcm binary is a Linux build):
-  docker run --rm -v $(pwd):/workspace atlahs-sim build
-  docker run --rm -v $(pwd):/workspace atlahs-sim run scaleup_coll_footprint --validate
-  docker run --rm -v $(pwd):/workspace atlahs-sim run scaleup_coll_footprint
+  docker run --rm --user "$(id -u):$(id -g)" -v $(pwd):/workspace atlahs-sim build
+  docker run --rm --user "$(id -u):$(id -g)" -v $(pwd):/workspace atlahs-sim run scaleup_coll_footprint --validate
+  simulation-scripts/experiments/scaleup_coll_footprint/run_thesis.sh
 """
 import argparse
 import os
@@ -117,6 +117,7 @@ def run_exp(topos, collectives, size_mults, tmpdir, timeout):
     os.makedirs(tmpdir, exist_ok=True)
     csv_path = os.path.join(OUTPUT_DIR, f"{EXP_NAME}.csv")
     cases = [c for c in COLL_CASES if c["collective"] in collectives]
+    failures = 0
     with report.CsvAppender(csv_path, CSV_FIELDS) as out:
         for topo in topos:
             cls, su_name, width = topo["cls"], topo["topo"], topo["width"]
@@ -154,6 +155,11 @@ def run_exp(topos, collectives, size_mults, tmpdir, timeout):
                                 timeout=timeout, intranode_linkspeed=INTRANODE_LINKSPEED)
                             rc = f"{bc / ic:.4f}" if (ic and bc) else ""
                             rb = f"{bb / ib:.4f}" if (ib and bb) else ""
+                            ok = bool(imk and bmk and ic and bc and ib and bb
+                                      and ist == "ok" and bst == "ok"
+                                      and idr == 0 and bdr == 0)
+                            if not ok:
+                                failures += 1
                             out.write({
                                 "topology_class": cls, "su_topo": su_name,
                                 "collective": coll, "baseline_algo": algo,
@@ -168,10 +174,14 @@ def run_exp(topos, collectives, size_mults, tmpdir, timeout):
                                 "mtu": MTU, "intranode_linkspeed_mbps": INTRANODE_LINKSPEED,
                                 "engine": "pcm-sdk", "command": icmd,
                             })
-                            st = "ok" if (ist == "ok" and bst == "ok") else f"inc={ist},base={bst}"
+                            st = "ok" if ok else f"inc={ist},base={bst}"
                             print(f"  {coll:>14} {algo:>7} P={p:>4} m={mult}: "
                                   f"ratio_bytes={rb or '-':>7}  (crosses {ic}->{bc})  {st}")
+    if failures:
+        report.print_error(f"{failures} simulation cell(s) failed; partial CSV: {csv_path}")
+        return 1
     report.print_success(f"wrote results to {csv_path}")
+    return 0
 
 
 def validate(tmpdir):
@@ -226,7 +236,7 @@ def main():
             t["P"] = [p for p in t["P"] if p <= args.max_p]
     collectives = args.collectives.split(",")
     size_mults = [int(x) for x in args.size_mults.split(",")]
-    run_exp(topos, collectives, size_mults, args.tmpdir, args.timeout)
+    sys.exit(run_exp(topos, collectives, size_mults, args.tmpdir, args.timeout))
 
 
 if __name__ == "__main__":

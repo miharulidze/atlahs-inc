@@ -11,7 +11,7 @@
 # If the growth collapses, the window is confirmed; if it does not, _maxwnd is clamping the
 # knob and that itself is worth knowing.
 set -uo pipefail
-R=/Users/wstaempfli/CLionProjects/atlahs
+R="$(cd "$(dirname "$0")/../.." && pwd)"
 for CW in 0 2000000; do
   TAG=$([ "$CW" = 0 ] && echo default || echo bigcwnd)
   OUT=/workspace/simulation-scripts/results/_floorprobe7_$TAG

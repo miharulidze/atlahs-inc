@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Scale-up INC-vs-endpoint collective A/B experiment (AllReduce / ReduceScatter /
-AllGather), isolated to a single scale-up domain, on the pcm-sdk two-tier simulator.
+"""Scale-up INC-vs-endpoint collective A/B experiment, isolated to a single
+scale-up domain, on the pcm-sdk two-tier simulator.
 
-Design (AA-plan-Scaleup-Baselines, locked 2026-07-20):
+Frozen A/B design (locked 2026-07-20):
   * INC arm   = one first-class `coll <kind>` op per rank + a .groups sidecar.
   * Baseline  = the GENERATOR's OWN decomposition, emitted by calling
                 goal_gen/ai/nccl_generator_v2/communication.py directly (Ring /
@@ -10,19 +10,21 @@ Design (AA-plan-Scaleup-Baselines, locked 2026-07-20):
                 NOT hand-rolled.
   * Charge NEITHER arm for reduction compute (-reduce_compute_latency 0); the A/B
     isolates data movement + step count. (--reduce-compute >0 = sensitivity study.)
-  * AllReduce runs BOTH ring and recursive-doubling baselines; RS/AG ring-only.
-Isolation: all N ranks in node 0 of one scale-up domain (-nodes N -num_gpus_per_node N),
-so the whole collective runs intranode, no scale-out flows.
+  * AllReduce runs BOTH ring and recursive-doubling baselines; RS/AG/Bcast/Reduce
+    use ring-family endpoint baselines; composed RS+AG is a separate INC arm.
+Isolation: all N active ranks occupy domain 0. `-num_gpus_per_node` is the selected
+scale-up topology's fixed width, so group-size sweeps partially populate that domain
+without resizing the fabric; no scale-out flows are emitted.
 
 Paths resolve via common/paths.py (repo root derived from this file; each path
 env-overridable). Output defaults to simulation-scripts/results/scaleup_coll_ab/
 (override: SCALEUP_OUTPUT_DIR).
 
 Reproduce (Docker, sim-only image):
-  docker build -f simulation-scripts/Dockerfile -t atlahs-sim .
-  docker run --rm -v $(pwd):/workspace atlahs-sim build   # pcm INC binary + coll-txt2bin
-  docker run --rm -v $(pwd):/workspace atlahs-sim run scaleup_coll_ab --validate   # no sim
-  docker run --rm -v $(pwd):/workspace atlahs-sim run scaleup_coll_ab --n 8 --su-topo <topo>
+  docker build -t atlahs-sim simulation-scripts/
+  docker run --rm --user "$(id -u):$(id -g)" -v $(pwd):/workspace atlahs-sim build
+  docker run --rm --user "$(id -u):$(id -g)" -v $(pwd):/workspace atlahs-sim run scaleup_coll_ab --validate
+  docker run --rm --user "$(id -u):$(id -g)" -v $(pwd):/workspace atlahs-sim run scaleup_coll_ab --n 8 --su-topo <topo>
 Local (no Docker; binaries built in-tree):
   python3 experiments/scaleup_coll_ab/run.py --validate
 """
@@ -108,7 +110,11 @@ def validate(n, size, tmpdir):
 def run_exp(n, sizes, su_topo, so_topo, reduce_compute, tmpdir, timeout):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     os.makedirs(tmpdir, exist_ok=True)
+    su_width = sim.topology_nodes(su_topo)
+    if n > su_width:
+        raise ValueError(f"group size N={n} exceeds scale-up topology width {su_width}")
     csv_path = os.path.join(OUTPUT_DIR, "scaleup_coll_ab.csv")
+    failures = 0
     with report.CsvAppender(csv_path, CSV_FIELDS) as out:
         for case in COLL_CASES:
             coll, algo = case["collective"], case["algo"]
@@ -132,17 +138,24 @@ def run_exp(n, sizes, su_topo, so_topo, reduce_compute, tmpdir, timeout):
                 goal.compile_goal(inc, inc[:-5] + ".bin")
                 log = os.path.join(OUTPUT_DIR, "logs", f"{label}_{algo}_{n}_{s}.log")
                 os.makedirs(os.path.dirname(log), exist_ok=True)
-                ifin, idrop, ist, icmd, _ = sim.run_sim(inc[:-5] + ".bin", so_topo, su_topo,
-                                                     nodes=n, gpus_per_node=n, groups=grp,
-                                                     reduce_compute=reduce_compute,
-                                                     timeout=timeout,
-                                                     intranode_linkspeed=INTRANODE_LINKSPEED)
+                ifin, idrop, ist, icmd, _ = sim.run_sim(
+                    inc[:-5] + ".bin", so_topo, su_topo,
+                    nodes=n, gpus_per_node=su_width, groups=grp,
+                    reduce_compute=reduce_compute, timeout=timeout,
+                    intranode_linkspeed=INTRANODE_LINKSPEED)
                 bfin, bdrop, bst, _, _px = sim.run_sim(base[:-5] + ".bin", so_topo, su_topo,
+                                                  # No group/FIB installation is needed on the P2P
+                                                  # arm. Keeping its API width at the active rank
+                                                  # count preserves the frozen flow-id/ECMP stream;
+                                                  # both arms still occupy one scale-up fabric.
                                                   nodes=n, gpus_per_node=n, timeout=timeout,
                                                   intranode_linkspeed=INTRANODE_LINKSPEED)
                 inc_ns = ifin - TAIL_NS if ifin else None
                 base_ns = bfin - TAIL_NS if bfin else None
-                ok = inc_ns and base_ns and ist == "ok" and bst == "ok"
+                ok = bool(inc_ns and base_ns and ist == "ok" and bst == "ok"
+                          and idrop == 0 and bdrop == 0)
+                if not ok:
+                    failures += 1
                 speedup = base_ns / inc_ns if ok else None
                 with open(log, "w") as lf:
                     lf.write(icmd + "\n")
@@ -162,17 +175,20 @@ def run_exp(n, sizes, su_topo, so_topo, reduce_compute, tmpdir, timeout):
                 if idrop or bdrop:
                     st += f" WARN drops={idrop + bdrop}"
                 print(f"  {s:>10}b  INC {str(inc_ns):>9}  BASE {str(base_ns):>9}  {sp:>7}  {st}")
+    if failures:
+        report.print_error(f"{failures} simulation cell(s) failed; partial CSV: {csv_path}")
+        return 1
     report.print_success(f"wrote results to {csv_path}")
+    return 0
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--n", type=int, default=DEFAULT_N, help="scale-up domain width (ranks)")
+    ap.add_argument("--n", type=int, default=DEFAULT_N, help="active collective group size")
     ap.add_argument("--sizes", default=",".join(str(x) for x in DEFAULT_SIZES))
     ap.add_argument("--su-topo", default=None,
-                    help="scale-up .topo basename in TOPO_FILES_PATH (PLACEHOLDER — the "
-                         "committed scale-up topology is still TBD)")
+                    help="scale-up .topo basename in TOPO_FILES_PATH (required for sim runs)")
     ap.add_argument("--so-topo", default=SO_TOPO_DEFAULT,
                     help="scale-out .topo basename (unused under single-domain isolation)")
     ap.add_argument("--reduce-compute", type=int, default=0,
@@ -192,10 +208,10 @@ def main():
 
     sim.require_simulator()
     if args.su_topo is None:
-        sys.exit("--su-topo required for a sim run (the scale-up topology is TBD; pass a "
-                 "placeholder explicitly, or use --validate for the no-sim check)")
-    run_exp(args.n, sizes, paths.topo(args.su_topo), paths.topo(args.so_topo),
-            args.reduce_compute, args.tmpdir, args.timeout)
+        sys.exit("--su-topo is required for a sim run; use a frozen wrapper or pass an "
+                 "explicit topology, or use --validate for the no-sim check")
+    sys.exit(run_exp(args.n, sizes, paths.topo(args.su_topo), paths.topo(args.so_topo),
+                     args.reduce_compute, args.tmpdir, args.timeout))
 
 
 if __name__ == "__main__":

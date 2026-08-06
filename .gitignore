@@ -1,8 +1,6 @@
 .vscode/
-sim/htsim-backend/sim/tests/*
-# allow test source files (the rule above ignores build artefacts)
-!sim/htsim-backend/sim/tests/main_*.cpp
-!sim/htsim-backend/sim/tests/*.py
+.idea/
+compile_commands.json
 *.bin
 *.tmp
 idmap.txt
@@ -24,18 +22,18 @@ __pycache__/
 *$py.class
 logout.dat
 **/__pycache__/
-# design plans & working notes stay local (user rule 2026-07-18; extended 2026-08-06)
-sim/htsim-backend/sim/AA*
+# design plans & working notes stay local
 simulation-scripts/AA-plan-*/
 INC_thesis_proposal.md
 
-# local build artifacts: GOAL test generators, coll txt2bin, run stderr logs
-sim/htsim-backend/sim/datacenter/make_allreduce_ab
-sim/htsim-backend/sim/datacenter/make_coll_test
-sim/htsim-backend/sim/datacenter/make_multicoll_test
-sim/htsim-backend/sim/datacenter/make_sr_test
-sim/htsim-backend/sim/lgs/txt2bin
-sim/htsim-backend/sim/datacenter/llama3_ab_pcm/*.err
+# retired standalone backend (history remains available in Git)
+sim/htsim-backend/
+
+# locally built HPC schedule generator
+goal_gen/hpc/Schedgen/schedgen
+
+# one-off experiment probes are local by default
+simulation-scripts/_scratch_*.py
 
 # locally built coll-extended LogGOPSim txt2bin (build_sim.py curls + patches it;
 # the recipe lives in tools/loggopsim-coll/{README.md,coll.patch}, which ARE tracked)
@@ -44,5 +42,5 @@ tools/loggopsim-coll/LogGOPSim-1.1.tgz
 # editor / tool caches
 .cache/
 **/.idea/scopes/
-# macOS Finder junk (the two already-tracked .DS_Store stay tracked; this stops new ones)
+# macOS Finder junk
 .DS_Store

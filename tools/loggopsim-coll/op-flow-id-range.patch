@@ -1,0 +1,37 @@
+diff --git a/txt2bin.re b/txt2bin.re
+--- a/txt2bin.re
++++ b/txt2bin.re
+@@ -74,6 +74,25 @@ inline uint64_t add_number(unsigned char *s, unsigned char *e) {
+ 	return num;
+ }
+ 
++inline uint32_t add_collective_instance(Scanner *scanner, unsigned char *begin,
++		unsigned char *end) {
++	uint64_t num = 0;
++	// PacketFlow reserves IDs >= 1,000,000,000 for dynamic p2p flows.
++	const uint64_t max = 999999999ULL;
++	for (unsigned char *cursor = begin; cursor < end; ++cursor) {
++		const uint64_t digit = *cursor - '0';
++		if (num > (max - digit) / 10) {
++			fprintf(stderr,
++					"Collective op_flow_id exceeds simulator-safe range [0,999999999] "
++					"on input line %u: '%.*s'\n",
++					scanner->line + 1, static_cast<int>(end - begin), begin);
++			exit(EXIT_FAILURE);
++		}
++		num = num * 10 + digit;
++	}
++	return static_cast<uint32_t>(num);
++}
++
+ inline void insert_id(Scanner *s, char *id, goalop_t op) {
+ 
+ 	s->idtbl->insert(std::make_pair(std::string(id), op));
+@@ -684,6 +703,6 @@ s_34:
+ /*!re2c
+ 	WS			{ goto s_34; }
+-	INT			{ item.coll_instance = add_number(s->tok, cursor); goto s_35; }
++	INT			{ item.coll_instance = add_collective_instance(s, s->tok, cursor); goto s_35; }
+ 	ANY			{ goto s_err; }
+ */
+ 	assert(0==1); //We should never reach this line

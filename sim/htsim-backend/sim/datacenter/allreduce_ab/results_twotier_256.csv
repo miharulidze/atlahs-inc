@@ -1,3 +1,0 @@
-group_size,msg_bytes,inc_ns,ring_ns,rdouble_ns,ideal_ring_ns,speedup,speedup_vs_ideal,speedup_rdouble,inc_synced_ns,speedup_synced,ring_bytes_per_rank,drops,topo,linkspeed_mbps,reduce_compute_ns,hop_oneway_ns,analytic_rate_bns,inc_sync_rtt_ns
-256,64512,3259,1540499,74796,739761.1,472.691,226.990,22.951,9059,170.052,128520,0,scaleup_twotier_h100_256gpu_3600Gbps.topo,3600000,100,2900,492.3,5800
-256,1048320,5255,1540499,109318,743742.2,293.149,141.530,20.803,11055,139.349,2088450,0,scaleup_twotier_h100_256gpu_3600Gbps.topo,3600000,100,2900,492.3,5800

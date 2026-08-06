@@ -23,7 +23,7 @@ Conventions:
 Smoke-test the template itself (skipped by dispatch, so invoke directly):
 
 ```bash
-python3 experiments/_template/run.py            # locally, binaries built in-tree
-docker run --rm --entrypoint python3 -v "$(pwd)":/workspace atlahs-sim \
+python3 simulation-scripts/experiments/_template/run.py  # locally, binaries built in-tree
+docker run --rm --user "$(id -u):$(id -g)" --entrypoint python3 -v "$(pwd)":/workspace atlahs-sim \
     /workspace/simulation-scripts/experiments/_template/run.py
 ```

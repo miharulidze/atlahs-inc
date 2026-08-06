@@ -10,7 +10,7 @@
 #        Arm B quadruples the gate rate at those sizes: if the growth is the gate it must
 #        shrink 4x; if it does not move, the gate is exonerated at large b too.
 set -uo pipefail
-R=/Users/wstaempfli/CLionProjects/atlahs
+R="$(cd "$(dirname "$0")/../.." && pwd)"
 echo "########## ARM A: MTU 4160 -> 8320 at |G|=64, S = 256 KiB and 4 MiB ##########"
 for MTU in 4160 8320; do
   OUT=/workspace/simulation-scripts/results/_floorprobe4_mtu$MTU

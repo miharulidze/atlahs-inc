@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PFC / lossless-backpressure validation (AA-plan-PFC-Validation).
+"""PFC / lossless-backpressure validation.
 
 The correctness precondition for in-network aggregation is losslessness: a
 dropped packet corrupts a reduction irrecoverably. This experiment suite
@@ -7,7 +7,7 @@ provides the three-legged evidence that PFC does its job under the derived
 provisioning (1x BDP ingress reservation, XOFF = reservation - headroom,
 egress cap = radix x BDP):
 
-  1. ENGAGEMENT     pause events > 0 under stress (otherwise the test is vacuous);
+  1. ENGAGEMENT     pause events > 0 in selected census/overdrive cells;
   2. INVARIANT      while pauses fire: zero `LOSSLESS not working` lines AND
                     peak per-queue occupancy <= its provisioned bound;
   3. TRIPWIRE       deliberately mis-provisioned controls make the warnings
@@ -18,7 +18,8 @@ Modes (each writes its own CSV under the experiment results dir):
   (default)     E2 stress: N concurrent disjoint INC AllReduces on the 3-tier
                 fabric, trees PINNED to one core (-mcast_pin 0) vs DISTRIBUTED
                 round-robin, at 64 KiB and 1 MiB. Pinning makes the N groups
-                contend at a single core, so PFC must engage. Selected cells
+                contend at a single core. This validates contention timing but
+                need not engage PFC when provisioned buffers absorb the burst. Selected cells
                 also write a -pfc_trace event log for the backpressure figures.
   --census      E1: the chapter's own worst-stress corner cells (both fabrics,
                 all presented arms, 64 MiB deep steady state + two 256 MiB spot
@@ -26,11 +27,12 @@ Modes (each writes its own CSV under the experiment results dir):
   --controls    E3: negative controls -- (a) the historical XOFF-above-the-queue
                 threshold (high=300 on the crossbar's 270-packet BDP), (b) the
                 pre-fix 1x BDP egress cap on the 3-tier fabric, (c) the NIC
-                pause gate disabled under NIC overdrive. (a)+(b) must relight
-                the warnings; (c) is the gate's A/B twin.
+                pause gate disabled under NIC overdrive. The high=300 crossbar
+                arm is now a documented null; the undersized egress arm must
+                relight warnings; the gate-off arm is the NIC A/B twin.
   --overdrive   E2b: NIC rate 2x the fabric rate (gate ON) -- end-to-end
-                exercise of the NIC pause gate; expect nic_redrives_held >> 0
-                with zero warnings.
+                exercise of pause propagation with zero warnings. The separate
+                XOFF=100 control is the causal grant-withholding probe.
   --validate    generate + compile the stress trace at N=4 (no sim).
 
 Geometry of the stress mode (unchanged from the original experiment): each
@@ -122,6 +124,29 @@ CSV_FIELDS = ["mode", "arm", "mcast_pin", "n_groups", "group_size", "pods_spanne
 
 def _row(out, mode, arm, fin, drop, st, cmd, px, log, trace, su_topo, so_topo,
          nodes, gpus, linkspeed, **kw):
+    violations = []
+    if st != "ok" or fin is None:
+        violations.append(f"simulator did not complete (status={st}, makespan={fin})")
+    if mode == "control_cap":
+        if drop <= 0:
+            violations.append("undersized-egress tripwire did not emit an invariant warning")
+    elif drop != 0:
+        violations.append(f"unexpected invariant warnings: {drop}")
+    for key in ("pauses_sent", "peak_ingress_frac", "peak_egress_frac"):
+        if px.get(key, "") == "":
+            violations.append(f"missing PFC instrumentation field {key}")
+    if mode != "control_cap":
+        for key in ("peak_ingress_frac", "peak_egress_frac"):
+            value = px.get(key, "")
+            if value != "" and float(value) > 1.0:
+                violations.append(f"{key} exceeds configured bound: {value}")
+    if mode == "control_gate" and int(px.get("nic_redrives_held") or 0) <= 0:
+        violations.append("XOFF=100 gate probe withheld no NIC redrives")
+    if violations:
+        detail = "; ".join(violations)
+        report.print_error(f"{mode}/{arm}: {detail}")
+        raise RuntimeError(detail)
+
     row = {"mode": mode, "arm": arm, "makespan_ns": fin or "",
            "drop_log_hits": drop, "status": st,
            "su_topo": os.path.basename(su_topo), "so_topo": os.path.basename(so_topo),
@@ -222,6 +247,10 @@ def _census_cell(out, mode, case, size, su_topo, so_topo, tmpdir, timeout,
     inc_root = 0 if inc_kind in ("bcast", "reduce") else -1
     label = inc_kind
     n = CENSUS_N
+    su_width = sim.topology_nodes(su_topo)
+    if n > su_width:
+        raise ValueError(f"census group size {n} exceeds scale-up topology width {su_width}")
+    rows = []
     base = os.path.join(tmpdir, f"base_{label}_{algo}_{size}.goal")
     inc = os.path.join(tmpdir, f"inc_{label}_{size}.goal")
     grp = inc[:-5] + ".groups"
@@ -237,6 +266,7 @@ def _census_cell(out, mode, case, size, su_topo, so_topo, tmpdir, timeout,
         topo_tag = "xbar" if "single_switch" in su_topo else "3tier"
         for rendering in arms:
             binpath = (inc if rendering == "inc" else base)[:-5] + ".bin"
+            rendering_width = su_width if rendering == "inc" else n
             tag = f"{mode}_{topo_tag}_{label}_{algo}_{rendering}_{size}"
             log = os.path.join(OUTPUT_DIR, "logs", f"{tag}.log.gz")
             trace = None
@@ -244,51 +274,59 @@ def _census_cell(out, mode, case, size, su_topo, so_topo, tmpdir, timeout,
                 trace = os.path.join(OUTPUT_DIR, "traces", f"{tag}.csv")
                 os.makedirs(os.path.dirname(trace), exist_ok=True)
             fin, drop, st, cmd, px = sim.run_sim(
-                binpath, so_topo, su_topo, nodes=n, gpus_per_node=n,
+                binpath, so_topo, su_topo, nodes=n, gpus_per_node=rendering_width,
                 groups=grp if rendering == "inc" else None,
                 timeout=timeout, intranode_linkspeed=linkspeed,
                 pfc_high=pfc_high, pfc_low=pfc_low, intranode_q=intranode_q,
                 pfc_trace=trace, save_stdout=log)
-            _row(out, mode, rendering, fin, drop, st, cmd, px, log, trace,
-                 su_topo, so_topo, n, n, linkspeed,
-                 collective=label, baseline_algo=algo, group_size=n, msg_bytes=size)
+            rows.append(_row(
+                out, mode, rendering, fin, drop, st, cmd, px, log, trace,
+                su_topo, so_topo, n, rendering_width, linkspeed,
+                collective=label, baseline_algo=algo, group_size=n, msg_bytes=size))
             _print_cell(f"{topo_tag} {label}/{algo} {rendering} {size}B", fin, drop, st, px)
     finally:
         if extra_flags is not None:
             os.environ.pop("SIM_EXTRA_FLAGS", None)
+    return rows
 
 
 def run_census(tmpdir, timeout):
     """E1: the chapter's worst-stress corner cells, instrumented in situ."""
     os.makedirs(tmpdir, exist_ok=True)
     csv_path = os.path.join(OUTPUT_DIR, "pfc_census.csv")
+    rows = []
     with report.CsvAppender(csv_path, CSV_FIELDS) as out:
         for su in (SU_TOPO_XBAR, SU_TOPO):
             report.print_info(f"=== census {os.path.basename(su)} N={CENSUS_N} "
                               f"@ {CENSUS_SIZE} ===")
             for case in CENSUS_CASES:
-                _census_cell(out, "census", case, CENSUS_SIZE, paths.topo(su),
-                             paths.topo(SO_TOPO), tmpdir, timeout)
+                rows.extend(_census_cell(
+                    out, "census", case, CENSUS_SIZE, paths.topo(su),
+                    paths.topo(SO_TOPO), tmpdir, timeout))
         # 256 MiB spot cells on the 3-tier fabric: the historical worst cases
         # (AllGather fan-out; recursive-doubling cross-pod fan-in).
         report.print_info(f"=== census spot @ {CENSUS_SPOT_SIZE} (3-tier) ===")
-        _census_cell(out, "census", {"collective": "allgather", "algo": "ring"},
-                     CENSUS_SPOT_SIZE, paths.topo(SU_TOPO), paths.topo(SO_TOPO),
-                     tmpdir, timeout, arms=("inc",))
-        _census_cell(out, "census", {"collective": "allreduce", "algo": "rdouble"},
-                     CENSUS_SPOT_SIZE, paths.topo(SU_TOPO), paths.topo(SO_TOPO),
-                     tmpdir, timeout, arms=("base",))
+        rows.extend(_census_cell(
+            out, "census", {"collective": "allgather", "algo": "ring"},
+            CENSUS_SPOT_SIZE, paths.topo(SU_TOPO), paths.topo(SO_TOPO),
+            tmpdir, timeout, arms=("inc",)))
+        rows.extend(_census_cell(
+            out, "census", {"collective": "allreduce", "algo": "rdouble"},
+            CENSUS_SPOT_SIZE, paths.topo(SU_TOPO), paths.topo(SO_TOPO),
+            tmpdir, timeout, arms=("base",)))
+    if not any(int(row["pauses_sent"] or 0) > 0 for row in rows):
+        raise RuntimeError("PFC census was vacuous: no cell emitted a pause")
     report.print_success(f"wrote results to {csv_path}")
 
 
 def run_controls(tmpdir, timeout):
-    """E3: mis-provisioned negative controls -- the tripwire must fire."""
+    """E3: historical/null, mis-provisioned, and NIC-gate controls."""
     os.makedirs(tmpdir, exist_ok=True)
     csv_path = os.path.join(OUTPUT_DIR, "pfc_controls.csv")
     with report.CsvAppender(csv_path, CSV_FIELDS) as out:
-        # (a) Historical bug: XOFF (300 pkt) above the crossbar's own 270-packet
-        # 1x BDP queue -- the queue overflows before it can ever pause. RS is the
-        # deepest ingress-backlog builder (the aggregation holds a whole block).
+        # (a) Historical XOFF-above-BDP configuration. It is retained as a null
+        # control: with the corrected receive path, this workload no longer drives
+        # the crossbar ingress high enough to trigger either pause or warning.
         report.print_info("=== control (a): high=300 > 270-pkt BDP, crossbar RS 64 MiB ===")
         _census_cell(out, "control_thresh", {"collective": "reduce_scatter", "algo": "ring"},
                      CENSUS_SIZE, paths.topo(SU_TOPO_XBAR), paths.topo(SO_TOPO),
@@ -324,16 +362,18 @@ def run_controls(tmpdir, timeout):
 
 
 def run_overdrive(tmpdir, timeout):
-    """E2b: NIC at 2x the fabric rate, gate ON -- the sources must be held by
-    link-level pause (nic_redrives_held >> 0) with zero warnings."""
+    """E2b: NIC at 2x the fabric rate, gate ON -- pause propagation must engage
+    with zero warnings. Grant withholding is established by control_gate."""
     os.makedirs(tmpdir, exist_ok=True)
     csv_path = os.path.join(OUTPUT_DIR, "pfc_overdrive.csv")
+    rows = []
     with report.CsvAppender(csv_path, CSV_FIELDS) as out:
         report.print_info("=== overdrive: NIC 2x fabric, crossbar AG 64 MiB (INC arm) ===")
-        _census_cell(out, "overdrive", {"collective": "allgather", "algo": "ring"},
-                     CENSUS_SIZE, paths.topo(SU_TOPO_XBAR), paths.topo(SO_TOPO),
-                     tmpdir, timeout, linkspeed=OVERDRIVE_LINKSPEED, arms=("inc",),
-                     trace_arms=("inc",))
+        rows.extend(_census_cell(
+            out, "overdrive", {"collective": "allgather", "algo": "ring"},
+            CENSUS_SIZE, paths.topo(SU_TOPO_XBAR), paths.topo(SO_TOPO),
+            tmpdir, timeout, linkspeed=OVERDRIVE_LINKSPEED, arms=("inc",),
+            trace_arms=("inc",)))
         # Concurrent pinned AllReduces under overdrive: both stressors at once.
         report.print_info("=== overdrive: NIC 2x fabric, pinned N=16 concurrent AR 1 MiB ===")
         groups = make_groups(16)
@@ -346,12 +386,15 @@ def run_overdrive(tmpdir, timeout):
             g[:-5] + ".bin", paths.topo(SO_TOPO), paths.topo(SU_TOPO),
             nodes=NODES, gpus_per_node=WIDTH, groups=grp, timeout=timeout,
             intranode_linkspeed=OVERDRIVE_LINKSPEED, mcast_pin=0, save_stdout=log)
-        _row(out, "overdrive", "pinned", fin, drop, st, cmd, px, log, None,
-             paths.topo(SU_TOPO), paths.topo(SO_TOPO), NODES, WIDTH,
-             OVERDRIVE_LINKSPEED, mcast_pin=0, n_groups=16,
-             group_size=PODS_SPANNED, pods_spanned=PODS_SPANNED,
-             hosts_per_pod=HOSTS_PER_POD, collective=KIND, msg_bytes=1048576)
+        rows.append(_row(
+            out, "overdrive", "pinned", fin, drop, st, cmd, px, log, None,
+            paths.topo(SU_TOPO), paths.topo(SO_TOPO), NODES, WIDTH,
+            OVERDRIVE_LINKSPEED, mcast_pin=0, n_groups=16,
+            group_size=PODS_SPANNED, pods_spanned=PODS_SPANNED,
+            hosts_per_pod=HOSTS_PER_POD, collective=KIND, msg_bytes=1048576))
         _print_cell("pinned N=16 overdrive 1 MiB", fin, drop, st, px)
+    if not any(int(row["pauses_sent"] or 0) > 0 for row in rows):
+        raise RuntimeError("PFC overdrive suite was vacuous: no cell emitted a pause")
     report.print_success(f"wrote results to {csv_path}")
 
 

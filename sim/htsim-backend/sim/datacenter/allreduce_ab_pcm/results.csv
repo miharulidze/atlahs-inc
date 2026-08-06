@@ -1,7 +1,0 @@
-group_size,msg_bytes,inc_ns,ring_ns,speedup,inc_makespan_ns,ring_makespan_ns,drops,fabric,reduce_compute_ns,su_topo,engine,ring_warm_ns,ring_ideal_ns,speedup_vs_ideal,intranode_linkspeed_mbps
-16,4096,1424,78046,54.808,1524,78146,0,lossless_input,100,scaleup_single_switch_16_3600Gbps.topo,pcm-sdk,78046,19517,13.706,4000000
-16,16384,1449,78138,53.925,1549,78238,0,lossless_input,100,scaleup_single_switch_16_3600Gbps.topo,pcm-sdk,78138,19568,13.505,4000000
-16,65536,1549,78510,50.684,1649,78610,0,lossless_input,100,scaleup_single_switch_16_3600Gbps.topo,pcm-sdk,78510,19750,12.750,4000000
-16,262144,1947,79258,40.708,2047,79358,0,lossless_input,100,scaleup_single_switch_16_3600Gbps.topo,pcm-sdk,79258,20498,10.528,4000000
-16,1048576,3541,82254,23.229,3641,82354,0,lossless_input,100,scaleup_single_switch_16_3600Gbps.topo,pcm-sdk,82254,23494,6.635,4000000
-16,4194304,9932,94234,9.488,10032,94334,0,lossless_input,100,scaleup_single_switch_16_3600Gbps.topo,pcm-sdk,94234,35475,3.572,4000000

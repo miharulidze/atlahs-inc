@@ -1,40 +1,26 @@
-# Upstreaming notes (deferred PR to spcl/atlahs)
+# Repository lineage and upstreaming notes
 
-State as of 2026-07-31 (branch `umbrella-integration`, fully pushed to origin =
-github.com/wstaempfli/atlahs, private).
+State as of 2026-08-06:
 
-Update 2026-08-06: the repo is public (sole branch `umbrella-integration`). The submodule
-landmines below are resolved for cloning: `goal_gen/ai/nccl_generator_v2`
-(`wstaempfli/nccl_generator_v2`) and the pcm-sdk pin (repointed to the public mirror
-`wstaempfli/pcm-sdk`, branch `wanja/inc-port`) are both public, so an anonymous
-`git clone --recursive` fully resolves. `ZhiyiHu1999/pcm-sdk` itself stays private.
+- The public artifact branch is `wstaempfli/atlahs:umbrella-integration`.
+- The maintained NCCL trace generator is the public
+  `wstaempfli/nccl_generator_v2` submodule.
+- The maintained thesis backend is the public
+  `wstaempfli/pcm-sdk:wanja/inc-port` submodule.
+- The retired standalone `sim/htsim-backend` development fork was removed from the
+  release tree. Its previous revisions remain available in this repository's history.
 
-- spcl/atlahs is public; main = `fb51a99` (2026-05-12). We are 211 ahead / 6 behind
-  (merge-base `c7b8a45`). The 6 missing upstream commits: two demo-script merges
-  (`1365e00`, `80daee1` — low risk), GOAL rank-layout detection `ad9a4d6` (touches
-  `sim/htsim-backend/sim/datacenter/atlahs_htsim_api.*` — moderate conflict risk with
-  our datacenter work), and `4a05a2f`, which bumps `goal_gen/ai/nccl_generator_v2` to
-  the public Yanksi repo @ `b4f98b2` — a direct conflict with our redeclaration.
-- Submodule visibility landmines for any public PR:
-  - `goal_gen/ai/nccl_generator_v2` → `wstaempfli/nccl_generator_v2` (PRIVATE),
-    pinned on branch `simple-sim-coll`. Upstream declares `Yanksi/nccl_generator_v2`
-    (public). Options: make the mirror public, PR `simple-sim-coll` into Yanksi,
-    or repoint the PR branch to a public pin.
-  - `sim/pcm-sdk_zhiyi` → `ZhiyiHu1999/pcm-sdk` + mirror `wstaempfli/pcm-sdk` (both
-    PRIVATE, branch `wanja/inc-port`). The engine roots in Khalilov's private
-    pcm-sdk; open-sourcing needs his OK. Not present upstream at all.
-  - Consequence: an anonymous `git clone --recursive` cannot fetch either pin today;
-    examiner access requires grants on both private repos (or making them public).
-- Size: our tree adds ~29 MB tracked vs upstream (topo_files, .cm matrices, results
-  CSVs/plots; 4,566 added files, 1.33 M inserted lines). A reviewable PR should carry
-  code + docs and exclude generated data (`scripts/topo_files` bulk,
-  `connection_matrices` sweeps, `simulation-scripts/results`), or ship data as a
-  release artifact.
-- PR scope split still open with Zhiyi: he upstreams `validations_atlahs_v1.1`
-  himself (preferred) or our PR carries his commits (authorship preserved either way).
-- Suggested first step when resuming: rebase a curated branch onto `fb51a99`,
-  resolving `4a05a2f` (submodule pin) and `ad9a4d6` (`atlahs_htsim_api.*`) explicitly,
-  then scope the file list before opening the cross-fork PR.
+This artifact diverges substantially from `spcl/atlahs`. Any future upstream pull
+request should be curated rather than opened from the integration branch wholesale:
 
-Reproducibility recipes for everything the thesis quotes:
-`simulation-scripts/REPRODUCING.md`.
+1. start from the then-current upstream default branch;
+2. split generator, PCM integration, experiment harness, and reference data into
+   separately reviewable changes;
+3. preserve original authorship for code imported from collaborators;
+4. keep generated result archives outside a source-only upstream pull request; and
+5. resolve licensing for the PCM repository before proposing redistribution under an
+   upstream project license.
+
+The supported thesis reproduction recipes are in
+`simulation-scripts/REPRODUCING.md`; publication gates are in
+`simulation-scripts/PUBLICATION_CHECKLIST.md`.

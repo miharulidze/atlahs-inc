@@ -2,7 +2,7 @@
 # 2-host NVLink-class scale-up domain: one non-blocking crossbar (Podsize==Nodes==
 # Radix_Down => 1 ToR, one hop). Per-host 12800 Gbps = the MAX of the
 # intranode-linkspeed sweep, so the swept -intranode_linkspeed governs under the
-# fabric ceiling at every point (see AA-plan-Intranode-Linkspeed-Sweep §7).
+# fabric ceiling at every point in the retired link-speed sweep.
 # Degenerate 2-tier encoding because the FatTree parser rejects Tiers=1.
 Nodes 2
 Tiers 2

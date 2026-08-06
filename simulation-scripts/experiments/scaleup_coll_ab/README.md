@@ -6,25 +6,27 @@ a single scale-up domain: an in-network collective arm (first-class `coll` op +
 baseline emitted by the NCCL generator's own decomposition (Ring /
 Recursive-doubling per Demystifying-NCCL Tables V-VII).
 
-- Collectives: AllReduce (ring + recursive-doubling baselines), ReduceScatter,
-  AllGather (ring).
+- Cases: fused AllReduce (ring + recursive-doubling baselines), composed
+  ReduceScatter+AllGather versus ring AllReduce, ReduceScatter, AllGather,
+  Broadcast, and Reduce.
 - Reduction model: charge-neither (`--reduce-compute 0`, the default); >0 is a
   sensitivity study.
-- Isolation: all N ranks in node 0 (`-nodes N -num_gpus_per_node N`) — the
-  whole collective runs intranode; the scale-out topo carries no traffic and
-  only needs >= N hosts (`--so-topo`, default `tree16_bw200Gbps.topo`; use
-  `tree64_8.topo` for N=64).
+- Isolation: all N active ranks are in domain 0. `-num_gpus_per_node` is pinned
+  to the selected scale-up topology's width, so group-size sweeps partially
+  populate a fixed fabric. The scale-out topology carries no traffic.
 
 ## Run
 
 ```bash
 # in Docker (from the repo root; see ../../README.md for build steps)
-docker run --rm -v "$(pwd)":/workspace atlahs-sim run scaleup_coll_ab --validate
-docker run --rm -v "$(pwd)":/workspace atlahs-sim run scaleup_coll_ab \
-    --n 8 --su-topo scaleup_nvlink5_nvl72_7200Gbps.topo
+docker run --rm --user "$(id -u):$(id -g)" -v "$(pwd)":/workspace \
+  atlahs-sim run scaleup_coll_ab --validate
+
+# frozen publication sweep; stages a run archive and atomically refreshes the CSV
+simulation-scripts/experiments/scaleup_coll_ab/run_thesis.sh
 
 # locally (binaries built in-tree, no env vars needed)
-python3 experiments/scaleup_coll_ab/run.py --validate
+python3 simulation-scripts/experiments/scaleup_coll_ab/run.py --validate
 ```
 
 `--validate` is topology-independent: it generates both arms, checks rank-0
@@ -38,9 +40,12 @@ no simulator run.
 `inc_ns`/`base_ns` are makespans minus the shared `TAIL_NS` tail; `speedup` =
 `base_ns / inc_ns`.
 
-Known caveat (2026-07-21): AllGather INC results at >= 256 KB are untrustworthy
-until the handle_mcast lossless-credit / fanout-replica backpressure bug is
-fixed — the run logs `LOSSLESS not working` violations, surfaced in the CSV
-`drops` column.
+Direct `run.py` invocations append by design. The frozen wrapper writes to
+`results/generated-runs/<run-id>/` first and replaces the reference CSV only after the
+complete matrix succeeds.
 
-Design rationale: `sim/htsim-backend/sim/AA-plan-Scaleup-Baselines/plan.md` (local).
+The historical AllGather fanout-credit defect has been fixed. The tracked reference
+data is post-fix, but it predates the final globally unique flow-ID cleanup; current
+packet-level timings must therefore be published as a separately regenerated matrix.
+See `../../REFERENCE_DATA.md`. `--validate` checks every current arm, while
+`scaleup_pfc_concurrent` independently checks lossless queue engagement and bounds.

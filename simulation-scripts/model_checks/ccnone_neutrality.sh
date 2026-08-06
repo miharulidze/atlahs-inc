@@ -11,7 +11,7 @@
 # The committed CSV IS the without-flag arm, so this run doubles as the regeneration: if it
 # differs, results/scaleup_coll_ab can be replaced by it wholesale.
 set -uo pipefail
-R=/Users/wstaempfli/CLionProjects/atlahs
+R="$(cd "$(dirname "$0")/../.." && pwd)"
 SIZES=4096,16384,65536,262144,1048576,4194304,16777216,67108864,268435456
 for TOPO in scaleup_single_switch_64_4000Gbps scaleup_3tier_256_4000Gbps; do
   OUT=/workspace/simulation-scripts/results/_ccneutral_$TOPO

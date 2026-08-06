@@ -4,7 +4,6 @@ import argparse
 
 
 VALIDATION_SCRIPT_PATH = "/workspace/scripts/run_validation_exp.py"
-CASE_STUDIES_SCRIPT_PATH = "/workspace/scripts/run_case_studies.py"
 
 
 def print_info(message: str, flush: bool = True) -> None:
@@ -27,7 +26,6 @@ STORAGE_SERVER_URL = "http://storage2.spcl.ethz.ch/traces/"
 ASTRASIM_URL = STORAGE_SERVER_URL + "astra-sim-traces/"
 AI_TRACE_URL = STORAGE_SERVER_URL + "ai/"
 HPC_TRACE_URL = STORAGE_SERVER_URL + "hpc/"
-CASE_STUDY_URL = STORAGE_SERVER_URL + "case-studies/"
 
 
 DOWNLOAD_CMD = 'wget -r -np -nH --cut-dirs={} -R "index.html*" -c -P "{}" "{}"'
@@ -36,7 +34,6 @@ DOWNLOAD_CMD = 'wget -r -np -nH --cut-dirs={} -R "index.html*" -c -P "{}" "{}"'
 AI_TRACES_QUICK_TEST = ["llama/Llama7B_N4_GPU16_TP1_PP1_DP16_BS32", "llama/Llama7B_N32_GPU128_PP1_DP128_7B_BS128"]
 ASTRASIM_TRACES_QUICK_TEST = ["Llama7B_N4_GPU16_TP1_PP1_DP16_BS32", "Llama7B_N32_GPU128_PP1_DP128_7B_BS128"]
 HPC_TRACES_QUICK_TEST = ["lulesh/lulesh_8", "icon/icon_8", "hpcg/hpcg_8"]
-CASE_STUDIES_QUICK_TEST = ["storage.bin", "lulesh_random.bin", "lulesh_packed.bin", "llama_random.bin", "llama_packed.bin", "llama_lgs_vs_htsim.bin"]
 
 
 AI_TRACES_FULL_REPRODUCTION = [
@@ -55,7 +52,6 @@ HPC_TRACES_FULL_REPRODUCTION = [
     "openmx/openmx_8", "openmx/openmx_32",
     "cloverleaf/cloverleaf_8"
 ]
-CASE_STUDIES_FULL_REPRODUCTION = ["storage.bin", "lulesh_random.bin", "lulesh_packed.bin", "llama_random.bin", "llama_packed.bin", "llama_lgs_vs_htsim.bin"]
 
 
 def download_data(data_dir: str, is_quick_test: bool = True) -> None:
@@ -70,12 +66,10 @@ def download_data(data_dir: str, is_quick_test: bool = True) -> None:
         ai_traces = AI_TRACES_QUICK_TEST
         hpc_traces = HPC_TRACES_QUICK_TEST
         astrasim_traces = ASTRASIM_TRACES_QUICK_TEST
-        case_studies_traces = CASE_STUDIES_QUICK_TEST
     else:
         ai_traces = AI_TRACES_FULL_REPRODUCTION
         hpc_traces = HPC_TRACES_FULL_REPRODUCTION
         astrasim_traces = ASTRASIM_TRACES_FULL_REPRODUCTION
-        case_studies_traces = CASE_STUDIES_FULL_REPRODUCTION
         # Warn the user that this would take a long time and require more than 250 GB of disk space
         print_warning("This would take a long time and require more than 250 GB of disk space to download the workloads for the full reproduction.")
         print_warning("Are you sure you want to continue? (y/n)")
@@ -130,31 +124,12 @@ def download_data(data_dir: str, is_quick_test: bool = True) -> None:
             exit(1)
         print_success(f"Downloaded {trace}...")
 
-
-    # Download case studies
-    print_info("Downloading case studies...")
-    for trace in case_studies_traces:
-        src_url = CASE_STUDY_URL + trace
-        target_dir = data_dir + "/case_studies/" + trace
-        print_info(f"Downloading {trace} to {target_dir}...")
-        # Skip if already exists
-        if os.path.exists(target_dir):
-            print_warning(f"Skipping {trace} because it already exists...")
-            continue
-        if os.system(DOWNLOAD_CMD.format(4, data_dir + "/case_studies/", src_url)) != 0:
-            print_error(f"Failed to download {trace}...")
-            exit(1)
-        print_success(f"Downloaded {trace}...")
-
-
 def run_full_reproduction(data_dir: str) -> None:
     """
     Run a full reproduction of the artifact.
 
     1. Runs the validation experiment for AI workloads
     2. Runs the validation experiment for HPC workloads
-    3. Runs the validation experiment for case studies
-    4. Runs the case studies
     """
     print_info("Running a full reproduction...")
     # Add full reproduction commands
@@ -171,7 +146,6 @@ def run_quick_test(data_dir: str) -> None:
     1. Downloads the necessary data from the storage server
     2. Runs the validation experiment for AI workloads
     3. Runs the validation experimetn for HPC workloads
-    4. Runs the case studies
     """
     print_info("Running a quick functionality test...")
     download_data(data_dir, is_quick_test=True)

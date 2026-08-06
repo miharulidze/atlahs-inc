@@ -1,97 +1,118 @@
-# simulation-scripts — CPU-only, device-agnostic simulation reproducibility
+# Thesis simulation artifact
 
-A self-contained Docker environment for reproducing the **simulation** results of
-this thesis on any machine, without a GPU. It builds the pcm-sdk two-tier htsim
-simulator (our INC datapath) and the coll-extended LogGOPSim `txt2bin`, and runs
-independent, GOAL-driven experiments — nothing else.
+This directory is the CPU-only reproducibility harness for the thesis experiments on
+in-network collectives. It builds the two-tier pcm-sdk/htsim backend and the
+collective-aware GOAL compiler, then runs synthetic, GOAL-driven experiments without a
+GPU or the full ATLAHS tracing stack.
 
-## Why this exists (vs the top-level Dockerfile)
+Start with [`REPRODUCING.md`](REPRODUCING.md) when reproducing a result or preparing a
+paper artifact. Use [`PUBLICATION_CHECKLIST.md`](PUBLICATION_CHECKLIST.md) before cutting
+the supervisor/workshop release. [`REFERENCE_DATA.md`](REFERENCE_DATA.md) records which
+historical revision produced each tracked dataset and why a current release must be
+rerun as one coherent result set.
 
-The repo's top-level `Dockerfile` is Zhiyi's **full ATLAHS pipeline**: it provisions
-the real-workload TRACING/GENERATION toolchain (NVIDIA pytorch base, deepspeed,
-flash-attn, Chakra, …) to *capture* GOAL traces from real GPU training. That build
-needs a GPU box's RAM (the flash-attn compile OOMs an 8 GB laptop VM) and is
-irrelevant to simulation. This folder keeps that environment untouched and adds a
-**simulation-only** one: a light Linux base + the C/C++ build toolchain, which
-builds anywhere Docker runs and reproduces our results deterministically.
+## Supported scope
 
-Simulation is decoupled from real experiments: every experiment here synthesizes
-or consumes GOAL traces, compiles them to the canonical `.bin`, and executes them
-on the pcm-sdk backend (`htsim_flow_app_atlahs`). No torch, no GPU.
+| experiment | status | purpose |
+|---|---|---|
+| `scaleup_coll_ab` | canonical thesis | Chapter 4 completion-time A/B: in-network collectives versus endpoint decompositions |
+| `scaleup_coll_footprint` | canonical thesis | Chapter 4 byte-link footprint reduction |
+| `ch5_accumulation` | canonical thesis | Chapter 5 accumulation-corrected training case study |
+| `scaleup_pfc_concurrent` | validation | Lossless-backpressure census, stress cases, and negative controls |
+| `scaleup_ar_bandwidth` | supplementary | Fused-apex versus composed ReduceScatter+AllGather comparison |
+| `intranode_linkspeed_sweep` | superseded | Earlier case-study harness, retained for provenance; use `ch5_accumulation` instead |
+
+The container's `list` command prints the same classification. The three canonical
+experiments are the publication path; supplementary and superseded runners must not be
+silently mixed into the headline result set.
+
+## Model boundary
+
+These are deterministic, synthetic-network simulations. The frozen experiment runners
+select the exact topology, workload, collective decomposition, and simulator flags; the
+presence of other topology files or runners does not make them part of the thesis
+artifact.
+
+The scale-up fabric uses a congestion-control-free, hop-by-hop, PFC-style lossless
+backpressure abstraction. Pause thresholds include propagation headroom, and queue
+bounds cover the configured worst-case fan-in. The validation suite checks that the
+abstraction engages and remains within its per-queue bounds for the evaluated workloads.
+
+This is not a standards-compliant PFC or CBFC implementation. It models one link-wide
+traffic class, not per-VC credit state or a finite shared switch-memory pool. The results
+therefore support the tested topologies and workloads; they do not establish arbitrary
+mixed-workload deadlock freedom or hardware-faithful CBFC behavior. Replacing this model
+with CBFC is future work because it would change queueing and potentially the measured
+completion times.
+
+## Setup
+
+From the repository root:
+
+```bash
+git submodule update --init --recursive \
+  sim/pcm-sdk_zhiyi goal_gen/ai/nccl_generator_v2
+
+# The build context contains only this Dockerfile and entrypoint, not the full checkout.
+docker build -t atlahs-sim simulation-scripts/
+
+# Build the simulator and collective-aware txt2bin in the bind-mounted checkout.
+# --user avoids root-owned outputs on native Linux hosts.
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$(pwd)":/workspace atlahs-sim build
+
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$(pwd)":/workspace atlahs-sim list
+```
+
+The build overlays the patch directories into the nested simulator source trees before
+compiling. Generated build products and those overlay copies may make submodule
+worktrees appear dirty; do not confuse them with a new publication revision. Release
+commits must be made before building and must record clean, public submodule gitlinks.
+
+Run the lightweight artifact gates with:
+
+```bash
+simulation-scripts/validate_artifact.sh
+```
+
+This checks the analytic/data claims, generates and compiles the canonical and
+flow-control-validation arms, and runs the packet-level collective/domain regression
+suites. Pass `--extended` to include retained supplementary and superseded runners. Full
+experiment matrices are separate because Chapter 5 is multi-hour and memory-intensive.
+`--pfc-smoke` adds a packet-level PFC instrumentation run, but constructing its 256-host
+fabric makes it substantially slower than the default gates.
+
+## Results and provenance
+
+Tracked files under `simulation-scripts/results/` are reference data used by the thesis.
+They reproduce the thesis assets, but correctness fixes can change packet-level ECMP and
+timing; do not mix historical and current rows. New runtime outputs are ignored by default.
+Chapter 5 uses immutable
+`runs/<run-id>/` directories and refuses to overwrite an existing run.
+
+The historical Chapter 5 data-of-record run includes a complete ten-file source snapshot
+and binary/source hashes, but it was executed in a checkout whose Git metadata and Docker
+image ID were unavailable. See its adjacent `PROVENANCE.md` before claiming a byte-for-byte
+runtime reconstruction. A publication release should retain the historical data and also
+produce a fresh, fully pinned run from the clean public release commit.
 
 ## Layout
 
-```
+```text
 simulation-scripts/
-├── Dockerfile          light base (ubuntu:24.04) + build toolchain (cmake, g++, re2c, …)
-├── entrypoint.sh       build | list | run <exp> [args]   (baked into the image — rebuild after editing)
-├── build_sim.py        builds the pcm binary (submodule) + coll-txt2bin; no GPU deps
-├── common/             shared library: paths (env-overridable), GOAL writers +
-│                       txt2bin compile, simulator invocation + makespan/drop
-│                       parsing, CSV/report helpers
-├── experiments/        one directory per independent experiment
-│   ├── scaleup_coll_ab/   the scale-up INC-vs-endpoint collective A/B (see its README)
-│   └── _template/         copy-me skeleton; underscore ⇒ hidden from dispatch
-├── topo_files/         .topo inputs (scale-up + scale-out; see its README)
-└── results/<exp>/      experiment outputs (CSV + logs); gitignored, created at runtime
+├── Dockerfile             CPU-only build/runtime image
+├── entrypoint.sh          build | list | run <experiment>
+├── validate_artifact.sh   fast publication gates
+├── build_sim.py           simulator + collective compiler build
+├── common/                GOAL, simulator, topology, and reporting helpers
+├── experiments/           isolated experiment runners and frozen wrappers
+├── model_checks/          analytic and committed-data verification
+├── topo_files/            canonical, validation, and exploratory topologies
+└── results/               tracked reference data plus ignored new runs
 ```
 
-Reused (not duplicated): the `sim/pcm-sdk_zhiyi` submodule (the engine), the
-pure-python NCCL→GOAL generator (`goal_gen/ai/nccl_generator_v2`), and the coll
-grammar patch (`tools/loggopsim-coll/coll.patch`).
-
-## Prerequisite (host)
-
-Materialize the simulator submodule once:
-
-```bash
-git submodule update --init --recursive sim/pcm-sdk_zhiyi
-```
-
-## Reproduce
-
-```bash
-# from the repo root
-docker build -f simulation-scripts/Dockerfile -t atlahs-sim .
-
-# build the simulator + coll-txt2bin (CPU-only; ~one-time)
-docker run --rm -v "$(pwd)":/workspace atlahs-sim build
-
-# what can I run?
-docker run --rm -v "$(pwd)":/workspace atlahs-sim list
-
-# topology-independent check (no simulator run): step counts vs the NCCL paper + compile
-docker run --rm -v "$(pwd)":/workspace atlahs-sim run scaleup_coll_ab --validate
-
-# the A/B sweep — AllReduce (ring + recursive-doubling), ReduceScatter, AllGather
-docker run --rm -v "$(pwd)":/workspace atlahs-sim run scaleup_coll_ab --n 8 --su-topo <topo>
-```
-
-Results land in `simulation-scripts/results/<exp>/` (bind-mounted back to the
-host). Experiments also run locally without Docker once the binaries are built
-in-tree — paths resolve relative to the repo checkout, each overridable by env
-var (see `common/paths.py`).
-
-## Adding an experiment
-
-```bash
-cp -r simulation-scripts/experiments/_template simulation-scripts/experiments/<name>
-```
-
-then edit `run.py` (GOAL synthesis → `goal.compile_goal` → `sim.run_sim` →
-`report.CsvAppender`) and the README. `run <name>` and `list` pick it up
-automatically — no dispatch registration. Conventions: argparse CLI; results via
-`paths.results_dir("<name>")`; topologies via `paths.topo(basename)`; keep loud
-TODO-marked guardrails on parsed inputs during development. Details in
-`experiments/_template/README.md`.
-
-## Status / notes
-
-- The scale-up **topology** is still a deferred decision (crossbar vs NVL72-style
-  tree vs the emerging NVLink5/UALink/SUE set); `--su-topo` takes a placeholder
-  until it's chosen. `--validate` needs no topology.
-- Different base image than Zhiyi's full pipeline → confirm the sim produces
-  identical numbers to a known run (the discrete-event sim is deterministic;
-  verified bit-identical macOS-local vs Docker-Linux 2026-07-20).
-- Design rationale: `sim/htsim-backend/sim/AA-plan-Scaleup-Baselines/plan.md` and
-  `sim/htsim-backend/sim/AA-plan-Sim-Scripts-Restructure/plan.md` (local).
+Paths resolve from the repository checkout and can be overridden with the environment
+variables documented by each experiment. To add a development experiment, copy
+`experiments/_template`; do not classify it as canonical until its command, inputs,
+outputs, and validation gate are documented.

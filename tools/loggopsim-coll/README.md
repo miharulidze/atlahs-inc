@@ -12,6 +12,12 @@ its incast output segfaults `start_lgs`). This is what produced the shipped
 `Goal.hpp`, `Parser.hpp`) and leaves the point-to-point (`send`/`recv`/`calc`)
 `.bin` encoding **byte-identical**.
 
+`op-flow-id-range.patch` restricts collective instance/`Tag` to
+`0..999,999,999`. GOAL stores the field as uint32, but htsim reserves IDs from
+`1,000,000,000` upward for dynamically allocated point-to-point flows. The
+guard rejects reserved or overflowing values instead of silently aliasing a
+trace-wide `op_flow_id`.
+
 ## Build
 
 ```bash
@@ -21,6 +27,7 @@ tar xzf LogGOPSim-1.1.tgz && cd LogGOPSim-1.1
 
 # 2. Apply the coll grammar (from the dir holding this README)
 patch -p1 < /path/to/tools/loggopsim-coll/coll.patch
+patch -p1 < /path/to/tools/loggopsim-coll/op-flow-id-range.patch
 
 # 3. Regenerate the lexer and build (macOS: brew install re2c gengetopt)
 re2c -o txt2bin.cpp txt2bin.re
@@ -36,7 +43,9 @@ g++ -g -O3 txt2bin.cpp cmdline_txt2bin.c -o txt2bin        # or: make txt2bin
 coll <kind> <size>b <group> <instance> <root> [cpu <c>] [nic <n>]
 ```
 - `kind` ∈ `bcast | reduce | allreduce | reduce_scatter | allgather`
-- `root` = destination host for rooted ops; `-1` for rootless (allreduce/allgather/reduce_scatter)
+- `root` = global GOAL rank of the rooted participant for Broadcast/Reduce;
+  `-1` for rootless operations (AllReduce/AllGather/ReduceScatter)
+- `instance` = trace-wide `op_flow_id` in `0..999,999,999`
 
 ## `.bin` encoding contract
 
@@ -48,18 +57,18 @@ commit `e5c3ddf`). A coll op reuses the existing fixed Node record:
 
 p2p `send`/`recv`/`calc` records are unchanged.
 
-## Validation (2026-07-01)
+## Validation
 
 - **Byte-identical p2p:** the patched `txt2bin` on the shipped `16_nodes_incast.goal`
   reproduces `16_nodes_incast.bin` (3064 B) **byte-for-byte** (`cmp`-clean) — the coll
   additions do not disturb the p2p format.
-- **Coll round-trip:** a `coll allreduce` `.goal` compiles to a `.bin` that the sim
-  **parses and recognizes** (`OPTYPE_ALLREDUCE → OP_ALLREDUCE`), currently no-op'd
-  (0 packets, exit 0) — correct until Increment 3 wires the collective src/sink that
-  turns recognized coll ops into actual INC traffic.
+- **Collective execution:** `simulation-scripts/validate_artifact.sh` compiles all five
+  verbs and runs packet-level positive and fail-fast regressions against the public PCM
+  backend, including delayed arrivals, rooted nonzero domains, partial domains, malformed
+  groups, incomplete operations, and the `op_flow_id` namespace boundary.
 
 ## Provenance
 
-Part of the ARCH-1 INC port (Increment 2c, writer side). The coll grammar mirrors the
-reader-side committed in pcm-sdk `HTSIM_spcl-patch/lgs/` (`e5c3ddf`); this patch is the
-matching writer on the canonical LogGOPSim 1.1 base.
+This writer originated in the ARCH-1 INC port and mirrors the reader under the public
+PCM repository's `HTSIM_spcl-patch/lgs/`. The root ATLAHS gitlink records the exact
+reader revision paired with this patch.

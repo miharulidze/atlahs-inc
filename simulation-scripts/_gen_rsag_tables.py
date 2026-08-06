@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Emit the LaTeX tables for the Reduce-Scatter / AllGather validation section.
 
-Usage:  python3 _gen_rsag_tables.py            # writes into thesis-skeleton/figures/
+Usage:  python3 _gen_rsag_tables.py            # writes into results/generated-assets/rsag_tables/
         RSAG_OUT=/some/dir python3 _gen_rsag_tables.py
 
 Every number is computed here from the measured CSVs plus constants derived from
@@ -52,7 +52,7 @@ ROOT = os.environ.get(
     "ATLAHS_ROOT",
     os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")))
 OUT  = os.environ.get("RSAG_OUT",
-       os.path.expanduser("~/CLionProjects/thesis-skeleton/figures"))
+       os.path.join(ROOT, "simulation-scripts", "results", "generated-assets", "rsag_tables"))
 T_L, T_SW, B, H, MSS = 50.0, 300.0, 500.0, 64, 4096
 FRAME = MSS + H
 
@@ -390,6 +390,7 @@ def table_podstep():
     return wrap("r r r r r rr", hdr, "\n".join(out))
 
 if __name__ == '__main__':
+    os.makedirs(OUT, exist_ok=True)
     t1, worst, wrb, wblk, same = table_rsag_both()
     tb, wbi, wbb = table_bcast_both()
     td, wd = table_duality()

@@ -1,23 +1,28 @@
-# Emerging scale-up domain topologies (Table 2.2)
+# Topology inputs
 
-htsim fat-tree `.topo` models of the emerging **scale-up** interconnects compared in the ATLAHS v2
-thesis (Zhiyi Hu, "Extending ATLAHS", Table 2.2 "Comparison of Emerging Scale-Up Technologies").
-Each fabric is a `FatTreeTopology` `.topo` (shared format — the pcm-sdk two-tier simulator IS htsim).
+These htsim `FatTreeTopology` files are consumed by the pcm-sdk two-tier simulator as
+scale-up or scale-out domains. Publication experiments select topologies explicitly;
+there is no implicit "current" topology.
 
-**These files live here, in the experiment harness's topo dir (`simulation-scripts/topo_files/`), because
-all HEADLINE scale-up experiments run through the pcm-sdk two-tier simulator** — the htsim-backend fork
-was only the primitive-development / `.cm`-validation sandbox. The experiments
-(`simulation-scripts/experiments/*/run.py`, e.g. `scaleup_coll_ab`) feed each file to the pcm binary as
-the scale-up domain:
+## Publication and optional experiment inputs
 
-- headline (pcm two-tier): `run scaleup_coll_ab --su-topo <file>` → `htsim_flow_app_atlahs … -intranode_topo <file>`,
-  run inside the `atlahs-sim` Docker image (the pcm binaries are Linux/aarch64 builds).
-- dev cross-check only (fork, macOS-native): `htsim_uec -topo <file> …`.
+| file | publication use |
+|---|---|
+| `scaleup_single_switch_64_4000Gbps.topo` | Chapter 4 completion-time and footprint results; PFC census |
+| `scaleup_3tier_256_4000Gbps.topo` | Chapter 4 multi-tier results; PFC stress and census |
+| `scaleup_ft_radix32_1024_4000Gbps.topo` | opt-in footprint extension at paper scale; not part of the tracked thesis matrix |
+| `tree16_bw200Gbps.topo` / `tree64_8.topo` | idle scale-out domains for isolated scale-up tests |
 
-**OISA 2.0 is intentionally omitted** (China Mobile; bandwidth "Unknown", no public deployment
-structure to mimic). NVLink 5.0, UALink 1.0 and SUE are modelled as **one faithful `.topo` per
-technology** (real structure + real-ish latency). *The earlier nonblocking/realistic two-variant split is
-being retired — NVLink is already consolidated; UALink and SUE consolidation is pending.*
+Chapter 5 generates its parameterized topologies inside each immutable run directory.
+Probe files and the emerging-technology models below are validation or exploratory
+inputs, not substitutions for the frozen publication topologies. The retired standalone
+htsim backend is not part of the supported experiment path.
+
+## Exploratory emerging-technology files
+
+The following models originated with the emerging scale-up comparison in the ATLAHS v2
+thesis. Their product-level latency and structure assumptions are documented here, but
+they do not feed the canonical Chapter 4 or Chapter 5 results.
 
 ## Files
 
@@ -80,12 +85,10 @@ lossless via LLR + CBFC — the low-latency scale-up chip) and **Tomahawk 6** (1
 radix-128 TH6 is **non-blocking in 2 tiers**. Sources: Broadcom SUE framework spec + blogs, Tomahawk 6
 / Tomahawk Ultra releases, HPCwire, ServeTheHome.
 
-## Model per technology (consolidation in progress)
+## Exploratory model notes
 
-The design is moving to **one faithful `.topo` per technology** — real structure + real-ish latency, with
-unsourced latencies labelled as estimates. The earlier **nonblocking/realistic** two-variant scheme
-(idealized `Oversubscribed 1` + generic 500/300 ns latency, vs. product-faithful radix/tiers/latency) is
-being retired. NVLink is consolidated; UALink and SUE are pending.
+The paired nonblocking/realistic files are retained as distinct sensitivity inputs. They
+are not a pending publication choice: canonical runners name their topology directly.
 
 Honest per-tech notes:
 - **NVLink 5.0 (consolidated → `scaleup_nvlink5_nvl72_7200Gbps.topo`):** genuinely single-tier non-blocking
@@ -101,25 +104,10 @@ Honest per-tech notes:
   pods are non-blocking; htsim can't express radix-128), but it carries the real **250 ns Tomahawk-Ultra**
   switch latency, deliberately capturing the genuine Ethernet-vs-NVLink switch-latency gap.
 
-## Validation status
+## Validation policy
 
-**Topology load/construct — ALL 6 PASS.** Each builds exactly its Max Scale host count (72 / 1024 /
-4096) with zero structural asserts, respecting the 96-port cap. Recipe:
-
-```
-cd sim/htsim-backend/sim/datacenter
-./make_allreduce_ab /tmp/probe.bin ring 8 4096
-./htsim_uec -goal /tmp/probe.bin -topo topologies/scaleup_emerging/<file> \
-            -strat ecmp_host -linkspeed <bidirGBps*4>000 -mtu 4096 -paths 128 -seed 1
-# PASS = "FatTree constructor done, <MaxScale> nodes created", 0 asserts
-```
-
-**Full packet-sim run — a known htsim scale ceiling, NOT a topology defect:**
-- NVLink 5.0 (72) runs a full ring sim to completion cleanly.
-- UALink 1.0 (1024) and SUE (4096) **load correctly** but a full default-config UEC packet sim aborts in
-  htsim's queue scheduler (`compositequeue.cpp:120 assert(0)`) at ~100 %+ progress. This is a htsim
-  **engine/config ceiling above ~1000 hosts**, proven **orthogonal to topology validity**: a
-  hand-built non-blocking 2-tier fat-tree at **256** hosts (same shape as the UALink file) runs clean,
-  while the identical structure at 1024 aborts. Independent of `-paths` and `-queue_type`. Resolving it
-  (CC/queue/coupling-mode tuning, or a htsim fix) is a separate task before running full sims at
-  1024/4096; the topology files themselves are correct and reusable.
+Canonical topology loading is exercised by the supported experiment validation and
+release commands in `REPRODUCING.md`. The emerging 1024- and 4096-endpoint files have
+passed structural construction checks, but large packet simulations with them are not a
+supported artifact claim. Treat those files as exploratory until a pcm-sdk workload and
+acceptance test are added to the public suite.

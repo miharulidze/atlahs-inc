@@ -262,59 +262,62 @@ def _batches(N, per_leaf=4, per_pod=16, r=0):
 
 
 def fig_rsag_regimes(main, fname, N=64):
-    """Figure 4.5's regime plot, for the two sharded collectives.
+    r"""Figure 4.5's legal-domain comparison for the two sharded collectives.
 
-        speedup^C(S) = ((N-1) lam_max + (N-1)/N T) / T_inc^C(S),   T = f_w(S)/B
+    The ring model is valid only once every rank's shard contains a complete MSS, so
+    the dense curves contain exactly the aligned sizes S = N*k*MSS, k >= 1.  Evaluate
+    the first-form equations from the integer shard size b = S/N:
 
-    Same shape as the rooted case -- a monotone decay from a latency bound to a
-    bandwidth one -- but the two collectives share a NUMERATOR (one endpoint ring
-    measures both) and differ in the denominator, so they leave the same latency bound
-    and land on different asymptotes:
-        RS:  t_d + T                              -> (N-1)/N,  a hair BELOW one
-        AG:  max_s [t_s + (n_{>=s}/N) T]          -> exactly 1
-    The two are 1.6% apart at N=64 and invisible on a log axis, so one dotted line is
-    drawn at 1 and the RS asymptote is named in the caption rather than plotted --
-    drawing two indistinguishable lines would imply a resolution the figure lacks.
+        T_ring = (N-1) [lambda(d,b) + f_w(b)/B]
+        T_RS   = delta(d,b) + N f_w(b)/B
+        T_AG   = max_s [delta(s,b) + n_{>=s} f_w(b)/B].
 
-    NO f_w(S)/B = t_d marker, unlike the rooted figure. There the condition is exact:
-    the in-network denominator is t_d + T, so it is where the two terms cross. Here it
-    would be exact for Reduce-Scatter and meaningless for AllGather, whose denominator
-    is a maximum over depth batches with no single latency term to cross -- and a
-    vertical line that reads for only one of two plotted curves misleads.
+    The dashed line shows the latency bound evaluated at one full-MSS packet. The
+    bandwidth reference remains at one; a separate
+    (N-1)/N reference for RS would be visually indistinguishable at N=64.
+
+    There is no f_w(S)/B = delta(d,S) marker. It would apply only to Reduce-Scatter;
+    AllGather's denominator is a maximum over depth batches with no single latency term
+    to cross, so a vertical line that reads for only one of two curves would mislead.
 
     Sized to be READ: 7.4in wide, not the rooted figure's 11in. Both are included at
     \linewidth (369pt = 5.1in), so 11in is downscaled 0.46x and 7.5pt type lands at
     3.5pt on the page. At 7.4in the scale is 0.69x and 10pt type lands near 7pt."""
-    sizes = [2**(k/4) for k in range(70, 118)]      # from the smallest legal shard up
+    plot_max = 2**29.2
+    stride = N * _MSS
+    sizes = range(stride, int(plot_max) + 1, stride)
     fig, axes = plt.subplots(1, 2, figsize=(7.4, 3.9), sharey=True)
     for ax, (tag, topo, d) in zip(axes, (
             (r"(a)  single switch, $d{=}1$", SS, 1),
             (r"(b)  three-tier, $d{=}3$",    FT, 3))):
-        lam_max, t_d = _lam(d), _t_root(d)
         bat = {1: N-1} if d == 1 else _batches(N)
 
-        def t_rs(S):
-            return t_d + _fw(S)/_B
+        def t_ring(b):
+            return (N-1) * (_lam_chunk(d, b) + _fw(b)/_B)
 
-        def t_ag(S, bat=bat):
-            return max(_t_root(sv)
-                       + sum(n for dd, n in bat.items() if dd >= sv)*_fw(S//N)/_B
+        def t_rs(b):
+            return _delta(d, b) + N*_fw(b)/_B
+
+        def t_ag(b, bat=bat):
+            return max(_delta(sv, b)
+                       + sum(n for dd, n in bat.items() if dd >= sv)*_fw(b)/_B
                        for sv in bat)
 
         for coll, tinc in (("reduce_scatter", t_rs), ("allgather", t_ag)):
-            num = [(N-1)*lam_max + (N-1)/N*_fw(S)/_B for S in sizes]
-            ax.plot(sizes, [n/tinc(S) for n, S in zip(num, sizes)],
+            ax.plot(sizes, [t_ring(S//N)/tinc(S//N) for S in sizes],
                     color=C[coll], lw=1.7, label=f"{TITLE[coll]}, model")
             m = series(main, coll, topo=topo)
             if m:
                 ax.plot([x[0] for x in m], [x[2]/x[1] for x in m], "o", ms=5,
                         color=C[coll], mfc="white", mew=1.4,
                         label=f"{TITLE[coll]}, measured")
-        ax.axhline((N-1)*lam_max/t_d, color="#d62728", ls="--", lw=1.2,
+        path_ref = (N-1)*_lam_chunk(d, _MSS)/_delta(d, _MSS)
+        ax.axhline(path_ref, color="#d62728", ls="--", lw=1.2,
                    label="latency bound")
-        ax.axhline(1.0, color="#2ca02c", ls=":", lw=1.6, label="bandwidth bound")
-        # the bound's VALUE, since the legend no longer carries its formula
-        ax.text(0.97, 0.93, f"{(N-1)*lam_max/t_d:.0f}$\\times$",
+        ax.axhline(1.0, color="#2ca02c", ls=":", lw=1.6,
+                   label="bandwidth reference")
+        # The reference value, since the legend no longer carries its formula.
+        ax.text(0.97, 0.93, f"{path_ref:.0f}$\\times$",
                 transform=ax.transAxes, ha="right", va="top",
                 fontsize=9, color="#d62728")
         style(ax, ylabel=None)
@@ -326,7 +329,7 @@ def fig_rsag_regimes(main, fname, N=64):
         # close enough to touch at this width.
         ax.set_xticks([262144, 4194304, 67108864])
         ax.set_xticklabels(["256 KiB", "4 MiB", "64 MiB"], fontsize=9)
-        ax.set_xlim(2**17.4, 2**29.2)
+        ax.set_xlim(stride, plot_max)
         ax.tick_params(axis="both", labelsize=9)
         ax.set_xlabel("message size", fontsize=10)
         ax.set_title(tag, fontsize=10)

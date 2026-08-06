@@ -7,7 +7,7 @@
 # If c is per-round the floor must come out as (N-1)*2.243 ns at d=1:
 #   N= 4 ->   6.7    N= 8 ->  15.7    N=16 ->  33.6    N=32 ->  69.5    N=64 -> 141.3
 set -uo pipefail
-R=/Users/wstaempfli/CLionProjects/atlahs
+R="$(cd "$(dirname "$0")/../.." && pwd)"
 for N in 4 8 16 32 64; do
   S=$((N * 65536))
   OUT=/workspace/simulation-scripts/results/_floorprobe3_n$N

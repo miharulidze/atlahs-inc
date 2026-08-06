@@ -369,20 +369,36 @@ def check_handover():
     check("closed form picks the same shell as the argmax at every size", not bad,
           f"{len(list(rows_of(M.MAIN, FT, 'allgather')))} sizes agree"
           if not bad else f"mismatches: {bad}")
-    check("hand-over sizes are 1.8 MB and 7.3 MB as quoted",
-          abs(64 * (step / sh[2]) * M.B / 2**20 - 1.82) < 0.02
-          and abs(64 * (step / sh[1]) * M.B / 2**20 - 7.29) < 0.02,
-          f"{64*(step/sh[2])*M.B/2**20:.2f} MiB and {64*(step/sh[1])*M.B/2**20:.2f} MiB")
+    # Invert f_w(b), not b: every frame carries an H-byte header. The integer search
+    # also retains f_w's ceil for the final partial frame.
+    def payload_at_wire_bytes(target):
+        lo, hi = 1, math.ceil(target)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if M.wire(mid) < target:
+                lo = mid + 1
+            else:
+                hi = mid
+        return lo
+
+    handover_mib = {
+        s: 64 * payload_at_wire_bytes((step / sh[s]) * M.B) / 2**20
+        for s in (1, 2)
+    }
+    check("hand-over sizes are 1.8 MiB and 7.2 MiB as quoted",
+          abs(handover_mib[2] - 1.79) < 0.02
+          and abs(handover_mib[1] - 7.18) < 0.02,
+          f"{handover_mib[2]:.2f} MiB and {handover_mib[1]:.2f} MiB")
 
 
-# ── 6. Figure 4.8's shell arithmetic ─────────────────────────────────────────
+# ── 6. Figure 4.11's shell arithmetic ────────────────────────────────────────
 def check_shell_figure():
     """Re-derive every number drawn in the AllGather shell figure.
 
     The figure hard-codes bar coordinates, so it is the one place in the chapter that
     could silently drift from the data. This pins the three bounds, which shell binds at
     each size, and the model/measurement agreement."""
-    print("\n6. Figure 4.8 (AllGather shell maximum): its drawn numbers")
+    print("\n6. Figure 4.11 (AllGather shell maximum): its drawn numbers")
     w = M.MSS + M.H
     tinc = {s: M.fill(s, w) - w / M.B for s in (1, 2, 3)}
     ok = all(abs(tinc[s] - v) < 0.1 for s, v in ((1, 408.3), (2, 1125.0), (3, 1841.6)))
@@ -394,7 +410,7 @@ def check_shell_figure():
           " / ".join(str(nge[s]) for s in (1, 2, 3)))
 
     # (size, which shell the figure draws as binding, the T it prints)
-    drawn = ((262144, 3, 2241), (4194304, 2, 9112), (16777216, 1, 33954))
+    drawn = ((262144, 3, 2241), (4194304, 2, 9112), (16777216, 1, 33955))
     rows = {int(r["msg_bytes"]): r for r in rows_of(M.MAIN, FT, "allgather")}
     for S, want_s, want_T in drawn:
         tb = M.wire(S // 64) / M.B

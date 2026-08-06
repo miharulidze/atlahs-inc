@@ -1,9 +1,9 @@
 # scaleup_ar_bandwidth — fused apex vs composed RS+AG (reduction bandwidth)
 
-**Status: RUN 2026-07-26.** Results are tracked (`results/scaleup_ar_bandwidth/`:
+**Status: supplementary, run 2026-07-26.** Results are tracked (`results/scaleup_ar_bandwidth/`:
 `scaleup_ar_bandwidth.csv`, `ar_bandwidth.pdf/png`). Supplementary material — not a
 thesis asset; the thesis quotes only the isolation-deck summary of this experiment.
-(See "Bug independence" below for why the apex/composed ratio is exact either way.)
+(The apex/composed ratio is a same-datapath structural comparison.)
 
 ## What this measures
 
@@ -20,14 +20,12 @@ This is the **bandwidth-dual** of the completion-time "apex-fusion premium" (1.9
 **both decompositions pay a host round-trip between waves; only the fused apex turns around
 in-switch and approaches wire speed.** Composed RS+AG is expected to land near half wire.
 
-## Bug independence
+## Metric interpretation
 
-Both arms are INC coll ops with the identical headerless analytic completion, so the pcm
-`B_inc != B_ring` ~2% header artifact is **common-mode and cancels in the apex/composed
-ratio**. The bug only distorts INC-vs-*endpoint* comparisons (the `scaleup_coll_ab` A/B),
-not this INC-vs-INC structure comparison. The absolute "% of wire" annotation reads ~2%
-optimistic until the fix lands; the apex-vs-composed ratio is exact regardless. Results are
-held per instruction, not because the comparison is unsound.
+Both arms are INC collective operations on the same receive datapath, so fixed datapath
+overheads are common-mode in the apex/composed ratio. The earlier header-accounting issue
+has been fixed, and the tracked curve is post-fix. This remains supplementary evidence,
+not a headline thesis result.
 
 ## Parameters
 
@@ -61,23 +59,22 @@ sweep here is the figure; these 3 points are the cross-check.
 
 ```bash
 # generate + compile both INC arms, NO sim (safe now):
-python3 experiments/scaleup_ar_bandwidth/run.py --validate
+python3 simulation-scripts/experiments/scaleup_ar_bandwidth/run.py --validate
 
-# full sweep:
-python3 experiments/scaleup_ar_bandwidth/run.py --su-topo scaleup_single_switch_64_4000Gbps.topo
+# complete supplementary sweep with atomic reference refresh:
+simulation-scripts/experiments/scaleup_ar_bandwidth/run_thesis.sh
 
 # plot (needs matplotlib; container):
-python3 experiments/scaleup_ar_bandwidth/plot.py
+python3 simulation-scripts/experiments/scaleup_ar_bandwidth/plot.py
 ```
 
 Output CSV: `simulation-scripts/results/scaleup_ar_bandwidth/scaleup_ar_bandwidth.csv`.
-Figure: `ar_bandwidth.pdf` (copy into `thesis-skeleton/figures/matplotlib/`).
+Figure: `ar_bandwidth.pdf` in the same result directory; copy it into the manuscript
+asset tree only when assembling a paper checkout.
 
 ## Citations
 
 - Fused apex → **`graham2020sharp`** (SHARP/NVLS), with `sapio2021switchml`, `lao2021atp` as
   fused programmable-switch exemplars.
-- Composed RS+AG → NVLS-multimem / MSCCL++ — **needs a new `mscclpp` bib entry** (absent from
-  both bibs today). Not `scin` (unanalysed; leans fused).
-
-Design context: `sim/htsim-backend/sim/AA-plan-Validation-Chapter/plan.md` (Experiment E1; local, untracked).
+- Composed RS+AG → NVLS-multimem / MSCCL++; cite the source selected by the paper rather
+  than treating this supplementary README as a bibliography.

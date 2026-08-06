@@ -12,7 +12,7 @@
 # Flat, then a knee, then near-linear.  The intermediate points will say where the knee is
 # and whether the growth is linear in bytes, in frames, or something with a threshold.
 set -uo pipefail
-R=/Users/wstaempfli/CLionProjects/atlahs
+R="$(cd "$(dirname "$0")/../.." && pwd)"
 SIZES=$(python3 -c "print(','.join(str(64*(8192<<k)) for k in range(0,10)))")
 OUT=/workspace/simulation-scripts/results/_floorprobe6
 rm -rf "$R/simulation-scripts/results/_floorprobe6"

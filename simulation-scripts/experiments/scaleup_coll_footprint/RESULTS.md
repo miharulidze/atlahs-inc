@@ -1,122 +1,47 @@
-# Results — multicast bandwidth-usage reduction (measured)
+# Tracked network-footprint results
 
-Simulator-measured reproduction of Khalilov et al. SC24 Fig. 2 on pcm-sdk, scale-up
-domain in isolation. Metric = `footprint_baseline / footprint_INC` (byte·link crossings),
-MTU-aligned message (`-mtu 4160`, per-rank chunk = 1 packet), `reduce_compute_latency = 0`.
-Generated 2026-07-23; raw data in `results/scaleup_coll_footprint/scaleup_coll_footprint.csv`.
+The tracked thesis matrix measures byte-link footprint reduction on the single-switch
+and three-tier fabrics for groups 2–64. The metric is:
 
-## Measured byte-ratios
+```text
+endpoint byte-link crossings / in-network byte-link crossings
+```
 
-**AllGather** (the paper's Fig. 2 collective):
+Messages are MTU-aligned (`-mtu 4160`, one 4096-byte payload per rank), and reduction
+compute is disabled. The source is
+`results/scaleup_coll_footprint/scaleup_coll_footprint.csv`; its lineage and deduplication
+record are in `../../REFERENCE_DATA.md`.
 
-| P | 2 | 4 | 8 | 16 | 32 | 64 | 128 | 256 |
-|---|---|---|---|---|---|---|---|---|
-| single-switch Ring | 1.02 | 1.52 | 1.78 | 1.90 | 1.97 | 2.00 | — | — |
-| single-switch RD   | 1.02 | 1.52 | 1.77 | 1.89 | 1.95 | 1.98 | — | — |
-| **3-tier Ring**    | 1.02 | 1.52 | 1.78 | 1.90 | 1.97 | 2.00 | 2.01 | 2.02 |
-| **3-tier RD**      | 1.02 | 1.52 | **2.22** | **2.72** | **3.59** | **4.09** | **4.34** | **4.47** |
-| analytic 2−2/P     | 1.00 | 1.50 | 1.75 | 1.88 | 1.94 | 1.97 | 1.98 | 1.99 |
+## AllGather
 
-**AllReduce** RD (3-tier) tracks AllGather RD almost exactly (4.47× @ P=256).
-**ReduceScatter** RD (3-tier) is slightly lower (1.85 / 2.47 / 3.35 / 3.95 / 4.27 / 4.43 at
-P=8…256) and starts at **0.68 at P=2** (see finding 5). Single-switch Ring≡RD for all three.
+| fabric / baseline | P=2 | P=4 | P=8 | P=16 | P=32 | P=64 |
+|---|---:|---:|---:|---:|---:|---:|
+| single switch, Ring | 1.015 | 1.523 | 1.777 | 1.904 | 1.967 | 1.999 |
+| single switch, recursive doubling | 1.015 | 1.523 | 1.769 | 1.890 | 1.950 | 1.979 |
+| three tier, Ring | 1.015 | 1.523 | 1.777 | 1.904 | 1.967 | 1.999 |
+| three tier, recursive doubling | 1.015 | 1.523 | 2.223 | 2.721 | 3.594 | 4.093 |
 
-**Radix-32 3-tier, 1024 hosts (the paper's exact topology)** — AllGather, enabled by the P=1024 fix
-(finding 6):
+On the single switch every pair is two hops, so Ring and recursive doubling approach
+the same 2x data-movement limit. On the three-tier fabric, recursive doubling sends its
+later, larger exchanges across leaf and pod boundaries, so its endpoint footprint grows
+relative to multicast.
 
-| P | 2 | 4 | 8 | 16 | 32 | 64 | 128 | 256 | 512 | 1024 |
-|---|---|---|---|---|---|---|---|---|---|---|
-| Ring | 1.02 | 1.52 | 1.78 | 1.90 | 1.97 | 2.00 | 2.01 | 2.02 | 2.03 | ~2.03† |
-| RD   | 1.02 | 1.52 | 1.77 | 1.89 | 2.78 | 3.28 | 3.53 | **3.66** | 4.65 | **5.15** |
+Ring AllReduce has the same byte ratios as AllGather. ReduceScatter is below one at P=2
+(0.677), where the aggregation setup is not amortized, and exceeds one from P=4 onward.
+Broadcast and Reduce show the same qualitative multicast/aggregation benefit.
 
-†Ring @ P=1024 not captured — the 1023-step ring baseline trace was SIGKILLed (a resource limit on the
-huge unicast trace, not a crash); Ring is ~2.03 by trend and the analytic `2−2/P`=1.998. RD (log-step)
-runs fine. RD tracks Ring within one 16-host leaf (P≤16), diverges past it, and **best matches the
-paper's ~3.5 at P=256 = one radix-32 pod**; beyond one pod (P≥512) it overshoots because our core tier
-is radix-4 (4 pods) vs the paper's radix-32 core, making inter-pod 6-hop traffic heavier.
+## Interpretation and limits
 
-## Findings
+- Use `ratio_bytes`, not `ratio_crosses`. Endpoint transports emit small ACK/pull packets
+  that inflate packet counts but contribute only about 1.5% of bytes.
+- This is a capacity/traffic-footprint result, not a completion-time speedup. The two
+  metrics answer different questions.
+- The radix-32, 1024-host topology and three-tier points above P=64 are supported as
+  exploratory runner options but are not included in the tracked thesis CSV. Regenerate
+  them into a separately named result set before citing them.
+- The model is a PFC-style lossless abstraction, not hardware CBFC. Publication claims
+  are limited to the tested workloads and topologies.
 
-1. **Single-switch collapses Ring ≡ Recursive-Doubling.** Every GPU pair is 2 hops through
-   the one switch, so both algorithms have the identical footprint and track the analytic
-   `2−2/P` to a 2× plateau. This is by construction, not a simulator artifact — the constant-
-   hop control that isolates the pure multicast win.
-2. **The Ring-vs-RD divergence is a multi-tier effect.** On the 3-tier fat-tree Ring stays flat
-   at ~2× (nearest-neighbour) while RD climbs monotonically as `P` crosses leaf (P≥8) and pod
-   (P≥32) boundaries and its large late-step messages traverse 4- then 6-hop paths — reaching
-   **4.47× at P=256**. This reproduces the shape of the paper's Fig. 2 orange bars.
-3. **The paper's exact topology (radix-32, 1024 hosts) is reproduced** (P=2→1024; enabled by the
-   P=1024 fix, finding 6). Ring stays flat ~2× on the analytic line; RD tracks Ring within one
-   16-host leaf then diverges, **matching the paper's ~3.5 at P=256 (one radix-32 pod)**. Beyond one
-   pod RD overshoots (5.15× @ 1024 vs the paper's 3.6×) because our core tier is radix-4/4-pods, not
-   the paper's radix-32 core — the mechanism/shape are faithful; the inter-pod magnitude is
-   topology-specific. (The small-radix `3tier_256`, finding 2, diverges even earlier — from P=8 —
-   since its leaf is only 4 hosts.)
-4. **Byte-ratio is the clean metric; packet-ratio is control-contaminated.** INC multicast
-   crosses = exactly the data footprint (P² for single-switch AllGather, zero control); the
-   P2P arm drags ~1 control-packet crossing per data packet, so its packet count is ~2× data.
-   In bytes those ~64 B control packets are <~2 %, so the byte-ratio recovers the analytic
-   data-movement `2−2/P`; the packet-ratio does not. All plots use bytes.
-5. **ReduceScatter at P=2 shows a <1 ratio (0.68):** in-network reduction moves marginally
-   *more* than a trivial 2-GPU point-to-point exchange (the aggregation seed/turn-around
-   overhead is not amortised). INC wins from P≥4 onward. An honest small-scale data point,
-   not seen for AllGather/AllReduce.
-6. **P=1024 crash was a fixed uninitialized-pointer bug, not a scale/INC limitation.** INC on large
-   multi-tier fabrics crashed post-collective (`LosslessOutputQueue::completeService` empty-queue
-   assert / `EventList::doNextEvent` SIGSEGV). Root cause: `LogSimInterface::compute_events_handler`
-   (and `null_events_handler`) were declared without initializers in the pcm LGS bridge
-   (`logsim-interface.h`), so the ctors' lazy `if (handler==NULL) new ...` read indeterminate memory
-   and, when it was non-NULL garbage, skipped the allocation — leaving a dangling pointer that
-   `execute_compute()->setCompute()` then scheduled, firing on whatever object the garbage aliased (a
-   `LosslessOutputQueue` at the 1024-host heap layout; benign at 256, hence the fabric/arm-dependent
-   look). **Fix: `= nullptr` on both members.** pcm-side only (the htsim-backend fork has no such
-   member); distinct from the fork's traffic-driven >512-node `compositequeue` crash.
-7. **Analytical cost model (Khalilov's method) validates the sim and quantifies the gap to the paper.**
-   `analytic_khalilov.py` computes the theoretical byte·link footprint from first principles:
-   Ring = `2−2/P`; RD = `Σ_j P·2^(j−1)·hop(2^(j−1))`; multicast-optimal = `P·(P+⌈P/L⌉+⌈P/Q⌉)` — which
-   reproduces the MEASURED INC crosses to the byte (69632/279552/1118208 @ P=256/512/1024). Analytic
-   and measured ratios agree to **<0.5% at every P on all three topologies** (theory ↔ simulation mutual
-   validation). On the paper's radix-32 topology our Ring exactly matches Khalilov's `2−2/P`, and our RD
-   matches the paper up to P≈16 (one leaf) then climbs higher — **5.1× (analytic AND measured) vs the
-   paper's ~3.6× at P=1024**.
-8. **Reconciliation with Khalilov's Appendix B (obtained 2026-07-23).** Appendix B derives the paper's
-   result as **S = 2 − 2/P (Eq. 3), a NIC-BANDWIDTH *time* speedup** for concurrent {AG,RS}: the NIC
-   send/recv path `B_nic` is the bottleneck (ring shares it ½/½; multicast-AG send→`(1/P)B_nic`,
-   recv→`(1−1/P)B_nic`), so `S = (1−1/P)/(½) = 2−2/P`. **Our Ring footprint ratio equals this exactly —
-   i.e. we reproduce the paper's derived formula, not just a plot read.** Crucially, Appendix B's NIC
-   model yields `2−2/P` for **both** Ring AND Recursive-Doubling (RD injects the same `N(P−1)` bytes per
-   NIC), so Fig. 2's *growing* RD curve is NOT the Appendix-B (NIC-time) metric — it is a **fabric-
-   bandwidth / total-data-movement (byte·link) quantity, which is exactly what this experiment measures**.
-   So the RD "gap" (our 5.1× vs Fig. 2's ~3.6×) is a footprint comparison differing only by tree
-   structure (our radix-4 core vs the paper's radix-32 core), **not** a disagreement with the paper's
-   derivation. Our footprint model supplies the fabric-bandwidth view that the NIC-only Appendix-B
-   argument does not capture.
-
-## Method note (for the thesis)
-
-- **Counter:** the PT6 per-link footprint counter (fork origin, ported into
-  `HTSIM_spcl/htsim/sim/pipe.{h,cpp}`) increments once per packet entering a physical `Pipe`;
-  switch-internal stages (`CallbackPipe`: forwarding latency, INC `_reduce_pipe`, lossless wire)
-  set `_count_in_total=false` and are excluded, so the total counts real link traversals only.
-  Both packets and bytes (`+= pkt.size()`) are accumulated. Emitted via `-link_crosses_csv` on
-  the GOAL run path.
-- **Size-independence:** the footprint ratio is analytically independent of message size (the
-  paper's "N cancels"); confirmed empirically — a `--size-mults 1,4,16` control leaves the ratio
-  flat. The sweep therefore uses the cheapest MTU-aligned message (per-rank chunk = 1 packet).
-- **Validation oracle:** single-switch AllGather INC crosses = P² exactly and the byte-ratio =
-  `2−2/P` (within the ~1.5 % control offset); Ring≡RD data footprint; scale-out fabric zero
-  crosses; and the single-fixed-width-topo mode (`nodes=2`) reproduces the exact-width recipe
-  byte-for-byte (`_validate_footprint.py`).
-
-## Caveats
-
-- The ~1.5 % control-packet offset is a small **pro-INC bias** (the P2P baseline pays for ACKs the
-  analytic model ignores). Reported honestly; a data-packet-only sub-count would remove it exactly.
-- **No lossless host-count ceiling** (corrected): the `compositequeue` ~1000-host abort is a
-  fork / default-`COMPOSITE`-queue runtime bug, off our path — our scale-up fabric uses the separate
-  `LosslessInputQueue`. Probed 128→4096 host objects under lossless: all clean. The only hard
-  topology limit is htsim's ≤96 ports/switch (`fat_tree_topology.cpp:876`), a per-switch cap, not a
-  fabric-size cap. 3-tier `P > 256` is therefore reachable (runtime-bound); we stopped at 256 as a
-  topo-size choice, and the divergence trend is already unambiguous by then.
-- All ratios are **network footprint** (bandwidth *usage*), orthogonal to the completion-time
-  speedups measured by `scaleup_coll_ab`.
+Regenerate the two tracked figures with the commands in the experiment README. For a
+new workshop result set, rerun the full frozen matrix on the final public commit instead
+of appending rows to this historical CSV.

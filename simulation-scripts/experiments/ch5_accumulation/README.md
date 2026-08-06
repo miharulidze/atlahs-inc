@@ -42,11 +42,11 @@ network.
 
 ```bash
 # Generator/GOAL correctness gate only (no simulator):
-docker run --rm -v "$(pwd)":/workspace atlahs-sim \
+docker run --rm --user "$(id -u):$(id -g)" -v "$(pwd)":/workspace atlahs-sim \
   run ch5_accumulation --validate --tps 4 --accumulations 32
 
 # Headline TP4/TP8/TP16 experiment at the 4000/400-Gb/s point:
-docker run --rm -v "$(pwd)":/workspace atlahs-sim \
+docker run --rm --user "$(id -u):$(id -g)" -v "$(pwd)":/workspace atlahs-sim \
   run ch5_accumulation --tps 4,8,16 --accumulations 32 \
   --points 4000:400 --iters 1 --jobs 1
 ```
@@ -56,7 +56,7 @@ recorded CSVs (the image entrypoint is overridden only to run the plotting
 script):
 
 ```bash
-docker run --rm --entrypoint python3 -v "$(pwd)":/workspace -w /workspace \
+docker run --rm --user "$(id -u):$(id -g)" --entrypoint python3 -v "$(pwd)":/workspace -w /workspace \
   atlahs-sim simulation-scripts/experiments/ch5_accumulation/plot.py \
   --headline-run simulation-scripts/results/ch5_accumulation/runs/<headline-id> \
   --output-dir simulation-scripts/results/ch5_accumulation/runs/<headline-id>/thesis-assets

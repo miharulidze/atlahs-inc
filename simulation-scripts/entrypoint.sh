@@ -12,12 +12,31 @@ list_experiments() {
   for d in "$EXPS"/*/; do
     name=$(basename "$d")
     case $name in _*) continue ;; esac
-    [ -f "$d/run.py" ] && echo "  $name"
+    if [ -f "$d/run.py" ]; then
+      case $name in
+        scaleup_coll_ab|scaleup_coll_footprint|ch5_accumulation)
+          status="canonical thesis"
+          ;;
+        scaleup_pfc_concurrent)
+          status="validation"
+          ;;
+        scaleup_ar_bandwidth)
+          status="supplementary"
+          ;;
+        intranode_linkspeed_sweep)
+          status="superseded"
+          ;;
+        *)
+          status="unclassified"
+          ;;
+      esac
+      printf "  %-32s %s\n" "$name" "$status"
+    fi
   done
 }
 
 usage() {
-  echo "Usage: docker run --rm -v \$(pwd):/workspace atlahs-sim <build|list|run> [args]"
+  echo "Usage: docker run --rm --user \$(id -u):\$(id -g) -v \$(pwd):/workspace atlahs-sim <build|list|run> [args]"
   echo "Options:"
   echo "  build              build the pcm-sdk htsim simulator (INC datapath) + coll-extended txt2bin"
   echo "                     (CPU-only; requires the sim/pcm-sdk_zhiyi submodule materialized on the host)"

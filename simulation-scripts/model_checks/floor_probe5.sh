@@ -14,7 +14,7 @@
 #            the sender, more buffer removes it.
 # Whichever collapses the excess back to the flat 2.24 ns/round identifies the term.
 set -uo pipefail
-R=/Users/wstaempfli/CLionProjects/atlahs
+R="$(cd "$(dirname "$0")/../.." && pwd)"
 run () {  # $1 = tag, $2... = extra flags
   local tag=$1; shift
   local OUT=/workspace/simulation-scripts/results/_floorprobe5_$tag

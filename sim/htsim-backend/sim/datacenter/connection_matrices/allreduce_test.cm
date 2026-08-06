@@ -1,4 +1,0 @@
-Nodes 16
-Grp 0 4 8 12
-Connections 1
-0->0 id 1 start_allreduce 0 size 4096

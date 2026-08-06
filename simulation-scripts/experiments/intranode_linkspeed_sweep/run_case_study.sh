@@ -7,6 +7,7 @@ set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "$HERE/../../.." && pwd)
 IMAGE=${ATLAHS_SIM_IMAGE:-atlahs-sim}
+DOCKER_USER=${ATLAHS_DOCKER_USER:-$(id -u):$(id -g)}
 DOCKER_BIN=${ATLAHS_DOCKER_BIN:-}
 JOBS=${ATLAHS_SIM_JOBS:-4}
 TIMEOUT=${ATLAHS_SIM_TIMEOUT:-7200}
@@ -29,7 +30,7 @@ run_width() {
   local tp=$2
   local label=$3
   shift 3
-  "$DOCKER_BIN" run --rm -v "$REPO_ROOT":/workspace "$IMAGE" \
+  "$DOCKER_BIN" run --rm --user "$DOCKER_USER" -v "$REPO_ROOT":/workspace "$IMAGE" \
     run intranode_linkspeed_sweep \
     --total_gpus "$total" --tps "$tp" --pps 1 \
     --layers 2 --batch 32 --iters 2 --compute_model h100_te \
@@ -56,10 +57,10 @@ fi
 
 # Recompute the causal skeleton with the same h100_te traces, then regenerate
 # the consolidated case-study figures from the fresh CSVs.
-"$DOCKER_BIN" run --rm --entrypoint python3 -v "$REPO_ROOT":/workspace "$IMAGE" \
+"$DOCKER_BIN" run --rm --user "$DOCKER_USER" --entrypoint python3 -v "$REPO_ROOT":/workspace "$IMAGE" \
   /workspace/simulation-scripts/_run_skeleton_decomposition.py \
   2>&1 | tee "$LOG_DIR/skeleton.log"
-"$DOCKER_BIN" run --rm --entrypoint python3 -v "$REPO_ROOT":/workspace "$IMAGE" \
+"$DOCKER_BIN" run --rm --user "$DOCKER_USER" --entrypoint python3 -v "$REPO_ROOT":/workspace "$IMAGE" \
   /workspace/simulation-scripts/_gen_case_study_figs.py \
   2>&1 | tee "$LOG_DIR/figures.log"
 

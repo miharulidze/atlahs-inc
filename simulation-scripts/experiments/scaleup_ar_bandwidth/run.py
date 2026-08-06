@@ -89,6 +89,7 @@ def run_exp(n, sizes, su_topo, so_topo, reduce_compute, tmpdir, timeout):
     os.makedirs(tmpdir, exist_ok=True)
     wire_gbps = INTRANODE_LINKSPEED / 1000.0  # Mbps -> Gbit/s
     csv_path = os.path.join(OUTPUT_DIR, f"{EXP_NAME}.csv")
+    failures = 0
     with report.CsvAppender(csv_path, CSV_FIELDS) as out:
         for arm in ARMS:
             report.print_info(f"=== {arm['label']} ({arm['inc_kind']}) N={n} "
@@ -109,7 +110,9 @@ def run_exp(n, sizes, su_topo, so_topo, reduce_compute, tmpdir, timeout):
                                                  timeout=timeout,
                                                  intranode_linkspeed=INTRANODE_LINKSPEED)
                 inc_ns = fin - TAIL_NS if fin else None
-                ok = inc_ns and st == "ok"
+                ok = bool(inc_ns and st == "ok" and drop == 0)
+                if not ok:
+                    failures += 1
                 bw = bandwidth_gbps(s, inc_ns) if ok else None
                 pct = 100.0 * bw / wire_gbps if bw else None
                 with open(log, "w") as lf:
@@ -132,7 +135,11 @@ def run_exp(n, sizes, su_topo, so_topo, reduce_compute, tmpdir, timeout):
                 if drop:
                     status += f" WARN drops={drop}"
                 print(f"  {s:>11}b  inc {str(inc_ns):>10}ns  {shown:>18}  {status}")
+    if failures:
+        report.print_error(f"{failures} simulation cell(s) failed; partial CSV: {csv_path}")
+        return 1
     report.print_success(f"wrote results to {csv_path}")
+    return 0
 
 
 def main():
@@ -165,8 +172,8 @@ def main():
     if args.su_topo is None:
         sys.exit("--su-topo required for a sim run (e.g. "
                  "scaleup_single_switch_64_4000Gbps.topo); or use --validate for the no-sim check")
-    run_exp(args.n, sizes, paths.topo(args.su_topo), paths.topo(args.so_topo),
-            args.reduce_compute, args.tmpdir, args.timeout)
+    sys.exit(run_exp(args.n, sizes, paths.topo(args.su_topo), paths.topo(args.so_topo),
+                     args.reduce_compute, args.tmpdir, args.timeout))
 
 
 if __name__ == "__main__":

@@ -197,6 +197,30 @@ def load_number_of_ranks(goal_files: List[str], verbose: bool) -> List[int]:
             print_info(f"Number of ranks in '{goal_file}': {num_ranks}", verbose)
     return ranks
 
+def reject_unsupported_collectives(goal_files: List[str]) -> None:
+    """Fail before merging first-class collectives incorrectly.
+
+    Correct collective merging must remap the group sidecar, rooted global
+    ranks, and trace-wide op_flow_ids together.  This tool currently accepts
+    only the GOAL files themselves, so copying ``coll`` records would silently
+    create invalid groups and ID collisions between jobs.
+    """
+    collective_record = re.compile(
+        r"^\s*(?:(?:\S+)\s*:?\s+)?coll(?:\s|$)", re.IGNORECASE,
+    )
+    for goal_file in goal_files:
+        with open(goal_file, "r") as f:
+            for line_number, line in enumerate(f, start=1):
+                stripped = line.lstrip()
+                if stripped.startswith(("#", "//")):
+                    continue
+                if collective_record.match(line):
+                    raise ValueError(
+                        f"cannot merge collective record at {goal_file}:"
+                        f"{line_number}: merge_goals.py does not yet remap "
+                        ".groups sidecars, roots, and trace-wide op_flow_ids"
+                    )
+
 def get_rank_mapping(mode: str, job_ranks: List[int], pattern: Union[List, str], verbose: bool) -> List[List[int]]:
     assert mode in ("multi-job", "multi-tenant"), f"Invalid mode: {mode}"
     if isinstance(pattern, str):
@@ -252,6 +276,7 @@ def write_rank_sched_to_output(out: TextIO, rank: int, rank_remap: List[int], ra
 
 def generate_multi_job_goal(goal_files: List[str], rank_mapping: List[List[int]], output_file: str, verbose: bool) -> None:
     print_info(f"Generating multi-job goal file: {output_file}...", verbose)
+    reject_unsupported_collectives(goal_files)
     # Build dictionary: global rank -> (job index, rank index in that job)
     global_map = rank_mapping_to_job_ranks(rank_mapping)
     # Total global ranks is max(global rank) + 1

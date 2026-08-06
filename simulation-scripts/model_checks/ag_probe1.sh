@@ -9,7 +9,7 @@
 # as a control (there the model is exact at every size, so whatever this is needs a
 # multi-tier fabric).
 set -uo pipefail
-R=/Users/wstaempfli/CLionProjects/atlahs
+R="$(cd "$(dirname "$0")/../.." && pwd)"
 SIZES=16777216,33554432,67108864,134217728,268435456
 for TOPO in scaleup_3tier_256_4000Gbps scaleup_single_switch_64_4000Gbps; do
   OUT=/workspace/simulation-scripts/results/_agprobe1_$TOPO
