@@ -15,9 +15,9 @@ docker build -f simulation-scripts/Dockerfile -t atlahs-sim .
 docker run --rm -v "$(pwd)":/workspace atlahs-sim build     # engine + coll txt2bin (one-time)
 ```
 
-Note: `sim/pcm-sdk_zhiyi` (branch `wanja/inc-port`) and `goal_gen/ai/nccl_generator_v2`
-(branch `simple-sim-coll`) are private repositories — cloning requires access grants
-(see `UPSTREAMING.md` at the repo root).
+Both pinned repositories are public (since 2026-08-06): `sim/pcm-sdk_zhiyi` resolves to
+`wstaempfli/pcm-sdk` (branch `wanja/inc-port`) and `goal_gen/ai/nccl_generator_v2` to
+`wstaempfli/nccl_generator_v2` (branch `simple-sim-coll`) — no access grants needed.
 
 ## 1. Ch. 4 — collective completion-time A/B (`scaleup_coll_ab`)
 

@@ -3,6 +3,12 @@
 State as of 2026-07-31 (branch `umbrella-integration`, fully pushed to origin =
 github.com/wstaempfli/atlahs, private).
 
+Update 2026-08-06: the repo is public (sole branch `umbrella-integration`). The submodule
+landmines below are resolved for cloning: `goal_gen/ai/nccl_generator_v2`
+(`wstaempfli/nccl_generator_v2`) and the pcm-sdk pin (repointed to the public mirror
+`wstaempfli/pcm-sdk`, branch `wanja/inc-port`) are both public, so an anonymous
+`git clone --recursive` fully resolves. `ZhiyiHu1999/pcm-sdk` itself stays private.
+
 - spcl/atlahs is public; main = `fb51a99` (2026-05-12). We are 211 ahead / 6 behind
   (merge-base `c7b8a45`). The 6 missing upstream commits: two demo-script merges
   (`1365e00`, `80daee1` — low risk), GOAL rank-layout detection `ad9a4d6` (touches
