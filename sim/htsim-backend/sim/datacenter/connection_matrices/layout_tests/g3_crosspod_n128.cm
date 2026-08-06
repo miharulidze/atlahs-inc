@@ -1,0 +1,5 @@
+# K=8, |G|=3, three different pods (0, 1, 2).
+Nodes 128
+Grp 0 16 32
+Connections 1
+0->0 id 1 start_bcast 0 size 4096

@@ -1,8 +1,7 @@
 # scaleup_pfc_concurrent — PFC / lossless-backpressure validation
 
-**Status: historical validation bundle completed 2026-07-28. A publication release must
-rerun it on the exact public backend commit. Requires the instrumented pcm build
-(`-mcast_pin`, PFC counters, `-pfc_trace`).**
+**Status: historical validation bundle completed 2026-07-28. Requires the instrumented
+PCM build (`-mcast_pin`, PFC counters, `-pfc_trace`).**
 
 ## What this validates
 
@@ -77,7 +76,7 @@ contended resource.
   pause/resume counters, per-class peak-occupancy watermarks, `-pfc_trace` event log
   (`PFC_SUMMARY_INGRESS/_EGRESS` printed at teardown next to `NIC_PFC_GATE`).
   The counters do not intentionally alter queue scheduling; timing compatibility is
-  nevertheless checked by rerunning the release matrices, not assumed from old cells.
+  can be checked by rerunning the matrices rather than inferred from old cells.
 - `HTSIM_spcl-patch/datacenter/fat_tree_topology.cpp`: accountants named
   `VQ-<from>-><to>(<bank>)` for the trace/raster labels.
 - `pcm/apps/htsim_atlahs/htsim_app_atlahs.cpp`: `-pfc_trace` flag; teardown dumps.

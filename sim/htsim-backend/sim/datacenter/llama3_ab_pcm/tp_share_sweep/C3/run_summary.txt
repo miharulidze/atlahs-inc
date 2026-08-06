@@ -1,0 +1,16 @@
+C3: TP4/DP2/PP2, 16 ranks as 4 node(s) x 4 GPUs
+engine: pcm-sdk (run-only) @ current build, re-measured 2026-07-15 with -intranode_linkspeed 4000000 (previous 2026-07-04 numbers were NIC-capped at the 200 Gbps COPY_ENG default)
+
+baseline arm:
+  /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/build/bin/htsim_flow_app_atlahs -goal /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/llama3_ab_pcm/tp_share_sweep/C3/llama3.bin -nodes 16 -num_gpus_per_node 4 -topo /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/apps/htsim_atlahs/example_incast/tree16.topo -intranode_topo /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/llama3_ab_pcm/scaleup_single_switch_4_3600Gbps.topo -intranode_linkspeed 4000000 -end 100000000 -sender_cc_only -intranode_queue_type lossless_input
+  makespan = 228360322 ns; dropped packets = 0; lossless-headroom warnings = 0
+
+INC arm:
+  /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/build/bin/htsim_flow_app_atlahs -goal /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/llama3_ab_pcm/tp_share_sweep/C3/llama3_inc.bin -nodes 16 -num_gpus_per_node 4 -topo /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/apps/htsim_atlahs/example_incast/tree16.topo -intranode_topo /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/llama3_ab_pcm/scaleup_single_switch_4_3600Gbps.topo -intranode_linkspeed 4000000 -end 100000000 -sender_cc_only -intranode_queue_type lossless_input -groups /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/llama3_ab_pcm/tp_share_sweep/C3/llama3_inc_local.groups -reduce_compute_latency 100
+  makespan = 229541927 ns; ALLREDUCE_COMPLETE = 32/32; dropped packets = 0; lossless-headroom warnings = 0
+
+delta = -1181605 ns (-0.5174 %/iteration — INC arm SLOWER than the fixed baseline)
+OPEN FINDING (2026-07-14): under the placeholder compute model the fixed-NIC baseline is faster than the INC arm; the INC arm's last collective completes at 148.8 ms of its 229.5 ms makespan, so the ~81 ms coll-free tail differs structurally from the baseline's schedule — a schedule/congestion-structure effect, NOT the collective datapath (per-op INC durations are 3.5-9 us). Under the calibrated H100 roofline compute model the same config gives +8.8133 %. Mechanism RESOLVED 2026-07-15 (../schedule_sensitivity.md): no bug — the delta is below the trace's +-5-9% single-schedule sensitivity floor (nanosecond-scale perturbations move BOTH arms 16-28 ms); the collective datapath is verified faster than recursive doubling even under 20 ms member skew. Report the C3 end-to-end delta as UNRESOLVED, either sign.
+INC makespan byte-identical to the 2026-07-04 run (the ACK-less INC datapath bypasses the NIC pacer and was never capped).
+tp_comm_share (INC-goal coll bytes / (coll+send bytes)) = 0.008529
+full stdout/stderr: rerun scratch tp_sweep_nicfix/C3/ (baseline|inc).(out|err), via scripts/rerun_from_bins.py

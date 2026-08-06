@@ -1,0 +1,27 @@
+# bcast_with_trigger.cm
+#
+# Demonstrates the collective-to-trigger chain built into the bcast branch.
+#
+# Phase 1: node 1 (index 0 of group 0) broadcasts 4 KiB to the six other
+#          group members (2, 3, 6, 9, 12, 14).
+#          When the *last* of those six sinks receives the last byte,
+#          the internal BarrierTrigger fires and — via TriggerRelay —
+#          activates trigger id 1.
+#
+# Phase 2: two P2P flows wait on trigger id 1 and launch simultaneously
+#          once the broadcast is collectively complete:
+#            flow 2 : root (1) -> master (0)
+#            flow 3 : tail  (14) -> neighbour (15)
+#
+# Expected console output:
+#   Trigger 100001 activated ... (six times, decrementing 5 -> 0)
+#   Trigger 100001 fired, 2 targets          (no-op target + TriggerRelay)
+#   Trigger 1 fired, 2 targets                (named trigger fires the two P2P flows)
+Nodes 16
+Grp 1 2 3 6 9 12 14
+Connections 3
+Triggers 1
+0->0 id 1 start_bcast 0 size 4096 recv_done_trigger 1
+1->0 id 2 trigger 1 size 4096
+14->15 id 3 trigger 1 size 4096
+trigger id 1 oneshot

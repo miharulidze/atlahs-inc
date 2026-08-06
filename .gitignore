@@ -25,9 +25,7 @@ logout.dat
 # design plans & working notes stay local
 simulation-scripts/AA-plan-*/
 INC_thesis_proposal.md
-
-# retired standalone backend (history remains available in Git)
-sim/htsim-backend/
+/hoefler_scientific_benchmarking.md
 
 # locally built HPC schedule generator
 goal_gen/hpc/Schedgen/schedgen

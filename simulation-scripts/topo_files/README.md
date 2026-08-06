@@ -1,12 +1,12 @@
 # Topology inputs
 
-These htsim `FatTreeTopology` files are consumed by the pcm-sdk two-tier simulator as
-scale-up or scale-out domains. Publication experiments select topologies explicitly;
-there is no implicit "current" topology.
+These htsim `FatTreeTopology` files are consumed by the PCM two-tier simulator as
+scale-up or scale-out domains. Experiment runners select topologies explicitly; there
+is no implicit "current" topology.
 
-## Publication and optional experiment inputs
+## Thesis and optional experiment inputs
 
-| file | publication use |
+| file | use |
 |---|---|
 | `scaleup_single_switch_64_4000Gbps.topo` | Chapter 4 completion-time and footprint results; PFC census |
 | `scaleup_3tier_256_4000Gbps.topo` | Chapter 4 multi-tier results; PFC stress and census |
@@ -15,8 +15,7 @@ there is no implicit "current" topology.
 
 Chapter 5 generates its parameterized topologies inside each immutable run directory.
 Probe files and the emerging-technology models below are validation or exploratory
-inputs, not substitutions for the frozen publication topologies. The retired standalone
-htsim backend is not part of the supported experiment path.
+inputs, not substitutions for the fixed thesis topologies.
 
 ## Exploratory emerging-technology files
 
@@ -87,8 +86,8 @@ radix-128 TH6 is **non-blocking in 2 tiers**. Sources: Broadcom SUE framework sp
 
 ## Exploratory model notes
 
-The paired nonblocking/realistic files are retained as distinct sensitivity inputs. They
-are not a pending publication choice: canonical runners name their topology directly.
+The paired nonblocking/realistic files are retained as distinct sensitivity inputs.
+Thesis runners name their topology directly and do not select between these files.
 
 Honest per-tech notes:
 - **NVLink 5.0 (consolidated → `scaleup_nvlink5_nvl72_7200Gbps.topo`):** genuinely single-tier non-blocking
@@ -104,10 +103,9 @@ Honest per-tech notes:
   pods are non-blocking; htsim can't express radix-128), but it carries the real **250 ns Tomahawk-Ultra**
   switch latency, deliberately capturing the genuine Ethernet-vs-NVLink switch-latency gap.
 
-## Validation policy
+## Validation
 
-Canonical topology loading is exercised by the supported experiment validation and
-release commands in `REPRODUCING.md`. The emerging 1024- and 4096-endpoint files have
-passed structural construction checks, but large packet simulations with them are not a
-supported artifact claim. Treat those files as exploratory until a pcm-sdk workload and
-acceptance test are added to the public suite.
+Thesis topology loading is exercised by the experiment validation commands in
+`REPRODUCING.md`. The emerging 1024- and 4096-endpoint files have passed structural
+construction checks, but have no corresponding large packet-level workload test and
+remain exploratory inputs.

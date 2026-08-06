@@ -1,51 +1,37 @@
-# Thesis simulation artifact
+# Thesis experiment suite
 
-This directory is the CPU-only reproducibility harness for the thesis experiments on
-in-network collectives. It builds the two-tier pcm-sdk/htsim backend and the
-collective-aware GOAL compiler, then runs synthetic, GOAL-driven experiments without a
-GPU or the full ATLAHS tracing stack.
+This directory contains the CPU-only simulation setup used for the thesis experiments
+on in-network collectives. It builds the PCM/HTSim backend and the collective-aware
+GOAL compiler, then runs the experiments without requiring GPUs or the full ATLAHS
+tracing stack.
 
-Start with [`REPRODUCING.md`](REPRODUCING.md) when reproducing a result or preparing a
-paper artifact. Use [`PUBLICATION_CHECKLIST.md`](PUBLICATION_CHECKLIST.md) before cutting
-the supervisor/workshop release. [`REFERENCE_DATA.md`](REFERENCE_DATA.md) records which
-historical revision produced each tracked dataset and why a current release must be
-rerun as one coherent result set.
+Start with [`REPRODUCING.md`](REPRODUCING.md) for the commands. See
+[`REFERENCE_DATA.md`](REFERENCE_DATA.md) before comparing a new run with the committed
+thesis results.
 
-## Supported scope
+## Experiments
 
-| experiment | status | purpose |
-|---|---|---|
-| `scaleup_coll_ab` | canonical thesis | Chapter 4 completion-time A/B: in-network collectives versus endpoint decompositions |
-| `scaleup_coll_footprint` | canonical thesis | Chapter 4 byte-link footprint reduction |
-| `ch5_accumulation` | canonical thesis | Chapter 5 accumulation-corrected training case study |
-| `scaleup_pfc_concurrent` | validation | Lossless-backpressure census, stress cases, and negative controls |
-| `scaleup_ar_bandwidth` | supplementary | Fused-apex versus composed ReduceScatter+AllGather comparison |
-| `intranode_linkspeed_sweep` | superseded | Earlier case-study harness, retained for provenance; use `ch5_accumulation` instead |
+| experiment | thesis result |
+|---|---|
+| `scaleup_coll_ab` | Chapter 4 completion time: in-network collectives versus endpoint implementations |
+| `scaleup_coll_footprint` | Chapter 4 reduction in network byte-link footprint |
+| `ch5_accumulation` | Chapter 5 accumulation-corrected training case study |
 
-The container's `list` command prints the same classification. The three canonical
-experiments are the publication path; supplementary and superseded runners must not be
-silently mixed into the headline result set.
+`scaleup_pfc_concurrent` is an optional robustness test for the simulator's lossless
+backpressure model; it is not a performance result.
 
-## Model boundary
+## Model scope
 
-These are deterministic, synthetic-network simulations. The frozen experiment runners
-select the exact topology, workload, collective decomposition, and simulator flags; the
-presence of other topology files or runners does not make them part of the thesis
-artifact.
+The experiments use deterministic synthetic workloads and networks. Their runners fix
+the topology, workload, collective implementation, and simulator flags.
 
-The scale-up fabric uses a congestion-control-free, hop-by-hop, PFC-style lossless
-backpressure abstraction. Pause thresholds include propagation headroom, and queue
-bounds cover the configured worst-case fan-in. The validation suite checks that the
-abstraction engages and remains within its per-queue bounds for the evaluated workloads.
+The scale-up network uses a one-class, hop-by-hop, PFC-style lossless-backpressure
+abstraction. It is not a standards-compliant PFC or CBFC implementation and does not
+model per-virtual-channel credits or a finite shared switch-memory pool. The results
+therefore apply to the evaluated topologies and workloads. Replacing this abstraction
+with CBFC could change queueing and completion times.
 
-This is not a standards-compliant PFC or CBFC implementation. It models one link-wide
-traffic class, not per-VC credit state or a finite shared switch-memory pool. The results
-therefore support the tested topologies and workloads; they do not establish arbitrary
-mixed-workload deadlock freedom or hardware-faithful CBFC behavior. Replacing this model
-with CBFC is future work because it would change queueing and potentially the measured
-completion times.
-
-## Setup
+## Build
 
 From the repository root:
 
@@ -53,66 +39,54 @@ From the repository root:
 git submodule update --init --recursive \
   sim/pcm-sdk_zhiyi goal_gen/ai/nccl_generator_v2
 
-# The build context contains only this Dockerfile and entrypoint, not the full checkout.
 docker build -t atlahs-sim simulation-scripts/
-
-# Build the simulator and collective-aware txt2bin in the bind-mounted checkout.
-# --user avoids root-owned outputs on native Linux hosts.
 docker run --rm --user "$(id -u):$(id -g)" \
   -v "$(pwd)":/workspace atlahs-sim build
+```
 
+The build overlays the PCM patch directories into its nested simulator sources. Those
+generated copies and build products may make nested submodules appear modified.
+
+To list the available runners:
+
+```bash
 docker run --rm --user "$(id -u):$(id -g)" \
   -v "$(pwd)":/workspace atlahs-sim list
 ```
 
-The build overlays the patch directories into the nested simulator source trees before
-compiling. Generated build products and those overlay copies may make submodule
-worktrees appear dirty; do not confuse them with a new publication revision. Release
-commits must be made before building and must record clean, public submodule gitlinks.
-
-Run the lightweight artifact gates with:
+As an optional quick check of the setup:
 
 ```bash
 simulation-scripts/validate_artifact.sh
 ```
 
-This checks the analytic/data claims, generates and compiles the canonical and
-flow-control-validation arms, and runs the packet-level collective/domain regression
-suites. Pass `--extended` to include retained supplementary and superseded runners. Full
-experiment matrices are separate because Chapter 5 is multi-hour and memory-intensive.
-`--pfc-smoke` adds a packet-level PFC instrumentation run, but constructing its 256-host
-fabric makes it substantially slower than the default gates.
+This generates and compiles representative traces, checks the committed data, and runs
+the packet-level collective regression tests. It does not run the full experiment
+matrices.
 
-## Results and provenance
+## Results
 
-Tracked files under `simulation-scripts/results/` are reference data used by the thesis.
-They reproduce the thesis assets, but correctness fixes can change packet-level ECMP and
-timing; do not mix historical and current rows. New runtime outputs are ignored by default.
-Chapter 5 uses immutable
-`runs/<run-id>/` directories and refuses to overwrite an existing run.
+Committed files under `simulation-scripts/results/` are the historical thesis results
+used to regenerate the existing figures and tables. Correctness fixes made afterward
+can change packet routing and timing, so do not append new rows to those historical
+datasets. The frozen wrappers stage complete runs under
+`results/generated-runs/<run-id>/` before updating their result CSV.
 
-The historical Chapter 5 data-of-record run includes a complete ten-file source snapshot
-and binary/source hashes, but it was executed in a checkout whose Git metadata and Docker
-image ID were unavailable. See its adjacent `PROVENANCE.md` before claiming a byte-for-byte
-runtime reconstruction. A publication release should retain the historical data and also
-produce a fresh, fully pinned run from the clean public release commit.
+Chapter 5 writes each invocation to a separate immutable `runs/<run-id>/` directory.
+Its historical run includes the executed source inputs and hashes; details are in the
+adjacent `PROVENANCE.md`.
 
-## Layout
+## Directory layout
 
 ```text
 simulation-scripts/
 ├── Dockerfile             CPU-only build/runtime image
 ├── entrypoint.sh          build | list | run <experiment>
-├── validate_artifact.sh   fast publication gates
-├── build_sim.py           simulator + collective compiler build
-├── common/                GOAL, simulator, topology, and reporting helpers
-├── experiments/           isolated experiment runners and frozen wrappers
-├── model_checks/          analytic and committed-data verification
-├── topo_files/            canonical, validation, and exploratory topologies
-└── results/               tracked reference data plus ignored new runs
+├── validate_artifact.sh   optional quick validation
+├── build_sim.py           simulator and collective compiler build
+├── common/                shared trace, simulator, topology, and reporting code
+├── experiments/           experiment runners and frozen wrappers
+├── model_checks/          automated consistency checks
+├── topo_files/            topology definitions
+└── results/               committed reference data and generated runs
 ```
-
-Paths resolve from the repository checkout and can be overridden with the environment
-variables documented by each experiment. To add a development experiment, copy
-`experiments/_template`; do not classify it as canonical until its command, inputs,
-outputs, and validation gate are documented.

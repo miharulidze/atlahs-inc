@@ -1,0 +1,22 @@
+# scaleup_single_switch_4_3600Gbps.topo
+# 4-host variant of the validated scaleup_single_switch_16 pattern: one
+# NVLink-class crossbar (Podsize==Nodes==Radix_Down => 1 ToR, every pair one
+# hop), per-host 3600 Gbps, 500ns link / 300ns switch. Degenerate 2-tier
+# encoding because the FatTree parser rejects Tiers=1.
+Nodes 4
+Tiers 2
+Podsize 4
+
+Tier 0
+Downlink_speed_Gbps 3600
+Radix_Down 4
+Radix_Up 1
+Downlink_Latency_ns 500
+Switch_Latency_ns 300
+Oversubscribed 4
+
+Tier 1
+Downlink_speed_Gbps 3600
+Radix_Down 1
+Downlink_Latency_ns 500
+Switch_Latency_ns 300

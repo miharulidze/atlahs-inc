@@ -1,0 +1,445 @@
+#ifndef UECPACKET_H
+#define UECPACKET_H
+
+#include "network.h"
+#include <list>
+
+// UecPacket and UecAck are subclasses of Packet.
+// They incorporate a packet database, to reuse packet objects that are no
+// longer needed. Note: you never construct a new UecPacket or UecAck directly;
+// rather you use the static method newpkt() which knows to reuse old packets
+// from the database.
+
+class UecPacket : public Packet {
+  public:
+    typedef uint64_t seq_t;
+    packet_direction _trim_direction;
+
+    UecPacket() : Packet(){};
+
+    inline static UecPacket *newpkt(PacketFlow &flow, const Route &route,
+                                    seq_t seqno, seq_t dataseqno, int size,
+                                    bool retransmitted = false,
+                                    uint32_t destination = 99) {
+        UecPacket *p = _packetdb.allocPacket();
+        p->set_route(
+                flow, route, size + acksize,
+                seqno + size -
+                        1); // The UEC sequence number is the first byte of the
+                            // packet; I will ID the packet by its last byte.
+        p->_type = UEC;
+        p->_is_header = false;
+        p->_bounced = false;
+        p->_seqno = seqno;
+        p->_data_seqno = dataseqno;
+        p->_syn = false;
+        p->_retransmitted = retransmitted;
+        p->_flags = 0;
+        p->_direction = NONE;
+        p->_trim_direction = NONE;
+        p->set_dst(destination);
+        // printf("Destination5 is %d\n", destination);
+        return p;
+    }
+
+    inline static UecPacket *newpkt(UecPacket &source) {
+        UecPacket *p = _packetdb.allocPacket();
+
+        p->set_route(source.flow(), *(source.route()), 64, source.id() - 2);
+        assert(p->route());
+        p->_type = UEC;
+        p->_is_header = false;
+        p->_bounced = false;
+        p->_seqno = source._seqno;
+        p->_data_seqno = source._data_seqno;
+        p->_syn = false;
+        p->_retransmitted = false;
+        p->_flags = 0;
+        p->from = source.from;
+        p->to = source.to;
+        p->tag = source.tag;
+        p->_nexthop = source._nexthop;
+        p->set_dst(source.to);
+        p->_direction = NONE;
+        p->_trim_direction = NONE;
+        return p;
+    }
+
+    inline static UecPacket *newpkt(PacketFlow &flow, const Route &route,
+                                    seq_t seqno, int size) {
+        return newpkt(flow, route, seqno, 0, size);
+    }
+
+    void free() {
+        // printf("Packet (UecPacket) being freed ID is %d - From %d\n", id(),
+        //        from);
+        // fflush(stdout);
+        _packetdb.freePacket(this);
+    }
+    virtual ~UecPacket() {}
+    inline seq_t seqno() const { return _seqno; }
+    inline seq_t data_seqno() const { return _data_seqno; }
+    // inline simtime_picosec ts() const { return _ts; }
+    // inline void set_ts(simtime_picosec ts) { _ts = ts; }
+    virtual inline void strip_payload() {
+        Packet::strip_payload();
+        _size = acksize;
+    };
+    inline bool retransmitted() { return _retransmitted; }
+    virtual PktPriority priority() const {return Packet::PRIO_LO;}
+
+    // inline simtime_picosec ts() const {return _ts;}
+    // inline void set_ts(simtime_picosec ts) {_ts = ts;}
+    const static int acksize = 64;
+
+  protected:
+    seq_t _seqno, _data_seqno;
+    bool _syn;
+    simtime_picosec _ts;
+    static PacketDB<UecPacket> _packetdb;
+    bool _retransmitted;
+};
+
+class UecAck : public Packet {
+  public:
+    typedef UecPacket::seq_t seq_t;
+
+    UecAck() : Packet(){};
+
+    inline static UecAck *newpkt(PacketFlow &flow, const Route &route,
+                                 seq_t seqno, seq_t ackno, seq_t dackno,
+                                 uint32_t destination = UINT32_MAX) {
+        UecAck *p = _packetdb.allocPacket();
+        p->set_route(flow, route, acksize, ackno);
+        p->_bounced = false;
+        p->_type = UECACK;
+        p->_seqno = seqno;
+        p->_ackno = ackno;
+        p->_data_ackno = dackno;
+        p->_is_header = true;
+        p->_flags = 0;
+        // printf("Ack Destination %d\n", destination);
+        p->set_dst(destination);
+        p->_direction = NONE;
+        return p;
+    }
+
+    inline static UecAck *newpkt(PacketFlow &flow, const Route &route,
+                                 seq_t seqno, seq_t ackno) {
+        return newpkt(flow, route, seqno, ackno, 0);
+    }
+
+    void free() {
+        // printf("Packet (UecAck) being freed ID is %d - From %d\n", id(),
+        // from); fflush(stdout);
+        _packetdb.freePacket(this);
+    }
+    inline seq_t seqno() const { return _seqno; }
+    inline seq_t ackno() const { return _ackno; }
+    inline seq_t data_ackno() const { return _data_ackno; }
+    // inline simtime_picosec ts() const { return _ts; }
+    // inline void set_ts(simtime_picosec ts) { _ts = ts; }
+    //  inline simtime_picosec ts() const {return _ts;}
+    //  inline void set_ts(simtime_picosec ts) {_ts = ts;}
+    virtual PktPriority priority() const {return Packet::PRIO_HI;}
+
+    virtual ~UecAck() {}
+    const static int acksize = 64;
+    const Route *inRoute;
+
+  protected:
+    seq_t _seqno;
+    seq_t _ackno, _data_ackno;
+    simtime_picosec _ts;
+    static PacketDB<UecAck> _packetdb;
+};
+
+class UecNack : public Packet {
+  public:
+    typedef UecPacket::seq_t seq_t;
+
+    UecNack() : Packet(){};
+
+    inline static UecNack *newpkt(PacketFlow &flow, const Route &route,
+                                  seq_t seqno, seq_t ackno, seq_t dackno,
+                                  uint32_t destination = UINT32_MAX) {
+        UecNack *p = _packetdb.allocPacket();
+        p->set_route(flow, route, acksize, ackno);
+        p->_bounced = false;
+        p->_type = UECNACK;
+        p->_seqno = seqno;
+        p->_ackno = ackno;
+        p->_data_ackno = dackno;
+        p->_is_header = true;
+        p->_direction = NONE;
+        p->_flags = 0;
+        p->set_dst(destination);
+        return p;
+    }
+
+    inline static UecNack *newpkt(PacketFlow &flow, const Route &route,
+                                  seq_t seqno, seq_t ackno) {
+        return newpkt(flow, route, seqno, ackno, 0);
+    }
+
+    void free() {
+        // printf("Packet (UecNack) being freed ID is %d - From %d\n", id(),
+        // from); fflush(stdout);
+        _packetdb.freePacket(this);
+    }
+    inline seq_t seqno() const { return _seqno; }
+    inline seq_t ackno() const { return _ackno; }
+    inline seq_t data_ackno() const { return _data_ackno; }
+    inline simtime_picosec ts() const { return _ts; }
+    inline void set_ts(simtime_picosec ts) { _ts = ts; }
+    virtual PktPriority priority() const {return Packet::PRIO_HI;}
+    // inline simtime_picosec ts() const {return _ts;}
+    // inline void set_ts(simtime_picosec ts) {_ts = ts;}
+
+    virtual ~UecNack() {}
+    const static int acksize = 64;
+
+  protected:
+    seq_t _seqno;
+    seq_t _ackno, _data_ackno;
+    simtime_picosec _ts;
+    // simtime_picosec _ts;
+    static PacketDB<UecNack> _packetdb;
+};
+
+// UecMcastPacket --- first-class multicast packet for the phase-two
+// switch-level INC mechanism. Peer of UecPacket / UecAck / UecNack
+// (not a subclass). Carries an explicit group identifier so the
+// per-switch INC FIB can route by group_id rather than by _dst.
+//
+// _pathid is derived deterministically from (group_id, source_host,
+// egress-port sequence) via a running hash so that packets that
+// traverse identical physical paths --- across different multicast
+// operations --- receive identical _pathid values. See AA-plan-Phase2/
+// v4.md §3.2.1 for the rationale.
+class UecMcastPacket : public Packet {
+  public:
+    typedef uint64_t seq_t;
+
+    // Phase-2 fields. _op_seq_id is reserved for phase-3 aggregation
+    // and stays zero in phase 2.
+    seq_t    _seqno;
+    uint32_t _group_id;
+    uint32_t _op_seq_id;
+
+    // Header overhead (matches UecPacket convention). On-wire size of
+    // a data packet is `data_size + acksize` so queue serialisation
+    // latency accounts for the header.
+    const static int acksize = 64;
+
+    // Path-hash mixing constants. Knuth's golden-ratio multiplicative
+    // for the seed; standard small-prime chaining for hop updates.
+    static constexpr uint32_t PATHID_SEED_MIX = 2654435761u;
+    static constexpr uint32_t PATHID_HOP_MIX  = 31u;
+
+    UecMcastPacket() : Packet() {}
+
+    // Source-side factory: seeded path-hash from group_id and the
+    // emitting host's address.
+    inline static UecMcastPacket *newpkt(PacketFlow &flow,
+                                         const Route &route,
+                                         seq_t seqno, int size,
+                                         uint32_t group_id,
+                                         uint32_t source_host_id,
+                                         uint32_t op_seq_id = 0) {
+        UecMcastPacket *p = _packetdb.allocPacket();
+        // Wire size = data + header overhead. _id is the last data
+        // byte (independent of header), matching UecPacket.
+        p->set_route(flow, route, size + acksize, seqno + size - 1);
+        p->_type = UEC_MCAST;
+        p->_is_header = false;
+        p->_bounced = false;
+        p->_seqno = seqno;
+        p->_group_id = group_id;
+        p->_op_seq_id = op_seq_id;
+        p->_pathid = (group_id ^ source_host_id) * PATHID_SEED_MIX;
+        p->_direction = NONE;
+        // PacketDB recycles packets; clear any stale lossless ingress
+        // pointer so set_ingress_queue()'s assert(!_ingressqueue) holds.
+        p->_ingressqueue = NULL;
+        // _dst left at default; group_id drives FIB lookup.
+        return p;
+    }
+
+    // Switch-side factory: spawn a replica for fanout. Inherits the
+    // source's group/op identity and extends the path-hash with the
+    // chosen egress port index. Same physical path -> same _pathid
+    // across operations.
+    inline static UecMcastPacket *newpkt_replica(UecMcastPacket &source,
+                                                 const Route &branch_route,
+                                                 uint8_t egress_port_idx) {
+        UecMcastPacket *p = _packetdb.allocPacket();
+        // Replica inherits source's wire size (already includes header
+        // overhead via the source-side factory).
+        p->set_route(source.flow(), branch_route,
+                     source.size(), source.id());
+        p->_type = UEC_MCAST;
+        p->_is_header = false;
+        p->_bounced = false;
+        p->_seqno = source._seqno;
+        p->_group_id = source._group_id;
+        p->_op_seq_id = source._op_seq_id;
+        p->_pathid = source._pathid * PATHID_HOP_MIX
+                     + static_cast<uint32_t>(egress_port_idx) + 1u;
+        p->_direction = NONE;
+        // Fresh ingress accounting per replica: handle_mcast points this at
+        // a shared McastFanoutCredit under PFC. NULL otherwise (set_ingress_
+        // queue asserts !_ingressqueue, and PacketDB may hand back a packet
+        // whose pointer is stale from a prior life).
+        p->_ingressqueue = NULL;
+        p->from = source.from;
+        p->to   = source.to;
+        p->tag  = source.tag;
+        return p;
+    }
+
+    void free() { _packetdb.freePacket(this); }
+    virtual ~UecMcastPacket() {}
+
+    inline uint32_t group_id()  const { return _group_id; }
+    inline seq_t    seqno()     const { return _seqno; }
+    inline uint32_t op_seq_id() const { return _op_seq_id; }
+
+    virtual PktPriority priority() const { return Packet::PRIO_LO; }
+
+  protected:
+    static PacketDB<UecMcastPacket> _packetdb;
+};
+
+// Phase-3 in-network aggregation packet. Peer of UecMcastPacket
+// (UEC_REDUCE), carrying the same group/op identity. Flows UP the
+// tree from each group member; switches hold per-operation until all
+// children have contributed (fan-in), then emit one combined packet
+// toward the root via newpkt_combined(). No replica factory --- reduce
+// never fans out (the Allreduce turn-around at the apex hands off to
+// UecMcastPacket instead). Timing/bytes-only: no payload is carried or
+// combined; the wire size of the one upward packet equals a single
+// contribution's size.
+class UecReducePacket : public Packet {
+  public:
+    typedef uint64_t seq_t;
+
+    seq_t    _seqno;
+    uint32_t _group_id;
+    uint32_t _op_seq_id;
+
+    // The aggregate, on its way DOWN to the rooted-Reduce root R. A
+    // descending packet is unicast via the regular FIB (getNextHop by
+    // _dst); transit switches must NOT re-aggregate it, so receivePacket's
+    // UEC_REDUCE arm checks this flag and falls through to normal routing.
+    bool _descending = false;
+
+    // Operation kind, carried per packet so the apex needs no per-group
+    // state (and concurrent same-group ops with different roots work):
+    // -1 = Allreduce (apex fans the result down the whole tree); >= 0 =
+    // rooted Reduce, delivering to this root host via the regular FIB.
+    int _reduce_root = -1;
+
+    const static int acksize = 64;
+    static constexpr uint32_t PATHID_SEED_MIX = 2654435761u;
+    static constexpr uint32_t PATHID_HOP_MIX  = 31u;
+
+    UecReducePacket() : Packet() {}
+
+    bool descending() const { return _descending; }
+    int  reduce_root() const { return _reduce_root; }
+
+    // Source-side factory: one member's contribution heading toward the
+    // root. Mirrors UecMcastPacket::newpkt. reduce_root carries the op kind
+    // (-1 = Allreduce, >= 0 = Reduce to that host).
+    inline static UecReducePacket *newpkt(PacketFlow &flow,
+                                          const Route &route,
+                                          seq_t seqno, int size,
+                                          uint32_t group_id,
+                                          uint32_t source_host_id,
+                                          int reduce_root = -1,
+                                          uint32_t op_seq_id = 0) {
+        UecReducePacket *p = _packetdb.allocPacket();
+        p->set_route(flow, route, size + acksize, seqno + size - 1);
+        p->_type = UEC_REDUCE;
+        p->_is_header = false;
+        p->_bounced = false;
+        p->_seqno = seqno;
+        p->_group_id = group_id;
+        p->_op_seq_id = op_seq_id;
+        p->_reduce_root = reduce_root;
+        p->_descending = false;  // PacketDB recycle: clear stale descending flag
+        p->_pathid = (group_id ^ source_host_id) * PATHID_SEED_MIX;
+        p->_direction = NONE;
+        p->_ingressqueue = NULL;
+        return p;
+    }
+
+    // Switch-side factory: the single combined packet emitted toward the
+    // root once a switch's fan-in barrier is satisfied. Inherits the
+    // group/op identity of the contributions it stands for; takes the
+    // cached toward-root route.
+    inline static UecReducePacket *newpkt_combined(UecReducePacket &any_child,
+                                                   const Route &toward_root) {
+        UecReducePacket *p = _packetdb.allocPacket();
+        p->set_route(any_child.flow(), toward_root,
+                     any_child.size(), any_child.id());
+        p->_type = UEC_REDUCE;
+        p->_is_header = false;
+        p->_bounced = false;
+        p->_seqno = any_child._seqno;
+        p->_group_id = any_child._group_id;
+        p->_op_seq_id = any_child._op_seq_id;
+        p->_reduce_root = any_child._reduce_root;
+        p->_descending = false;  // combined packet ascends; clear stale flag
+        p->_pathid = any_child._pathid * PATHID_HOP_MIX + 1u;
+        p->_direction = NONE;
+        p->_ingressqueue = NULL;
+        p->from = any_child.from;
+        p->to   = any_child.to;
+        p->tag  = any_child.tag;
+        return p;
+    }
+
+    // Apex factory for rooted Reduce: the combined result heading DOWN to
+    // the root host R as a regular unicast. dst = R and flow_id (inherited
+    // from the op's flow) drive getNextHop / getHostRoute; no route is set
+    // here --- the originating switch fills it via getNextHop. Marked
+    // descending so transit switches route it normally instead of
+    // re-aggregating.
+    inline static UecReducePacket *newpkt_downward(UecReducePacket &combined,
+                                                   int dst_host) {
+        UecReducePacket *p = _packetdb.allocPacket();
+        p->set_attrs(combined.flow(), combined.size(), combined.id());
+        p->_type = UEC_REDUCE;
+        p->_is_header = false;
+        p->_bounced = false;
+        p->_seqno = combined._seqno;
+        p->_group_id = combined._group_id;
+        p->_op_seq_id = combined._op_seq_id;
+        p->_reduce_root = combined._reduce_root;
+        p->_pathid = combined._pathid;
+        p->_direction = NONE;
+        p->_ingressqueue = NULL;
+        p->_dst = static_cast<uint32_t>(dst_host);
+        p->_descending = true;
+        p->from = combined.from;
+        p->to   = dst_host;
+        p->tag  = combined.tag;
+        return p;
+    }
+
+    void free() { _packetdb.freePacket(this); }
+    virtual ~UecReducePacket() {}
+
+    inline uint32_t group_id()  const { return _group_id; }
+    inline seq_t    seqno()     const { return _seqno; }
+    inline uint32_t op_seq_id() const { return _op_seq_id; }
+
+    virtual PktPriority priority() const { return Packet::PRIO_LO; }
+
+  protected:
+    static PacketDB<UecReducePacket> _packetdb;
+};
+
+#endif

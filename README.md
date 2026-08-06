@@ -11,7 +11,7 @@ An Application-centric Network Simulator Toolchain for AI, HPC, and Distributed 
 ## Warning
 This repository is still under active development. The code is not yet stable, and the documentation is not yet finalized.
 
-## Thesis simulation artifact
+## Thesis experiment suite
 
 The CPU-only experiment harness used for the in-network-collective thesis work is
 maintained separately from the full GPU tracing environment:
@@ -21,9 +21,7 @@ maintained separately from the full GPU tracing environment:
 - [`simulation-scripts/REPRODUCING.md`](simulation-scripts/REPRODUCING.md) gives the
   frozen Chapter 4 and Chapter 5 recipes and maps the tracked data to figures and tables.
 - [`simulation-scripts/REFERENCE_DATA.md`](simulation-scripts/REFERENCE_DATA.md) records
-  dataset lineage and the historical-versus-release timing policy.
-- [`simulation-scripts/PUBLICATION_CHECKLIST.md`](simulation-scripts/PUBLICATION_CHECKLIST.md)
-  lists the remaining source, licensing, and rerun gates for a public handoff.
+  dataset lineage and explains how to compare historical and newly generated results.
 - [`wstaempfli/pcm-sdk`](https://github.com/wstaempfli/pcm-sdk/tree/wanja/inc-port)
   publishes the exact PCM/HTSim backend used by the harness; this repository pins the
   tested revision as `sim/pcm-sdk_zhiyi`.
@@ -42,7 +40,8 @@ This repository contains the source code for ATLAHS, a network simulator toolcha
 - Applications (`apps/`): A collection of applications that are used to test the toolchain.
 - GOAL (Group Operation Assembly Language) generators (`goal_gen/`): Tools that trace AI, HPC, and storage applications and converts them into network workloads usable by network simulators.
 - Simulation backends (`sim/`): LogGOPSim plus the public PCM/HTSim submodule used by
-  the thesis artifact. The former standalone HTSim development copy was retired.
+  the thesis experiments. The earlier standalone HTSim development path is retained for
+  its implementation history but does not produce the thesis measurements.
 
 ## Custom NCCL builds (NVTX / tracing)
 

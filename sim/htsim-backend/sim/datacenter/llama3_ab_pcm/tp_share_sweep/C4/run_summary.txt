@@ -1,0 +1,15 @@
+C4: TP8/DP2/PP1, 16 ranks as 2 node(s) x 8 GPUs
+engine: pcm-sdk (run-only) @ current build, re-measured 2026-07-15 with -intranode_linkspeed 4000000 (previous 2026-07-04 numbers were NIC-capped at the 200 Gbps COPY_ENG default)
+
+baseline arm:
+  /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/build/bin/htsim_flow_app_atlahs -goal /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/llama3_ab_pcm/tp_share_sweep/C4/llama3.bin -nodes 16 -num_gpus_per_node 8 -topo /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/apps/htsim_atlahs/example_incast/tree16.topo -intranode_topo /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/topologies/scaleup_single_switch_8_3600Gbps.topo -intranode_linkspeed 4000000 -end 100000000 -sender_cc_only -intranode_queue_type lossless_input
+  makespan = 323020869 ns; dropped packets = 0; lossless-headroom warnings = 0
+
+INC arm:
+  /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/build/bin/htsim_flow_app_atlahs -goal /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/llama3_ab_pcm/tp_share_sweep/C4/llama3_inc.bin -nodes 16 -num_gpus_per_node 8 -topo /Users/wstaempfli/CLionProjects/atlahs_ZhiyiHu/sim/pcm-sdk_zhiyi/pcm/apps/htsim_atlahs/example_incast/tree16.topo -intranode_topo /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/topologies/scaleup_single_switch_8_3600Gbps.topo -intranode_linkspeed 4000000 -end 100000000 -sender_cc_only -intranode_queue_type lossless_input -groups /Users/wstaempfli/CLionProjects/atlahs/sim/htsim-backend/sim/datacenter/llama3_ab_pcm/tp_share_sweep/C4/llama3_inc_local.groups -reduce_compute_latency 100
+  makespan = 322881231 ns; ALLREDUCE_COMPLETE = 32/32; dropped packets = 0; lossless-headroom warnings = 0
+
+delta = 562100 ns (0.0432 % faster/iteration)
+INC makespan byte-identical to the 2026-07-04 run (the ACK-less INC datapath bypasses the NIC pacer and was never capped).
+tp_comm_share (INC-goal coll bytes / (coll+send bytes)) = 0.008547
+full stdout/stderr: rerun scratch tp_sweep_nicfix/C4/ (baseline|inc).(out|err), via scripts/rerun_from_bins.py

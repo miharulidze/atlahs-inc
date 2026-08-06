@@ -37,11 +37,11 @@ Broadcast and Reduce show the same qualitative multicast/aggregation benefit.
 - This is a capacity/traffic-footprint result, not a completion-time speedup. The two
   metrics answer different questions.
 - The radix-32, 1024-host topology and three-tier points above P=64 are supported as
-  exploratory runner options but are not included in the tracked thesis CSV. Regenerate
-  them into a separately named result set before citing them.
-- The model is a PFC-style lossless abstraction, not hardware CBFC. Publication claims
-  are limited to the tested workloads and topologies.
+  exploratory runner options but are not included in the tracked thesis CSV. Keep them
+  in a separately named result set.
+- The model is a PFC-style lossless abstraction, not hardware CBFC. The interpretation
+  is limited to the tested workloads and topologies.
 
-Regenerate the two tracked figures with the commands in the experiment README. For a
-new workshop result set, rerun the full frozen matrix on the final public commit instead
-of appending rows to this historical CSV.
+Regenerate the two tracked figures with the commands in the experiment README. Results
+produced by the current backend should be kept separate instead of appended to this
+historical CSV.

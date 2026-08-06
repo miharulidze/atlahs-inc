@@ -22,7 +22,7 @@ Recursive-doubling per Demystifying-NCCL Tables V-VII).
 docker run --rm --user "$(id -u):$(id -g)" -v "$(pwd)":/workspace \
   atlahs-sim run scaleup_coll_ab --validate
 
-# frozen publication sweep; stages a run archive and atomically refreshes the CSV
+# frozen thesis sweep; stages a run archive and atomically refreshes the CSV
 simulation-scripts/experiments/scaleup_coll_ab/run_thesis.sh
 
 # locally (binaries built in-tree, no env vars needed)
@@ -46,6 +46,6 @@ complete matrix succeeds.
 
 The historical AllGather fanout-credit defect has been fixed. The tracked reference
 data is post-fix, but it predates the final globally unique flow-ID cleanup; current
-packet-level timings must therefore be published as a separately regenerated matrix.
+packet-level timings must therefore be kept as a separately regenerated matrix.
 See `../../REFERENCE_DATA.md`. `--validate` checks every current arm, while
 `scaleup_pfc_concurrent` independently checks lossless queue engagement and bounds.

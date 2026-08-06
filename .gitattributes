@@ -3,3 +3,6 @@ simulation-scripts/results/ch5_accumulation/runs/ch5-ga32-headline-iters1-mem16-
 
 # This literal upstream patch necessarily contains the patched file's indentation.
 tools/loggopsim-coll/op-flow-id-range.patch -whitespace
+
+# Preserve the historical standalone HTSim source and design notes as recorded.
+sim/htsim-backend/** -whitespace

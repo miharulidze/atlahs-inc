@@ -1,4 +1,4 @@
-# Supported artifact checks
+# Validation checks
 
 These checks cover reference-data integrity, analytic claims, source provenance, and
 packet-level collective behavior. Run the complete fast gate after building the Docker
@@ -10,9 +10,9 @@ simulation-scripts/validate_artifact.sh
 
 Use `--extended` to include the supplementary and superseded runners. `--pfc-smoke`
 adds a packet-level flow-control run, but constructing the 256-host fabric is slow; the
-full PFC suite remains a separate release gate.
+full PFC experiment is run separately.
 
-## Checks intended for publication
+## Committed-data checks
 
 ```bash
 python3 simulation-scripts/model_checks/audit_reference_data.py
@@ -21,7 +21,7 @@ python3 simulation-scripts/model_checks/verify_models.py
 ```
 
 - `audit_reference_data.py` rejects appended duplicate generations in every tracked
-  publication CSV.
+  result CSV.
 - `verify_ch5_snapshot.py` checks all ten preserved source files against the canonical
   Chapter 5 manifest.
 - `verify_models.py` re-derives the Chapter 4 model claims, Chapter 5 speedups and
@@ -32,8 +32,8 @@ generates the thesis tables. No constants are fitted: bandwidth, link latency, s
 latency, header size, and MSS come from the topology and packet model.
 
 A passing committed-data check means the archived dataset is internally coherent. It
-does not claim bit-identical timing from a newer backend. See `../REFERENCE_DATA.md` and
-rerun the publication matrices on the exact release commit.
+does not imply bit-identical timing from a newer backend. Historical and current
+results are kept separate as described in `../REFERENCE_DATA.md`.
 
 ## Packet regressions
 
@@ -58,13 +58,13 @@ The shell probes and `rsag_model_check{,2,3,4}.py` preserve the derivation trail
 retained `_fold_off/scaleup_coll_ab.csv`, `_fold_on/scaleup_coll_ab.csv`, and
 `_podstep/scaleup_coll_ab.csv` are the compact inputs used by the supported verifier;
 temporary logs and superseded `_dchk*`/`_foldsweep*` runs are intentionally omitted.
-These probes are not publication gates and some encode assumptions that later
+These probes are not part of the supported validation and some encode assumptions that later
 experiments refuted. Use `verify_models.py` for the supported current interpretation.
 
-The publication default keeps Reduce-Scatter's own slice in the aggregation stream
+The thesis model keeps Reduce-Scatter's own slice in the aggregation stream
 (`kappa = N`). The retired `-rs_local_fold` arm remains only as a sensitivity study.
 
 `regen_all.sh` runs the Chapter 4 completion-time, group-size, footprint, and
-supplementary bandwidth matrices in sequence and stops at the first failure. Prefer the
-individual frozen wrappers for a release because they retain a separately named run
-archive before publishing a reviewed CSV.
+supplementary bandwidth matrices in sequence and stops at the first failure. The
+individual frozen wrappers retain a separately named run archive before updating their
+result CSV.

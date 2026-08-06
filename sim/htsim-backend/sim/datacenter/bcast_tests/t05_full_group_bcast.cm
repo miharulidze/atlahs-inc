@@ -1,0 +1,8 @@
+# T05 full-fabric broadcast
+# Broadcast to |G| = N (all 16 nodes). Verifies the root-serialisation
+# ceiling and that nothing breaks at the group-size-equals-nodes edge.
+# Expect one BCAST_COMPLETE with legs=15.
+Nodes 16
+Grp 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15
+Connections 1
+0->0 id 1 start_bcast 0 size 4096

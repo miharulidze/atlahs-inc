@@ -64,8 +64,8 @@ Counter correctness is validated separately by `simulation-scripts/_validate_foo
 
 ## Outputs (`results/scaleup_coll_footprint/`)
 
-The publication reference CSV and figures are tracked; newly generated additions under
-`results/` are ignored unless deliberately curated into a release.
+The thesis reference CSV and figures are tracked; newly generated additions under
+`results/` are ignored by default.
 The frozen wrapper stages a complete run under `results/generated-runs/<run-id>/` and
 atomically refreshes the reference CSV only after success.
 

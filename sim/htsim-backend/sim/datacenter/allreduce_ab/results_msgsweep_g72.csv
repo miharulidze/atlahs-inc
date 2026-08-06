@@ -1,0 +1,7 @@
+group_size,msg_bytes,inc_ns,ring_ns,rdouble_ns,ideal_ring_ns,speedup,speedup_vs_ideal,speedup_rdouble,inc_synced_ns,speedup_synced,ring_bytes_per_rank,drops,topo,linkspeed_mbps,reduce_compute_ns,hop_oneway_ns,analytic_rate_bns,inc_sync_rtt_ns
+72,4608,1425,371600,,92318.5,260.772,64.785,,4025,92.323,9088,0,scaleup_single_switch_72_3600Gbps.topo,3600000,100,1300,492.3,2600
+72,18432,1450,371600,,92373.8,256.276,63.706,,4050,91.753,36352,0,scaleup_single_switch_72_3600Gbps.topo,3600000,100,1300,492.3,2600
+72,73728,1559,371600,,92595.4,238.358,59.394,,4159,89.348,145408,0,scaleup_single_switch_72_3600Gbps.topo,3600000,100,1300,492.3,2600
+72,294912,2008,371600,,93481.5,185.060,46.555,,4608,80.642,581632,0,scaleup_single_switch_72_3600Gbps.topo,3600000,100,1300,492.3,2600
+72,1179648,3805,375144,,97025.8,98.592,25.500,,6405,58.570,2326528,0,scaleup_single_switch_72_3600Gbps.topo,3600000,100,1300,492.3,2600
+72,4718592,10993,401490,,111203.3,36.522,10.116,,13593,29.537,9306112,0,scaleup_single_switch_72_3600Gbps.topo,3600000,100,1300,492.3,2600
