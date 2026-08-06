@@ -91,4 +91,4 @@ Outputs in `simulation-scripts/results/scaleup_pfc_concurrent/`:
 `scaleup_pfc_concurrent.csv` (stress), `pfc_census.csv`, `pfc_controls.csv`,
 `pfc_overdrive.csv`, `traces/*.csv`, `pfc_backpressure|pfc_sawtooth|pfc_raster.pdf`,
 `tab_pfc_validation.tex`. Full stdout per run is retained gzipped under `logs/`.
-Design + findings: `simulation-scripts/AA-plan-PFC-Validation/plan.md`.
+Design + findings: `simulation-scripts/AA-plan-PFC-Validation/plan.md` (local, untracked).

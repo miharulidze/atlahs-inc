@@ -10,7 +10,7 @@ x-axis = number of participating GPUs P
 ```
 
 `footprint_*` is the **network footprint** (byte·link crossings) measured by the ported
-PT6 per-link counter (`-link_crosses_csv`, see `AA-plan-Footprint-Reduction/plan.md`).
+PT6 per-link counter (`-link_crosses_csv`, see `AA-plan-Footprint-Reduction/plan.md`, local, untracked).
 The INC arm is the bandwidth-optimal multicast/aggregation datapath; the baseline is the
 generator's own **Ring** / **Recursive-Doubling** decomposition. The INC footprint is
 algorithm-independent, so Ring and RD share the same INC denominator (the paper's two-bar

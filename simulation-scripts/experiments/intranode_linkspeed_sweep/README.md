@@ -85,7 +85,7 @@ the fabric pipe and scale-out NIC always carry the same selected rate. Outputs
 are suffixed `_ib<N>` so variants coexist.
 
 **Congestion control (per-tier).** The two tiers model different fabrics, so they
-run different CC (see `AA-plan-Intranode-CC-Bypass`):
+run different CC (see `AA-plan-Intranode-CC-Bypass`, local, untracked):
 
 - **Scale-out (DP/PP)** keeps **DCTCP** via PCM (`-pcm_enable` +
   `pcm_cc_config_all_uec_dctcp_v2.json`, loading `libuec_dctcp_v2.so` from

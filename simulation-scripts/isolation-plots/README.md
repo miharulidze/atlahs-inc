@@ -19,4 +19,4 @@ measured-only, post-fix (real receive datapath), 0 drops.
 | `footprint_all_collectives.png` | M-B | Byte-ratio for AllGather/AllReduce/ReduceScatter × single-switch/3-tier. |
 | `analytic_khalilov.png` | M-B | Analytic byte-ratio model overlay (measured-vs-analytic agreement). |
 
-Design context: `sim/htsim-backend/sim/AA-plan-Validation-Chapter/plan.md` §10.
+Design context: `sim/htsim-backend/sim/AA-plan-Validation-Chapter/plan.md` §10 (local, untracked).

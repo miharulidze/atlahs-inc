@@ -3,7 +3,7 @@
 Isolated single-scale-up-domain A/B for **AllReduce, ReduceScatter, AllGather**
 on the pcm-sdk two-tier simulator. Generator-faithful successor to
 `../allreduce_ab_pcm` (whose ring arm was hand-rolled). Driver:
-`run_coll_ab_sweep.py`. Design rationale: `../../AA-plan-Scaleup-Baselines/plan.md`.
+`run_coll_ab_sweep.py`. Design rationale: `../../AA-plan-Scaleup-Baselines/plan.md` (local, untracked).
 
 ## The two arms
 

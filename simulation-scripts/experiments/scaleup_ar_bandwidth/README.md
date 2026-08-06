@@ -80,4 +80,4 @@ Figure: `ar_bandwidth.pdf` (copy into `thesis-skeleton/figures/matplotlib/`).
 - Composed RS+AG → NVLS-multimem / MSCCL++ — **needs a new `mscclpp` bib entry** (absent from
   both bibs today). Not `scin` (unanalysed; leans fused).
 
-Design context: `sim/htsim-backend/sim/AA-plan-Validation-Chapter/plan.md` (Experiment E1).
+Design context: `sim/htsim-backend/sim/AA-plan-Validation-Chapter/plan.md` (Experiment E1; local, untracked).
