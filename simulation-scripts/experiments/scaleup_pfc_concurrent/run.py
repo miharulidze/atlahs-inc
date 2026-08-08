@@ -300,9 +300,15 @@ def run_census(tmpdir, timeout):
             report.print_info(f"=== census {os.path.basename(su)} N={CENSUS_N} "
                               f"@ {CENSUS_SIZE} ===")
             for case in CENSUS_CASES:
+                trace_arms = ()
+                if su == SU_TOPO:
+                    if case["collective"] == "allgather" and case["algo"] == "ring":
+                        trace_arms = ("inc",)
+                    elif case["collective"] == "allreduce" and case["algo"] == "rdouble":
+                        trace_arms = ("base",)
                 rows.extend(_census_cell(
                     out, "census", case, CENSUS_SIZE, paths.topo(su),
-                    paths.topo(SO_TOPO), tmpdir, timeout))
+                    paths.topo(SO_TOPO), tmpdir, timeout, trace_arms=trace_arms))
         # 256 MiB spot cells on the 3-tier fabric: the historical worst cases
         # (AllGather fan-out; recursive-doubling cross-pod fan-in).
         report.print_info(f"=== census spot @ {CENSUS_SPOT_SIZE} (3-tier) ===")

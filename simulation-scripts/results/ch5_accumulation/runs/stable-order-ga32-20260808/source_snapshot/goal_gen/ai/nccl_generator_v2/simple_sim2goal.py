@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Type
+from typing import Dict, List, Optional
 
 from communication import CommOp, Communicator, CollDevice, CollAlgo
 from nccl_primitives import GpuId
@@ -16,6 +16,12 @@ from goal import EMIT_INC, GoalCalc, GoalCollective, GoalGraph, GoalGraphNode, G
 from simple_sim.extract import ExtractedGraph, topo_sort
 from simple_sim.ir import CommOp as SimCommOp, ComputeOp as SimComputeOp, OpNode, Tensor, Token, Group
 from simple_sim.ops_comm import AllReduceOp, AllGatherOp, ReduceScatterOp, SendOp, FillOp as RecvOp
+from trace_contract import (
+    CollectiveIdRange,
+    localize_node_group,
+    plan_collective_id_ranges,
+    validate_dense_goal_ranks,
+)
 
 context_dict = {
     "tp": 1,
@@ -71,7 +77,8 @@ _COLL_KIND = {"AllReduceOp": "allreduce", "AllGatherOp": "allgather",
               "ReduceScatterOp": "reduce_scatter"}
 _inc_group_idx: Dict[str, int] = {}          # match_key -> group index (stable across ranks)
 _inc_group_members: Dict[int, List[int]] = {}  # group index -> member global ranks
-_inc_instance_count: Dict[str, int] = {}     # match_key -> per-rank occurrence counter (reset per rank)
+_inc_id_ranges: Dict[str, CollectiveIdRange] = {}  # match_key -> trace-wide ID range
+_inc_instance_ordinal: Dict[str, int] = {}   # match_key -> per-rank ordinal (reset per rank)
 
 # simple_sim has no explicit node model: the node width is implicit in the
 # graph builders' cluster convention (simple_sim/llama3_training.py: "TP=4
@@ -106,6 +113,126 @@ def get_context(sim_node: SimCommOp) -> int:
     # return tag
     return context_dict.get(sim_node.context, 0)
 
+
+def _collective_payload_bytes(sim_node: SimCommOp) -> int:
+    """Return the physical payload represented by a simple_sim collective."""
+
+    tensor_size = sim_node.inputs[0].shape
+    n_elements = reduce(lambda x, y: x * y, tensor_size, 1) * 2
+    # ZeRO-1 gradient/parameter collectives operate on the PHYSICAL per-TP-rank
+    # shard, but the IR keeps logical shapes on tensors (sharding lives in
+    # ShardSpec metadata) -- the logical product overstates every zero1 payload
+    # by exactly the TP factor (inherited from the original translator,
+    # 0c7d301). tp_group is the reliable divisor: the RS input still carries
+    # the TP ShardSpec but the AG input's spec is overwritten by
+    # reduce_scatter's tensor_replace, so physical_shape() would be wrong
+    # there. ZERO1_LOGICAL_BYTES=1 restores the historical behaviour.
+    if (sim_node.context == "zero1"
+            and getattr(sim_node.inputs[0], "tp_group", None) is not None
+            and os.environ.get("ZERO1_LOGICAL_BYTES") != "1"):
+        n_elements //= sim_node.inputs[0].tp_group.size
+    return n_elements
+
+
+def _is_inc_collective(
+    sim_node: SimCommOp,
+    comm: Communicator,
+    gpus_per_node: Optional[int],
+) -> bool:
+    """Apply the exact policy and node-containment predicate used at emit time."""
+
+    members = [rank for rank in comm.rank2device_id if rank is not None]
+    return (
+        type(sim_node).__name__ in _COLL_KIND
+        and sim_node.context not in SKELETON_CONTEXTS
+        and sim_node.context in INC_CONTEXTS
+        and gpus_per_node is not None
+        and len(members) > 1
+        and node_contained(members, gpus_per_node)
+    )
+
+
+def prepare_inc_collective_plan(
+    rank_nodes: Dict[int, List[OpNode]],
+    communicators: Dict[str, Communicator],
+    gpus_per_node: Optional[int],
+) -> Dict[str, CollectiveIdRange]:
+    """Validate simple_sim replicas and assign trace-wide collective IDs.
+
+    Each group receives an exact prefix-sum range.  The same per-group ordinal
+    therefore resolves to one ID on every participant, while ranges from
+    different groups (including identical local groups in different scale-up
+    domains) cannot overlap.
+    """
+
+    _inc_group_idx.clear()
+    _inc_group_members.clear()
+    _inc_id_ranges.clear()
+    _inc_instance_ordinal.clear()
+
+    validate_dense_goal_ranks(rank_nodes)
+    if gpus_per_node is None:
+        return _inc_id_ranges
+    if gpus_per_node <= 0:
+        raise ValueError(f"gpus_per_node must be positive (got {gpus_per_node})")
+    if len(rank_nodes) % gpus_per_node != 0:
+        raise ValueError(
+            f"{len(rank_nodes)} GOAL ranks cannot form complete node-major blocks "
+            f"of {gpus_per_node} GPUs"
+        )
+
+    sequences: Dict[str, Dict[int, list[tuple[str, int]]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    for rank in sorted(rank_nodes):
+        for node in rank_nodes[rank]:
+            if not isinstance(node, SimCommOp):
+                continue
+            comm = communicators.get(node.group.match_key)
+            if comm is None or not _is_inc_collective(node, comm, gpus_per_node):
+                continue
+            sequences[node.group.match_key][rank].append((
+                _COLL_KIND[type(node).__name__],
+                _collective_payload_bytes(node),
+            ))
+
+    group_counts: list[tuple[str, int]] = []
+    for group_index, match_key in enumerate(sorted(sequences)):
+        comm = communicators[match_key]
+        members = [rank for rank in comm.rank2device_id if rank is not None]
+        if len(set(members)) != len(members):
+            raise ValueError(f"INC group {match_key!r} contains duplicate ranks: {members}")
+        if any(rank not in rank_nodes for rank in members):
+            raise ValueError(f"INC group {match_key!r} references a missing GOAL rank")
+        domains = {rank // gpus_per_node for rank in members}
+        if len(domains) != 1:
+            raise ValueError(
+                f"INC group {match_key!r} spans scale-up domains: {sorted(members)}"
+            )
+        per_rank = sequences[match_key]
+        reference_rank = min(members)
+        reference = per_rank.get(reference_rank, [])
+        if not reference:
+            raise ValueError(f"INC group {match_key!r} has no collective operations")
+        for rank in sorted(members):
+            actual = per_rank.get(rank, [])
+            if actual != reference:
+                raise ValueError(
+                    f"INC group {match_key!r} has inconsistent collective sequence "
+                    f"at rank {rank}: expected {reference}, got {actual}"
+                )
+
+        _inc_group_idx[match_key] = group_index
+        _inc_group_members[group_index] = sorted(members)
+        group_counts.append((match_key, len(reference)))
+
+    if len(group_counts) > (1 << 16):
+        raise ValueError(
+            f"INC trace has {len(group_counts)} groups, exceeding the 16-bit group field"
+        )
+    _inc_id_ranges.update(plan_collective_id_ranges(group_counts))
+    return dict(_inc_id_ranges)
+
 def translate_comm_node(sim_node: SimCommOp, communicators: Dict[str, Communicator], device2goal_rank, *, cpu: int = 0) -> Optional[CommOp]:
     """Translate a simple_sim CommOp into an nccl_comm CommOp.
 
@@ -123,43 +250,26 @@ def translate_comm_node(sim_node: SimCommOp, communicators: Dict[str, Communicat
     if comm is None:
         print(f"Warning: no communicator found for group {sim_node.group}, cannot translate {sim_node}")
         return None
-    tensor_size = sim_node.inputs[0].shape
-    n_elements = reduce(lambda x, y: x * y, tensor_size, 1) * 2
-    # ZeRO-1 gradient/parameter collectives operate on the PHYSICAL per-TP-rank
-    # shard, but the IR keeps logical shapes on tensors (sharding lives in
-    # ShardSpec metadata) -- the logical product overstates every zero1 payload
-    # by exactly the TP factor (inherited from the original translator,
-    # 0c7d301). tp_group is the reliable divisor: the RS input still carries
-    # the TP ShardSpec but the AG input's spec is overwritten by
-    # reduce_scatter's tensor_replace, so physical_shape() would be wrong
-    # there. ZERO1_LOGICAL_BYTES=1 restores the historical behaviour.
-    if (sim_node.context == "zero1"
-            and getattr(sim_node.inputs[0], "tp_group", None) is not None
-            and os.environ.get("ZERO1_LOGICAL_BYTES") != "1"):
-        n_elements //= sim_node.inputs[0].tp_group.size
+    n_elements = _collective_payload_bytes(sim_node)
     context = get_context(sim_node)
     # Scale-up collective -> emit one undecomposed `coll` op (INC arm). The
     # group must be node-contained (checked via node_contained -- no longer the
     # old context=="tp" proxy that merely assumed it) AND pass the INC_CONTEXTS
-    # policy filter. The k-th collective on a group gets the same within-group
-    # instance on every member (per-rank counter, reset per rank).
-    # htsim keys its per-op barrier by op_flow_id ALONE, so op_flow_id must be
-    # GLOBALLY UNIQUE across groups (else groups collide and the 2nd never sets up
-    # -> hang). Fold the (stable) group index into it: (gi<<16)|within_group_inst.
+    # policy filter. The prepass assigns each group a disjoint, exactly-sized ID
+    # range. The k-th collective on that group therefore gets the same opaque ID
+    # on every member without reserving a collision-prone fixed bit partition.
     kind = _COLL_KIND.get(type(sim_node).__name__)
-    if (EMIT_INC and kind is not None
-            and sim_node.context in INC_CONTEXTS
-            and _gpus_per_node is not None
-            and node_contained([r for r in comm.rank2device_id if r is not None], _gpus_per_node)):
+    if EMIT_INC and kind is not None and _is_inc_collective(sim_node, comm, _gpus_per_node):
         mk = sim_node.group.match_key
-        if mk not in _inc_group_idx:
-            gi = len(_inc_group_idx)
-            _inc_group_idx[mk] = gi
-            _inc_group_members[gi] = list(comm.rank2device_id)
+        if mk not in _inc_id_ranges:
+            raise RuntimeError(
+                f"collective ID plan is missing INC group {mk!r}; "
+                "call prepare_inc_collective_plan before rendering"
+            )
         gi = _inc_group_idx[mk]
-        inst = _inc_instance_count.get(mk, 0)
-        _inc_instance_count[mk] = inst + 1
-        op_flow_id = (gi << 16) | inst   # unique across groups, stable across members
+        ordinal = _inc_instance_ordinal.get(mk, 0)
+        op_flow_id = _inc_id_ranges[mk].id_for(ordinal)
+        _inc_instance_ordinal[mk] = ordinal + 1
         return GoalCollective(kind, group=gi, size=n_elements, instance=op_flow_id,
                               root=-1, nic=0, cpu=cpu)
     if isinstance(sim_node, AllReduceOp):
@@ -300,10 +410,10 @@ def simple_ir2goal_ir(
     a zero-cost ``GoalCalc`` placeholder is emitted instead.
     """
 
-    # Per-rank reset of the INC instance counter: each rank visits the same
+    # Per-rank reset of the INC ordinal counter: each rank visits the same
     # collectives in the same order, so the k-th collective on a group gets the
-    # same instance id on every member rank (cross-rank match key for htsim).
-    _inc_instance_count.clear()
+    # same preplanned trace-wide ID on every member rank.
+    _inc_instance_ordinal.clear()
 
     # Map simple_sim node id → GoalGraphNode
     node_map: Dict[int, GoalGraphNode] = {}
@@ -373,9 +483,11 @@ if __name__ == "__main__":
     args = ap.parse_args()
 
     graphs = get_graphs(pathlib.Path(args.graphs_dir))
+    validate_dense_goal_ranks(graphs)
     communicators = extract_communicators(graphs)
     if EMIT_INC:
         _gpus_per_node = derive_gpus_per_node(graphs)
+        prepare_inc_collective_plan(graphs, communicators, _gpus_per_node)
     # print(f"Extracted communicators: {communicators}")
     out_goal = args.out_goal or ("llama3_inc.goal" if EMIT_INC else "llama3.goal")
     with open(out_goal, "w") as f:
@@ -400,7 +512,8 @@ if __name__ == "__main__":
         with open(groups_path, "w") as gf:
             for gi in range(len(_inc_group_members)):
                 members = sorted({r for r in _inc_group_members[gi] if r is not None})
-                gf.write(" ".join(str(r) for r in members) + "\n")
+                local_members = localize_node_group(members, _gpus_per_node)
+                gf.write(" ".join(str(r) for r in local_members) + "\n")
         print(f"INC emit: {len(_inc_group_members)} scale-up group(s) -> {groups_path}; goal -> {out_goal}")
     # for rank, nodes in graphs.items():
     #     with CollDevice(rank) as coll_device:

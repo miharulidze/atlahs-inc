@@ -42,6 +42,5 @@ Broadcast and Reduce show the same qualitative multicast/aggregation benefit.
 - The model is a PFC-style lossless abstraction, not hardware CBFC. The interpretation
   is limited to the tested workloads and topologies.
 
-Regenerate the two tracked figures with the commands in the experiment README. Results
-produced by the current backend should be kept separate instead of appended to this
-historical CSV.
+Regenerate the two tracked figures with the commands in the experiment README. The
+frozen wrapper stages a complete run before replacing the reference CSV.

@@ -520,7 +520,8 @@ def main() -> int:
     parser.add_argument("--points", default="4000:400",
                         help="comma-separated scale-up:scale-out Gbps pairs")
     parser.add_argument("--layers", type=int, default=2)
-    parser.add_argument("--iters", type=int, default=2)
+    parser.add_argument("--iters", type=int, default=1,
+                        help="complete optimizer iterations to unroll (default: 1)")
     parser.add_argument("--jobs", type=int, default=2,
                         help="parallel simulator cells; size for Docker memory")
     parser.add_argument("--timeout", type=int, default=7200, help="seconds per cell")

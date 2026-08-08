@@ -70,7 +70,7 @@ DATASETS = {
     ),
     "Chapter 5 canonical run": (
         RESULTS / "ch5_accumulation" / "runs"
-        / "ch5-ga32-headline-iters1-mem16-4000-400-20260731T1405Z"
+        / "stable-order-ga32-20260808"
         / "tables" / "results.csv",
         ("run_id", "workload", "tp", "dp", "pp", "arm", "microbatch",
          "accumulation", "layers", "iters", "su_gbps", "so_gbps",

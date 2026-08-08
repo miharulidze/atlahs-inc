@@ -44,5 +44,23 @@ for csv in scaleup_pfc_concurrent pfc_census pfc_controls pfc_overdrive; do
   cp "$SOURCE" "$PUBLISH_TMP"
   mv "$PUBLISH_TMP" "$TARGET"
 done
+mkdir -p "$TARGET_DIR/traces"
+TRACES=(
+  census_3tier_allgather_ring_inc_67108864
+  census_3tier_allreduce_rdouble_base_67108864
+  distributed_16_1048576
+  overdrive_xbar_allgather_ring_inc_67108864
+  pinned_16_1048576
+  pinned_4_1048576
+)
+for trace in "${TRACES[@]}"; do
+  SOURCE=$RUN_HOST/traces/$trace.csv
+  TARGET=$TARGET_DIR/traces/$trace.csv.gz
+  PUBLISH_TMP=$TARGET.tmp.$$
+  [[ -s "$SOURCE" ]] || { echo "missing generated trace: $SOURCE" >&2; exit 1; }
+  gzip -n -c "$SOURCE" > "$PUBLISH_TMP"
+  mv "$PUBLISH_TMP" "$TARGET"
+done
 echo "[run_thesis] archive -> $RUN_REL"
 echo "[run_thesis] published -> simulation-scripts/results/scaleup_pfc_concurrent/{scaleup_pfc_concurrent,pfc_census,pfc_controls,pfc_overdrive}.csv"
+echo "[run_thesis] published -> simulation-scripts/results/scaleup_pfc_concurrent/traces/*.csv.gz"

@@ -1,9 +1,8 @@
 """pcm-sdk simulator invocation + output parsing shared by the experiments.
 
 run_sim() wraps one htsim_flow_app_atlahs run on a compiled .bin GOAL trace.
-The nodes/gpus_per_node split is explicit so both single-domain isolation
-(nodes == gpus_per_node == N, everything intranode) and future multi-domain
-experiments use the same entry point.
+The nodes/gpus_per_node split is explicit so both partially populated
+single-domain isolation and multi-domain experiments use the same entry point.
 """
 import os
 import re
@@ -77,6 +76,22 @@ def _headroom_frames(t_l, t_sw, B):
     return int((2 * t_l + t_sw) * B / FRAME_B) + 2
 
 
+def topology_nodes(topo_path):
+    """Return the declared host count from a FatTree `.topo` file."""
+    try:
+        with open(topo_path) as stream:
+            for line in stream:
+                fields = line.partition("#")[0].split()
+                if len(fields) == 2 and fields[0] == "Nodes":
+                    nodes = int(fields[1])
+                    if nodes > 0:
+                        return nodes
+                    break
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"cannot read topology host count from {topo_path}: {exc}") from exc
+    raise RuntimeError(f"topology has no positive 'Nodes' declaration: {topo_path}")
+
+
 def pfc_config(su_topo):
     """(high, low, egress_cap) in packets for this .topo.
 
@@ -131,7 +146,7 @@ HOSTLINE = re.compile(r"^Host \d+:\s*(\d+)", re.MULTILINE)
 DROP = re.compile(r"drop arriving|drop last from queue|dropped packet|Random Drop|"
                   r"Buffer Drop|Dropping packet|LOSSLESS not working", re.IGNORECASE)
 
-# PFC instrumentation summary lines (AA-plan-PFC-Validation). Emitted once at
+# PFC instrumentation summary lines used by the release validation suite. Emitted once at
 # teardown by the instrumented binary; absent on older binaries, in which case
 # parse_pfc_extras() returns only the resolved thresholds.
 PFC_INGRESS = re.compile(r"PFC_SUMMARY_INGRESS pauses_sent=(\d+) resumes_sent=(\d+) "
@@ -200,7 +215,7 @@ def run_sim(binpath, so_topo, su_topo, nodes, gpus_per_node, groups=None,
     when >=0, so it needs a pcm binary built with the -mcast_pin flag (else it errors).
 
     pfc_high/pfc_low/intranode_q override the pfc_config() derivation -- ONLY for the
-    deliberately mis-provisioned negative controls of AA-plan-PFC-Validation; presented
+    deliberately mis-provisioned negative controls in scaleup_pfc_concurrent; presented
     results always use the derived values. pfc_trace=<path> turns on the in-binary
     PAUSE/RESUME + occupancy CSV. save_stdout=<path>.gz retains the full simulator
     output (rigor plan H4, opt-in)."""

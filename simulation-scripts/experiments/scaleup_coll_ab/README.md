@@ -44,8 +44,7 @@ Direct `run.py` invocations append by design. The frozen wrapper writes to
 `results/generated-runs/<run-id>/` first and replaces the reference CSV only after the
 complete matrix succeeds.
 
-The historical AllGather fanout-credit defect has been fixed. The tracked reference
-data is post-fix, but it predates the final globally unique flow-ID cleanup; current
-packet-level timings must therefore be kept as a separately regenerated matrix.
-See `../../REFERENCE_DATA.md`. `--validate` checks every current arm, while
+The tracked reference data was generated with the current stable event ordering and
+globally unique collective flow IDs. See `../../REFERENCE_DATA.md`. `--validate`
+checks every current arm, while
 `scaleup_pfc_concurrent` independently checks lossless queue engagement and bounds.

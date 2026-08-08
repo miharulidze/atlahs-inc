@@ -10,11 +10,11 @@
     },
     "simulator": {
       "path": "/workspace/sim/pcm-sdk_zhiyi/pcm/build/bin/htsim_flow_app_atlahs",
-      "sha256": "bb2e00df431013ef7e086e1305812b4adaf6e7d1eab4346617831fc5dd8313e0"
+      "sha256": "82a8b1a25cd0f17693177d2c1576496e090b22b9010d0f6767e4e9f0900e5636"
     },
     "txt2bin": {
       "path": "/workspace/tools/loggopsim-coll/LogGOPSim-1.1/txt2bin",
-      "sha256": "3e054d0d3d9ec815ddb753649958735d90fe9966582899f0a25f009b818dbe4e"
+      "sha256": "fa78c0f249066f3b394b1bdc90e2d81ae5c292fb4f3df205a16f3721dd0bce9c"
     }
   },
   "command": [
@@ -33,7 +33,7 @@
     "--timeout",
     "7200",
     "--run-id",
-    "ch5-ga32-headline-iters1-mem16-4000-400-20260731T1405Z"
+    "stable-order-ga32-20260808"
   ],
   "configuration": {
     "allreduce": "ring",
@@ -71,26 +71,26 @@
     ],
     "zero1_bytes": "physical_tp_local"
   },
-  "created_utc": "2026-07-31T14:04:03Z",
+  "created_utc": "2026-08-08T17:21:20Z",
   "experiment": "ch5_accumulation",
   "git": {
     "generator": {
       "dirty": false,
       "path": "/workspace/goal_gen/ai/nccl_generator_v2",
-      "revision": "unavailable",
-      "status": "unavailable"
+      "revision": "f757579fee537a6d71ac2260b3ee2865c0d1f9af",
+      "status": ""
     },
     "simulator": {
       "dirty": false,
       "path": "/workspace/sim/pcm-sdk_zhiyi",
-      "revision": "unavailable",
-      "status": "unavailable"
+      "revision": "3179f0bb5e91705175dd0d1fae75563ec739b257",
+      "status": ""
     },
     "workspace": {
-      "dirty": false,
+      "dirty": true,
       "path": "/workspace",
-      "revision": "unavailable",
-      "status": "unavailable"
+      "revision": "57f201655f4002278043be7cecbf91cbb33cfc66",
+      "status": "?? .claude/"
     }
   },
   "network_scope": {
@@ -105,7 +105,7 @@
     },
     "warning": "Scale-out is an idealized non-blocking topology, not a hardware-latency model."
   },
-  "run_id": "ch5-ga32-headline-iters1-mem16-4000-400-20260731T1405Z",
+  "run_id": "stable-order-ga32-20260808",
   "runtime": {
     "docker_image_id": "not_provided",
     "python": "3.12.3 (main, Jun 19 2026, 12:46:00) [GCC 13.3.0]"
@@ -113,19 +113,19 @@
   "source_snapshot": [
     {
       "path": "simulation-scripts/experiments/ch5_accumulation/run.py",
-      "sha256": "2fa6808d76072bdb223d39709931451fbdc934585095b0d3374192bcbeb4c3a5"
+      "sha256": "ecbb6358dfeff6c745529a3094749077b9e0052d155df72353e126e79ee78b97"
     },
     {
       "path": "simulation-scripts/experiments/intranode_linkspeed_sweep/run.py",
-      "sha256": "8410503ad48e8a4e6f68077e4be20d0aa191bc349efd8fe68ddeff6da8d97b58"
+      "sha256": "d442193cc2617dfbe54d0e7d7b978e3cbe9d9bb7f08f40298dcc0b3dd83f8de6"
     },
     {
       "path": "simulation-scripts/common/sim.py",
-      "sha256": "48b56e681baa9ab049c96184b9cce547ff2b60324d00fabe651091a1a1715e03"
+      "sha256": "7cb1c499a44f1bfebcc52195869c379f323e76a8f7dc30ad83f6d9b8e71be24b"
     },
     {
       "path": "simulation-scripts/common/goal.py",
-      "sha256": "fe5d3f36ac530a06c44e4e8c028f1535091db387f69009d626b8169ec3de2baa"
+      "sha256": "8e91117a1cc1514d1f435bb7a02d486d9b3a21f3d740a16bfd108d884b137fd2"
     },
     {
       "path": "simulation-scripts/common/paths.py",
@@ -145,7 +145,7 @@
     },
     {
       "path": "goal_gen/ai/nccl_generator_v2/simple_sim2goal.py",
-      "sha256": "3cdc8ca9c1eb599c662600de04181052147567f840e6a382d54d025531bdc492"
+      "sha256": "210e22921912143163331e03a2e1b8249d3b6aad35b699b08f77d57f4ec73dc4"
     },
     {
       "path": "goal_gen/ai/nccl_generator_v2/communication.py",

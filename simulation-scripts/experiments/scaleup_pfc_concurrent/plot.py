@@ -279,10 +279,10 @@ def main():
           f"controls={len(controls)} overdrive={len(overdrive)}")
     fig_backpressure(stress)
     # Derived 3-tier thresholds (pfc_config): XOFF 389, XON 311, +50-frame headroom.
-    fig_sawtooth("census_3tier_allgather_inc_67108864.csv", 389, 311)
-    fig_raster([("census_3tier_allgather_inc_67108864.csv",
+    fig_sawtooth("census_3tier_allgather_ring_inc_67108864.csv", 389, 311)
+    fig_raster([("census_3tier_allgather_ring_inc_67108864.csv",
                  "AllGather, in-network (64 MiB)"),
-                ("census_3tier_rdouble_base_67108864.csv",
+                ("census_3tier_allreduce_rdouble_base_67108864.csv",
                  "AllReduce rec.-doubling, endpoint (64 MiB)")])
     gen_table(census, stress, overdrive, controls)
 

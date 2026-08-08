@@ -1,6 +1,6 @@
 """GOAL synthesis + compilation helpers shared by the experiments.
 
-Two writers, matching the AA-plan-Scaleup-Baselines A/B design:
+Two writers, matching the frozen scale-up-baseline A/B design:
   * gen_baseline_goal — endpoint arm via the GENERATOR's OWN decomposition
     (goal_gen/ai/nccl_generator_v2/communication.py; Ring / Recursive-doubling
     per Demystifying-NCCL Tables V-VII). NOT hand-rolled.

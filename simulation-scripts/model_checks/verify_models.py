@@ -542,7 +542,7 @@ def check_instantiation():
 
 
 CH5_RUN = os.path.join(ROOT, "simulation-scripts", "results", "ch5_accumulation",
-                       "runs", "ch5-ga32-headline-iters1-mem16-4000-400-20260731T1405Z")
+                       "runs", "stable-order-ga32-20260808")
 
 
 def check_ch5_headline():
@@ -559,8 +559,8 @@ def check_ch5_headline():
         cell = {r["arm"]: r for r in rows if int(r["tp"]) == tp}
         speedups[tp] = round(float(cell["baseline"]["time_per_iter_s"])
                              / float(cell["inc"]["time_per_iter_s"]), 3)
-    check("quoted end-to-end speedups 1.101/1.232/1.405",
-          speedups == {4: 1.101, 8: 1.232, 16: 1.405}, f"{speedups}")
+    check("quoted end-to-end speedups 1.101/1.235/1.401",
+          speedups == {4: 1.101, 8: 1.235, 16: 1.401}, f"{speedups}")
     S = 32 * 1024 * 1024
     factors = {n: round(2 * M.ring(S, n, 1) / M.inc_root(S, 1), 3) for n in (4, 8, 16)}
     check("simulator-model TP factors 1.562/1.905/2.218",

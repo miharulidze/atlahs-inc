@@ -1,12 +1,8 @@
 # Reproducing the thesis experiments
 
 The three experiments below produce the thesis headline results. The committed CSVs
-and Chapter 5 run preserve the historical thesis measurements, so the existing figures
-and tables can be regenerated without rerunning the simulations.
-
-The current backend contains later correctness fixes. Treat results produced by the
-current code as a separate dataset rather than combining them with committed rows. See
-[`REFERENCE_DATA.md`](REFERENCE_DATA.md) for details.
+and canonical Chapter 5 run can regenerate the existing figures and tables without
+rerunning the simulations. See [`REFERENCE_DATA.md`](REFERENCE_DATA.md) for details.
 
 ## 1. Build the simulator
 
@@ -85,11 +81,11 @@ docker run --rm --user "$(id -u):$(id -g)" \
 
 ## 4. Chapter 5: training case study
 
-The historical run used for the thesis is:
+The canonical run used for the thesis is:
 
 ```text
 simulation-scripts/results/ch5_accumulation/runs/
-  ch5-ga32-headline-iters1-mem16-4000-400-20260731T1405Z/
+  stable-order-ga32-20260808/
 ```
 
 Launch the same TP4/TP8/TP16 workload definition in a new immutable run directory:
@@ -113,5 +109,5 @@ docker run --rm --user "$(id -u):$(id -g)" \
   --output-dir /workspace/simulation-scripts/results/ch5_accumulation/runs/<run-id>/thesis-assets
 ```
 
-The historical run records the executed inputs and binary/source hashes in its source
+The canonical run records the executed inputs and binary/source hashes in its source
 snapshot. Its `PROVENANCE.md` describes the available metadata.

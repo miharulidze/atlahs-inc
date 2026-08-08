@@ -6,18 +6,17 @@ simulator.
 
 | dataset | tracked scope | source revision | thesis use |
 |---|---|---|---|
-| `scaleup_coll_ab` | 126 rows: 7 cases × 9 sizes × 2 fabrics, group 64 | `e2c3042` | Chapter 4 completion time |
+| `scaleup_coll_ab` | 126 rows: 7 cases × 9 sizes × 2 fabrics, group 64 | PCM `3179f0b` | Chapter 4 completion time |
 | `scaleup_coll_ab_groupsweep` | 84 rows: 7 cases × 2 sizes × 6 group sizes | `e2c3042` | Chapter 4 group-size sweep |
 | `scaleup_coll_footprint` | 96 rows: 2 fabrics, groups 2–64, 5 collectives | `e2c3042` | Chapter 4 network footprint |
-| canonical Chapter 5 run | 6 rows: TP 4/8/16 × baseline/INC | run `20260731T1405Z` | Chapter 5 case study |
+| canonical Chapter 5 run | 6 rows: TP 4/8/16 × baseline/INC | run `stable-order-ga32-20260808` | Chapter 5 case study |
 
-## Historical and current results
+## Reference results
 
-The current backend includes later correctness fixes, including globally unique
-collective flow IDs. Such changes can alter ECMP choices and packet scheduling even
-when the workload is unchanged. Therefore, do not append results from the current code
-to the committed historical CSVs or compare a mixture as one experiment matrix. Keep a
-new run together with the exact root and submodule revisions that produced it.
+The Chapter 4 completion-time matrix and Chapter 5 case study were refreshed with the
+stable equal-time event ordering and globally unique collective flow IDs. The Chapter 4
+group sweep was checked and remained identical. The footprint data was retained because
+its byte-link metric is independent of equal-time event ordering.
 
 The frozen Chapter 4 wrappers stage a complete run under
 `results/generated-runs/<run-id>/` and update the result CSV only when the matrix

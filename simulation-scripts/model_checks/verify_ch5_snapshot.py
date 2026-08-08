@@ -9,7 +9,7 @@ from pathlib import Path
 import sys
 
 
-RUN_ID = "ch5-ga32-headline-iters1-mem16-4000-400-20260731T1405Z"
+RUN_ID = "stable-order-ga32-20260808"
 RUN_DIR = (
     Path(__file__).resolve().parents[1]
     / "results"

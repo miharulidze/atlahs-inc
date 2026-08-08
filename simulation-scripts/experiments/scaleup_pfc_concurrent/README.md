@@ -1,6 +1,6 @@
 # scaleup_pfc_concurrent — PFC / lossless-backpressure validation
 
-**Status: historical validation bundle completed 2026-07-28. Requires the instrumented
+**Status: validation bundle refreshed 2026-08-08. Requires the instrumented
 PCM build (`-mcast_pin`, PFC counters, `-pfc_trace`).**
 
 ## What this validates
@@ -22,14 +22,14 @@ This validates the simulator's one-class, link-wide PFC-style abstraction for th
 tested workloads. It is not standards PFC, per-VC CBFC, or a deadlock proof for arbitrary
 mixed traffic.
 
-## Measured outcome (2026-07-28)
+## Measured outcome (2026-08-08)
 
 - **Census (30 chapter corner cells, both fabrics, 64 + 256 MiB):** peak ingress
-  ≤ 0.92 of reservation, peak egress ≤ 0.20 of cap, 0 warn lines; PFC engages *in
-  situ* in 7 cells (AllGather in-network 64/240/1710 pauses, composed RS+AG
-  likewise, rec.-doubling endpoint 23/598).
-- **Stress (pinned vs distributed concurrent AllReduces):** pinned N=16 = 8.9×
-  distributed at 1 MiB — 55 % of the full-serialisation bound (1.98× / 12 % at
+  ≤ 0.92 of reservation, peak egress ≤ 0.22 of cap, 0 warn lines; PFC engages *in
+  situ* in 7 cells (AllGather in-network 64/240/1714 pauses, composed RS+AG
+  likewise, rec.-doubling endpoint 58/853).
+- **Stress (pinned vs distributed concurrent AllReduces):** pinned N=16 = 8.85×
+  distributed at 1 MiB — 55 % of the full-serialisation bound (1.96× / 12 % at
   64 KiB) — with **zero pause frames**: the contention is absorbed by the
   provisioned shared egress buffer draining at link rate under chunk-paced sources.
   The distributed arm is conflict-free **by construction** (round-robin tiles the 16
@@ -37,7 +37,7 @@ mixed traffic.
   measured isolation result.
 - **Overdrive (NIC 2× fabric):** wire schedule unchanged, 4096 pause frames observed
   at the host NIC adapters, 0 warn lines.
-- **Controls:** old 1×BDP egress cap → 171,878 warn lines (peak egress 2.35× the
+- **Controls:** old 1×BDP egress cap → 224,018 warn lines (peak egress 3.14× the
   cap); XOFF=100 gate probe → `nic_redrives_held = 286` (the NIC arbiter actively
   withholds grants); gate off → the pause adapter is not even registered; XOFF=300
   on the crossbar is a **null**: post-fix, no crossbar ingress can be driven over

@@ -66,14 +66,12 @@ matrices.
 
 ## Results
 
-Committed files under `simulation-scripts/results/` are the historical thesis results
-used to regenerate the existing figures and tables. Correctness fixes made afterward
-can change packet routing and timing, so do not append new rows to those historical
-datasets. The frozen wrappers stage complete runs under
+Committed files under `simulation-scripts/results/` are the reference results used to
+regenerate the existing figures and tables. The frozen wrappers stage complete runs under
 `results/generated-runs/<run-id>/` before updating their result CSV.
 
 Chapter 5 writes each invocation to a separate immutable `runs/<run-id>/` directory.
-Its historical run includes the executed source inputs and hashes; details are in the
+Its canonical run includes the executed source inputs and hashes; details are in the
 adjacent `PROVENANCE.md`.
 
 ## Directory layout
