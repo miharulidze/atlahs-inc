@@ -359,6 +359,93 @@ def gen_multigroup_inc_goal(path, groups_path, num_ranks, groups, size, kind, ta
             f.write(" ".join(str(r) for r in members) + "\n")
 
 
+def gen_hierarchical_inc_allreduce_goal(path, groups_path, n, gpus_per_node, size,
+                                        global_algo, tail_ns):
+    """Emit a semantically complete multi-domain hierarchical AllReduce.
+
+    The INC datapath deliberately accepts *node-local* groups only: a single
+    global ``coll allreduce`` cannot cross scale-up domains.  This composition
+    uses its supported primitives where they apply instead:
+
+      1. local INC ReduceScatter across each scale-up domain;
+      2. an endpoint Bine/RD AllReduce across domains for every local-rank
+         lane, in parallel; and
+      3. local INC AllGather across each scale-up domain.
+
+    The local group sidecar is installed identically on every domain.  Each
+    domain receives unique ``op_flow_id`` values because the simulator's
+    collective state is trace-global even though the FIB/sinks are per domain.
+    ``global_algo`` is currently ``rdouble`` or Bine's negabinary butterfly.
+    """
+    if n < 2 or n & (n - 1):
+        raise ValueError(f"hierarchical INC AllReduce needs power-of-two N >= 2; got {n}")
+    if gpus_per_node < 2 or gpus_per_node & (gpus_per_node - 1):
+        raise ValueError(f"gpus_per_node must be a power of two >= 2; got {gpus_per_node}")
+    if n % gpus_per_node:
+        raise ValueError(f"N={n} must be divisible by gpus_per_node={gpus_per_node}")
+    if size <= 0 or size % n:
+        raise ValueError(f"size must be positive and divisible by N={n}; got {size}")
+    if global_algo not in ("rdouble", "bine"):
+        raise ValueError(f"unsupported hierarchical global algorithm {global_algo!r}")
+
+    domains = n // gpus_per_node
+    stages = domains.bit_length() - 1
+    lane_bytes = size // gpus_per_node
+
+    def peer_index(index, stage):
+        return (index ^ (1 << stage) if global_algo == "rdouble"
+                else _bine_partner(index, stage, domains))
+
+    def tag(stage, phase):
+        # Keep P2P tags distinct from the small coll-op IDs and stable between
+        # matching lane send/recv pairs.
+        return f"9{stage:05d}{phase:03d}"
+
+    with open(path, "w") as f:
+        f.write(f"num_ranks {n}\n\n")
+        for rank in range(n):
+            domain, local_rank = divmod(rank, gpus_per_node)
+            local_rs_id = domain
+            local_ag_id = domains + domain
+            label = 1
+            f.write(f"rank {rank} {{\n")
+            # Keep this trace's declared LogGOPS NIC count at one.  A ``nic 1``
+            # coll token makes the legacy runtime remap the later scale-out
+            # lane P2P ranks as ``rank * 2 + nic`` and sends them beyond the
+            # 64-endpoint topology; the INC packet path has its own real NIC.
+            f.write(f"l{label}: coll reduce_scatter {size}b 0 {local_rs_id} -1 cpu 1 nic 0\n")
+            previous = label
+            label += 1
+
+            # Lane-parallel global bandwidth-optimal ReduceScatter + AllGather:
+            # rank local_rank in every domain carries the same S/gpus_per_node
+            # shard, so all GPUs keep using their scale-out NICs.
+            rounds = [(stage, 0, lane_bytes >> (stage + 1)) for stage in range(stages)]
+            rounds += [(stage, 1, lane_bytes >> (stage + 1))
+                       for stage in range(stages - 1, -1, -1)]
+            for stage, phase, chunk in rounds:
+                peer = peer_index(domain, stage) * gpus_per_node + local_rank
+                gate, recv, send, join = label, label + 1, label + 2, label + 3
+                f.write(f"l{gate}: calc 0 cpu 0\n")
+                f.write(f"l{gate} requires l{previous}\n")
+                f.write(f"l{recv}: recv {chunk}b from {peer} tag {tag(stage, phase)} cpu 0 nic 0\n")
+                f.write(f"l{recv} requires l{gate}\n")
+                f.write(f"l{send}: send {chunk}b to {peer} tag {tag(stage, phase)} cpu 0 nic 0\n")
+                f.write(f"l{send} requires l{gate}\n")
+                f.write(f"l{join}: calc 0 cpu 0\n")
+                f.write(f"l{join} requires l{recv}\n")
+                f.write(f"l{join} requires l{send}\n")
+                previous, label = join, label + 4
+
+            f.write(f"l{label}: coll allgather {size}b 0 {local_ag_id} -1 cpu 1 nic 0\n")
+            f.write(f"l{label} requires l{previous}\n")
+            f.write(f"l{label + 1}: calc {tail_ns} cpu 0\n")
+            f.write(f"l{label + 1} requires l{label}\n")
+            f.write("}\n\n")
+    with open(groups_path, "w") as f:
+        f.write(" ".join(str(rank) for rank in range(gpus_per_node)) + "\n")
+
+
 def expected_steps(collective, n, algo_name):
     """Busiest rank's endpoint-step count.  ``count_steps`` measures sends, which
     is equal to this quantity for the symmetric Ring/recursive-doubling schedules;

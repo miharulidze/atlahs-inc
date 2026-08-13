@@ -20,6 +20,7 @@ LINES = [
     ("rdouble", "#2ca02c", "^", "Recursive doubling"),
     ("tree", "#9467bd", "o", "Binomial tree"),
     ("bine", "#d62728", "X", "Bine butterfly"),
+    ("hier_inc_bine", "#159588", "P", "Hierarchical INC (local RS/AG + Bine)"),
 ]
 
 
