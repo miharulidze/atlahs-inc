@@ -7,12 +7,12 @@ Frozen A/B design (locked 2026-07-20):
   * Baseline  = the GENERATOR's OWN decomposition, emitted by calling
                 goal_gen/ai/nccl_generator_v2/communication.py directly (Ring /
                 Recursive-doubling; NCCL algorithms per Demystifying-NCCL Tables V-VII).
-                AllReduce additionally has a textbook full-buffer binomial-tree
-                endpoint schedule because the pinned generator declares TREE but
-                does not implement it in communication.py.
+                AllReduce additionally has textbook full-buffer binomial-tree and
+                locality-aware Bine-butterfly endpoint schedules because the pinned
+                generator declares TREE but does not implement it in communication.py.
   * Charge NEITHER arm for reduction compute (-reduce_compute_latency 0); the A/B
     isolates data movement + step count. (--reduce-compute >0 = sensitivity study.)
-  * AllReduce runs Ring, recursive-doubling, and binomial-tree baselines;
+  * AllReduce runs Ring, recursive-doubling, binomial-tree, and Bine-butterfly baselines;
     RS/AG/Bcast/Reduce use ring-family endpoint baselines; composed RS+AG is a
     separate INC arm.
 Isolation: all N active ranks occupy domain 0. `-num_gpus_per_node` is the selected
@@ -53,7 +53,7 @@ SO_TOPO_DEFAULT = "tree16_bw200Gbps.topo"
 INTRANODE_LINKSPEED = sim.INTRANODE_LINKSPEED_DEFAULT
 
 # (collective, baseline algorithm[, inc_kind]). AllReduce runs ring,
-# recursive-doubling, and a full-buffer binomial tree; RS/AG ring-only. Optional
+# recursive-doubling, a full-buffer binomial tree, and a Bine butterfly; RS/AG ring-only. Optional
 # `inc_kind` overrides the INC-arm coll kind while the
 # baseline stays `collective` -- used for the NVLS-style AllReduce that the INC
 # arm runs as ReduceScatter+AllGather (`allreduce_rs_ag`), compared against the
@@ -62,6 +62,7 @@ COLL_CASES = [
     {"collective": "allreduce",      "algo": "ring"},
     {"collective": "allreduce",      "algo": "rdouble"},
     {"collective": "allreduce",      "algo": "tree"},
+    {"collective": "allreduce",      "algo": "bine"},
     {"collective": "allreduce",      "algo": "ring", "inc_kind": "allreduce_rs_ag"},
     {"collective": "reduce_scatter", "algo": "ring"},
     {"collective": "allgather",      "algo": "ring"},
@@ -89,7 +90,7 @@ def validate(n, size, tmpdir, cases=COLL_CASES):
         inc_kind = case.get("inc_kind", coll)
         inc_root = 0 if inc_kind in ("bcast", "reduce") else -1  # rooted INC arm (bcast/reduce)
         label = inc_kind
-        if algo in ("rdouble", "tree") and (n & (n - 1)):
+        if algo in ("rdouble", "tree", "bine") and (n & (n - 1)):
             print(f"{label:>18} {algo:>8}    skip (N not power of 2)")
             continue
         base = os.path.join(tmpdir, f"base_{label}_{algo}_{n}_{size}.goal")
@@ -129,7 +130,7 @@ def run_exp(n, sizes, su_topo, so_topo, reduce_compute, tmpdir, timeout, cases=C
             inc_kind = case.get("inc_kind", coll)  # INC-arm coll kind (composite = allreduce_rs_ag)
             inc_root = 0 if inc_kind in ("bcast", "reduce") else -1  # rooted INC arm (bcast/reduce)
             label = inc_kind                        # distinct output name; baseline still uses `coll`/`algo`
-            if algo in ("rdouble", "tree") and (n & (n - 1)):
+            if algo in ("rdouble", "tree", "bine") and (n & (n - 1)):
                 report.print_warning(f"{label}/{algo}: skip (N={n} not power of 2)")
                 continue
             report.print_info(f"=== {label} baseline={algo} N={n} su={os.path.basename(su_topo)} ===")
@@ -204,7 +205,7 @@ def main():
     ap.add_argument("--timeout", type=int, default=600)
     ap.add_argument("--tmpdir", default="/tmp/scaleup_coll_ab")
     ap.add_argument("--baseline-algos", default=None,
-                    help="comma-separated endpoint baselines to run (ring,rdouble,tree); "
+                    help="comma-separated endpoint baselines to run (ring,rdouble,tree,bine); "
                          "default: all cases")
     ap.add_argument("--validate", action="store_true",
                     help="generate all arms, check step counts vs the paper, compile — NO sim")

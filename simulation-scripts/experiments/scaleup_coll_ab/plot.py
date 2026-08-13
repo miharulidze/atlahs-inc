@@ -2,8 +2,8 @@
 """Plot the completion-time A/B (M-A): INC vs endpoint baseline, per collective.
 
 Measured-only (no theory/model curves, per the 2026-07-23 thesis policy). Emits:
-  * figure1_allreduce_with_tree.pdf   — Figure-1-style AllReduce speed-up at
-    |G|=64 on the single-switch fabric, including the binomial-tree endpoint arm
+  * figure1_allreduce_with_tree_bine.pdf — Figure-1-style AllReduce speed-up at
+    |G|=64 on the single-switch fabric, including the Tree and Bine endpoint arms
     when present in the CSV.
   * inc_speedup_overview.pdf            — speed-up vs message size, 4 headline lines, one
     panel per topology (single-switch | 3-tier).
@@ -52,6 +52,7 @@ FIGURE1_LINES = [
     ("ring",    "#ff7f0e", "s", "vs. ring"),
     ("rdouble", "#2ca02c", "^", "vs. recursive doubling"),
     ("tree",    "#9467bd", "o", "vs. binomial tree"),
+    ("bine",    "#d62728", "X", "vs. Bine butterfly"),
 ]
 TOPO_TITLE = {"single_switch": "single-switch crossbar", "fat3tier": "256-host 3-tier fat-tree"}
 
@@ -98,14 +99,14 @@ def _size_ticks(ax, xs_all):
     ax.set_xlabel("message size")
 
 
-def figure1_allreduce_with_tree(rows, outdir):
-    """Reproduce the Figure-1 size sweep and add the endpoint binomial-tree curve.
+def figure1_allreduce_with_tree_bine(rows, outdir):
+    """Reproduce Figure 1 and add endpoint binomial-tree and Bine curves.
 
     This intentionally stays on the paper's 64-host single-switch geometry and
     trims the 256 MiB canonical extension, so its x range is the Figure-1 4 KiB
     through 64 MiB sweep.  It works with a subset run (for example
-    ``--baseline-algos tree``) as long as the result CSV also contains the saved
-    ring and recursive-doubling reference rows.
+    ``--baseline-algos tree,bine``) as long as the result CSV also contains the
+    saved ring and recursive-doubling reference rows.
     """
     sub = [r for r in rows if r["_topo"] == "single_switch"
            and r["collective"] == "allreduce"
@@ -137,8 +138,8 @@ def figure1_allreduce_with_tree(rows, outdir):
     ax.legend(fontsize=8, loc="upper right", framealpha=0.95)
     fig.tight_layout()
     for ext in ("pdf", "png"):
-        fig.savefig(os.path.join(outdir, f"figure1_allreduce_with_tree.{ext}"), dpi=150)
-    print("wrote figure1_allreduce_with_tree")
+        fig.savefig(os.path.join(outdir, f"figure1_allreduce_with_tree_bine.{ext}"), dpi=150)
+    print("wrote figure1_allreduce_with_tree_bine")
     plt.close(fig)
 
 
@@ -271,7 +272,7 @@ def main():
         sys.exit(f"no usable rows in {CSV}")
     topos = sorted({r["_topo"] for r in rows})
     colls = sorted({r["collective"] for r in rows})
-    figure1_allreduce_with_tree(rows, OUTDIR)
+    figure1_allreduce_with_tree_bine(rows, OUTDIR)
     speedup_overview(rows, OUTDIR)
     for topo in topos:                     # individual per-collective completion-time plots
         for coll in colls:

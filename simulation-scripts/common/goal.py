@@ -3,10 +3,10 @@
 Two writers, matching the frozen scale-up-baseline A/B design:
   * gen_baseline_goal — endpoint arm via the GENERATOR's OWN decomposition
     (goal_gen/ai/nccl_generator_v2/communication.py; Ring / Recursive-doubling
-    per Demystifying-NCCL Tables V-VII).  The AllReduce ``tree`` arm is the one
-    explicit exception: the pinned generator exposes a TREE enum but does not
-    implement it in communication.py, so this module emits the textbook
-    binomial Reduce + Broadcast schedule directly.
+    per Demystifying-NCCL Tables V-VII).  The AllReduce ``tree`` and ``bine``
+    arms are explicit exceptions: the pinned generator exposes a TREE enum but
+    does not implement it in communication.py, so this module emits the
+    textbook binomial Reduce + Broadcast and Bine-butterfly schedules directly.
   * gen_inc_goal — INC arm: one first-class `coll <kind>` op per rank + a .groups
     sidecar; rooted (bcast/reduce) or rootless (allreduce/reduce_scatter/allgather).
 
@@ -99,6 +99,11 @@ def gen_baseline_goal(path, n, size, collective, algo_name, tail_ns, root=0):
         if collective != "allreduce":
             raise ValueError("the binomial-tree endpoint writer supports AllReduce only")
         gen_binomial_tree_allreduce_goal(path, n, size, tail_ns)
+        return
+    if algo_name == "bine":
+        if collective != "allreduce":
+            raise ValueError("the Bine endpoint writer supports AllReduce only")
+        gen_bine_allreduce_goal(path, n, size, tail_ns)
         return
 
     communication, gen_goal = _generator()
@@ -197,6 +202,73 @@ def gen_binomial_tree_allreduce_goal(path, n, size, tail_ns):
             f.write("}\n\n")
 
 
+def _bine_partner(rank, stage, n):
+    """Bine's negabinary butterfly partner π(rank, stage).
+
+    The published Bine implementation uses the signed offsets
+    1, -1, 3, -5, 11, ... .  Their closed form is
+    ``rho(stage) = (1 - (-2) ** (stage + 1)) / 3``.  Applying rho to even
+    ranks and -rho to odd ranks makes every stage a perfect matching.
+    """
+    rho = (1 - (-2) ** (stage + 1)) // 3
+    return (rank + rho if rank % 2 == 0 else rank - rho) % n
+
+
+def gen_bine_allreduce_goal(path, n, size, tail_ns):
+    """Emit Bine's bandwidth-oriented AllReduce butterfly.
+
+    Bine replaces the XOR partners of recursive halving/doubling with its
+    negabinary ``π`` partners, which preserves locality under a suitable rank
+    placement.  The data movement is otherwise the same bandwidth-optimal
+    ReduceScatter + AllGather: S/2, S/4, ..., S/N bytes, then the reverse.
+    GOAL models dependencies and byte volumes, not buffer offsets, so its trace
+    exactly captures the packet-level schedule relevant to this simulator.
+
+    This follows ``allreduce_bine_bdw_remap`` in HLC-Lab/pico.  It is called a
+    Bine butterfly in that implementation (rather than a rooted full-buffer
+    tree), but is the Bine family member appropriate for AllReduce.
+    """
+    if n < 2 or n & (n - 1):
+        raise ValueError(f"Bine AllReduce needs a power-of-two N >= 2; got {n}")
+    if size <= 0 or size % n:
+        raise ValueError(f"Bine AllReduce size must be positive and divisible by N={n}; got {size}")
+
+    stages = n.bit_length() - 1
+
+    def tag(stage, phase):
+        return f"{stage:06d}{phase:03d}"
+
+    with open(path, "w") as f:
+        f.write(f"num_ranks {n}\n\n")
+        for rank in range(n):
+            f.write(f"rank {rank} {{\n")
+            previous = None
+            label = 0
+            # The reduce-scatter and allgather rounds are explicit send/recv
+            # parallel pairs, followed by a join, just like the generator's
+            # GoalParallel rendering for recursive doubling.
+            rounds = [(stage, 0, size >> (stage + 1)) for stage in range(stages)]
+            rounds += [(stage, 1, size >> (stage + 1))
+                       for stage in range(stages - 1, -1, -1)]
+            for stage, phase, chunk in rounds:
+                peer = _bine_partner(rank, stage, n)
+                gate, recv, send, join = label, label + 1, label + 2, label + 3
+                f.write(f"l{gate}: calc 0 cpu 0\n")
+                if previous is not None:
+                    f.write(f"l{gate} requires l{previous}\n")
+                f.write(f"l{recv}: recv {chunk}b from {peer} tag {tag(stage, phase)} cpu 0 nic 0\n")
+                f.write(f"l{recv} requires l{gate}\n")
+                f.write(f"l{send}: send {chunk}b to {peer} tag {tag(stage, phase)} cpu 0 nic 0\n")
+                f.write(f"l{send} requires l{gate}\n")
+                f.write(f"l{join}: calc 0 cpu 0\n")
+                f.write(f"l{join} requires l{recv}\n")
+                f.write(f"l{join} requires l{send}\n")
+                previous, label = join, label + 4
+            f.write(f"l{label}: calc {tail_ns} cpu 0\n")
+            f.write(f"l{label} requires l{previous}\n")
+            f.write("}\n\n")
+
+
 def gen_inc_goal(path, groups_path, n, size, kind, tail_ns, root=-1):
     """INC arm: one first-class `coll` op per rank (+ .groups sidecar); rooted for
     bcast/reduce (root = a GLOBAL goal rank >= 0), rootless (root = -1) otherwise.
@@ -292,14 +364,15 @@ def expected_steps(collective, n, algo_name):
     is equal to this quantity for the symmetric Ring/recursive-doubling schedules;
     the binomial tree instead uses ``count_transfer_steps`` because its root
     receives during fan-in and sends during fan-out.  Rootless ring = n-1;
-    recursive doubling and the full-buffer binomial tree = 2*log2(n) for AllReduce. The rooted pipelined-ring
+    recursive doubling, the Bine butterfly, and the full-buffer binomial tree =
+    2*log2(n) for AllReduce. The rooted pipelined-ring
     Broadcast/Reduce chop the message into K = max(n, size//SEG_BYTES) chunks streamed
     along the chain (communication.py), so the busiest sender -- root (bcast) / tail
     (reduce) -- emits all K. That count is SIZE-dependent, so the n returned here is only
     the small-message case (K == n); callers compile-check those two instead of
     comparing counts (see experiments/scaleup_coll_ab/run.py)."""
     if collective == "allreduce":
-        return 2 * (n.bit_length() - 1) if algo_name in ("rdouble", "tree") else 2 * (n - 1)
+        return 2 * (n.bit_length() - 1) if algo_name in ("rdouble", "tree", "bine") else 2 * (n - 1)
     if collective in ("bcast", "reduce"):
         return n
     return n - 1
