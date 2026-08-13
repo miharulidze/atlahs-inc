@@ -7,11 +7,14 @@ Frozen A/B design (locked 2026-07-20):
   * Baseline  = the GENERATOR's OWN decomposition, emitted by calling
                 goal_gen/ai/nccl_generator_v2/communication.py directly (Ring /
                 Recursive-doubling; NCCL algorithms per Demystifying-NCCL Tables V-VII).
-                NOT hand-rolled.
+                AllReduce additionally has a textbook full-buffer binomial-tree
+                endpoint schedule because the pinned generator declares TREE but
+                does not implement it in communication.py.
   * Charge NEITHER arm for reduction compute (-reduce_compute_latency 0); the A/B
     isolates data movement + step count. (--reduce-compute >0 = sensitivity study.)
-  * AllReduce runs BOTH ring and recursive-doubling baselines; RS/AG/Bcast/Reduce
-    use ring-family endpoint baselines; composed RS+AG is a separate INC arm.
+  * AllReduce runs Ring, recursive-doubling, and binomial-tree baselines;
+    RS/AG/Bcast/Reduce use ring-family endpoint baselines; composed RS+AG is a
+    separate INC arm.
 Isolation: all N active ranks occupy domain 0. `-num_gpus_per_node` is the selected
 scale-up topology's fixed width, so group-size sweeps partially populate that domain
 without resizing the fabric; no scale-out flows are emitted.
@@ -49,14 +52,16 @@ SO_TOPO_DEFAULT = "tree16_bw200Gbps.topo"
 # reported rate can never drift from the one actually simulated.
 INTRANODE_LINKSPEED = sim.INTRANODE_LINKSPEED_DEFAULT
 
-# (collective, baseline algorithm[, inc_kind]). AllReduce runs both baselines;
-# RS/AG ring-only. Optional `inc_kind` overrides the INC-arm coll kind while the
+# (collective, baseline algorithm[, inc_kind]). AllReduce runs ring,
+# recursive-doubling, and a full-buffer binomial tree; RS/AG ring-only. Optional
+# `inc_kind` overrides the INC-arm coll kind while the
 # baseline stays `collective` -- used for the NVLS-style AllReduce that the INC
 # arm runs as ReduceScatter+AllGather (`allreduce_rs_ag`), compared against the
-# same endpoint AllReduce baseline. The apex INC AllReduce (rows 1-2) is kept.
+# same endpoint AllReduce baseline. The apex INC AllReduce (the first three rows) is kept.
 COLL_CASES = [
     {"collective": "allreduce",      "algo": "ring"},
     {"collective": "allreduce",      "algo": "rdouble"},
+    {"collective": "allreduce",      "algo": "tree"},
     {"collective": "allreduce",      "algo": "ring", "inc_kind": "allreduce_rs_ag"},
     {"collective": "reduce_scatter", "algo": "ring"},
     {"collective": "allgather",      "algo": "ring"},
@@ -73,18 +78,18 @@ CSV_FIELDS = ["collective", "baseline_algo", "group_size", "msg_bytes",
               "engine", "log_file", "command"]
 
 
-def validate(n, size, tmpdir):
+def validate(n, size, tmpdir, cases=COLL_CASES):
     """Topology-independent: generate every arm, check step counts vs the paper, compile."""
     os.makedirs(tmpdir, exist_ok=True)
     report.print_info(f"validation @ N={n}, size={size} (no sim)")
     print(f"{'collective':>16} {'algo':>8} {'steps':>6} {'expect':>7} {'compile':>8}")
     all_ok = True
-    for case in COLL_CASES:
+    for case in cases:
         coll, algo = case["collective"], case["algo"]
         inc_kind = case.get("inc_kind", coll)
         inc_root = 0 if inc_kind in ("bcast", "reduce") else -1  # rooted INC arm (bcast/reduce)
         label = inc_kind
-        if algo == "rdouble" and (n & (n - 1)):
+        if algo in ("rdouble", "tree") and (n & (n - 1)):
             print(f"{label:>18} {algo:>8}    skip (N not power of 2)")
             continue
         base = os.path.join(tmpdir, f"base_{label}_{algo}_{n}_{size}.goal")
@@ -93,7 +98,10 @@ def validate(n, size, tmpdir):
         goal.gen_inc_goal(inc, inc[:-5] + ".groups", n, size, inc_kind, TAIL_NS, root=inc_root)
         # Step-count check is on the endpoint baseline (coll/algo); the INC arm's
         # composite (allreduce_rs_ag) has no single "steps" count, so only compile-check it.
-        got = goal.count_steps(base)
+        # Existing generator schedules send once per dependent round, so their
+        # historical send-count check is exact.  A binomial tree's root receives
+        # during fan-in and sends during fan-out; validate its transfer depth.
+        got = goal.count_transfer_steps(base) if algo == "tree" else goal.count_steps(base)
         if coll in ("bcast", "reduce"):
             exp, ok = got, True   # pipelined-chain K = max(N, size//SEG_BYTES) is size-dependent; compile-check only
         else:
@@ -107,7 +115,7 @@ def validate(n, size, tmpdir):
     return 0 if all_ok else 1
 
 
-def run_exp(n, sizes, su_topo, so_topo, reduce_compute, tmpdir, timeout):
+def run_exp(n, sizes, su_topo, so_topo, reduce_compute, tmpdir, timeout, cases=COLL_CASES):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     os.makedirs(tmpdir, exist_ok=True)
     su_width = sim.topology_nodes(su_topo)
@@ -116,12 +124,12 @@ def run_exp(n, sizes, su_topo, so_topo, reduce_compute, tmpdir, timeout):
     csv_path = os.path.join(OUTPUT_DIR, "scaleup_coll_ab.csv")
     failures = 0
     with report.CsvAppender(csv_path, CSV_FIELDS) as out:
-        for case in COLL_CASES:
+        for case in cases:
             coll, algo = case["collective"], case["algo"]
             inc_kind = case.get("inc_kind", coll)  # INC-arm coll kind (composite = allreduce_rs_ag)
             inc_root = 0 if inc_kind in ("bcast", "reduce") else -1  # rooted INC arm (bcast/reduce)
             label = inc_kind                        # distinct output name; baseline still uses `coll`/`algo`
-            if algo == "rdouble" and (n & (n - 1)):
+            if algo in ("rdouble", "tree") and (n & (n - 1)):
                 report.print_warning(f"{label}/{algo}: skip (N={n} not power of 2)")
                 continue
             report.print_info(f"=== {label} baseline={algo} N={n} su={os.path.basename(su_topo)} ===")
@@ -195,6 +203,9 @@ def main():
                     help="INC in-switch ALU latency (ns); DEFAULT 0 = charge-neither. >0 = sensitivity")
     ap.add_argument("--timeout", type=int, default=600)
     ap.add_argument("--tmpdir", default="/tmp/scaleup_coll_ab")
+    ap.add_argument("--baseline-algos", default=None,
+                    help="comma-separated endpoint baselines to run (ring,rdouble,tree); "
+                         "default: all cases")
     ap.add_argument("--validate", action="store_true",
                     help="generate all arms, check step counts vs the paper, compile — NO sim")
     args = ap.parse_args()
@@ -202,16 +213,26 @@ def main():
     goal.require_txt2bin()
     goal.require_generator()  # fail on a broken GENERATOR_DIR before any filesystem writes
     sizes = [int(x) for x in args.sizes.split(",")]
+    cases = COLL_CASES
+    if args.baseline_algos:
+        wanted = {name.strip() for name in args.baseline_algos.split(",") if name.strip()}
+        known = {case["algo"] for case in COLL_CASES}
+        unknown = wanted - known
+        if unknown:
+            ap.error("unknown baseline algorithm(s): " + ", ".join(sorted(unknown)))
+        cases = [case for case in COLL_CASES if case["algo"] in wanted]
+        if not cases:
+            ap.error("--baseline-algos selected no cases")
 
     if args.validate:
-        sys.exit(validate(args.n, sizes[0], args.tmpdir))
+        sys.exit(validate(args.n, sizes[0], args.tmpdir, cases))
 
     sim.require_simulator()
     if args.su_topo is None:
         sys.exit("--su-topo is required for a sim run; use a frozen wrapper or pass an "
                  "explicit topology, or use --validate for the no-sim check")
     sys.exit(run_exp(args.n, sizes, paths.topo(args.su_topo), paths.topo(args.so_topo),
-                     args.reduce_compute, args.tmpdir, args.timeout))
+                     args.reduce_compute, args.tmpdir, args.timeout, cases))
 
 
 if __name__ == "__main__":

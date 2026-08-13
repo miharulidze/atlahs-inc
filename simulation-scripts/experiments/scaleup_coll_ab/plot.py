@@ -2,6 +2,9 @@
 """Plot the completion-time A/B (M-A): INC vs endpoint baseline, per collective.
 
 Measured-only (no theory/model curves, per the 2026-07-23 thesis policy). Emits:
+  * figure1_allreduce_with_tree.pdf   — Figure-1-style AllReduce speed-up at
+    |G|=64 on the single-switch fabric, including the binomial-tree endpoint arm
+    when present in the CSV.
   * inc_speedup_overview.pdf            — speed-up vs message size, 4 headline lines, one
     panel per topology (single-switch | 3-tier).
   * inc_time_bcast_reduce__<topo>.pdf   — Broadcast & Reduce (rooted duals) overlaid, with a
@@ -44,6 +47,11 @@ OVERVIEW_LINES = [
     ("allreduce",      "rdouble", "#e08a1e", "s", "AllReduce (rec.-doubling)"),
     ("reduce_scatter", "ring",    "#2ca02c", "^", "ReduceScatter"),
     ("allgather",      "ring",    "#d62728", "D", "AllGather"),
+]
+FIGURE1_LINES = [
+    ("ring",    "#ff7f0e", "s", "vs. ring"),
+    ("rdouble", "#2ca02c", "^", "vs. recursive doubling"),
+    ("tree",    "#9467bd", "o", "vs. binomial tree"),
 ]
 TOPO_TITLE = {"single_switch": "single-switch crossbar", "fat3tier": "256-host 3-tier fat-tree"}
 
@@ -88,6 +96,50 @@ def _size_ticks(ax, xs_all):
     ax.set_xticklabels([size_label(x) for x in xs_all], fontsize=8, rotation=45, ha="right")
     ax.minorticks_off()
     ax.set_xlabel("message size")
+
+
+def figure1_allreduce_with_tree(rows, outdir):
+    """Reproduce the Figure-1 size sweep and add the endpoint binomial-tree curve.
+
+    This intentionally stays on the paper's 64-host single-switch geometry and
+    trims the 256 MiB canonical extension, so its x range is the Figure-1 4 KiB
+    through 64 MiB sweep.  It works with a subset run (for example
+    ``--baseline-algos tree``) as long as the result CSV also contains the saved
+    ring and recursive-doubling reference rows.
+    """
+    sub = [r for r in rows if r["_topo"] == "single_switch"
+           and r["collective"] == "allreduce"
+           and fnum(r, "group_size") == 64
+           and fnum(r, "msg_bytes") and int(r["msg_bytes"]) <= 67108864]
+    if not sub:
+        return
+    fig, ax = plt.subplots(figsize=(6.4, 4.0))
+    plotted = 0
+    for algo, color, marker, label in FIGURE1_LINES:
+        points = {int(r["msg_bytes"]): fnum(r, "speedup") for r in sub
+                  if r["baseline_algo"] == algo and fnum(r, "speedup")}
+        if not points:
+            continue
+        xs = sorted(points)
+        ax.plot(xs, [points[x] for x in xs], marker=marker, ms=5, lw=1.8,
+                color=color, label=label)
+        plotted += 1
+    if not plotted:
+        plt.close(fig)
+        return
+    xs_all = sorted({int(r["msg_bytes"]) for r in sub})
+    ax.axhline(1.0, color="#888", lw=1, ls=":")
+    ax.set_yscale("log")
+    _size_ticks(ax, xs_all)
+    ax.set_ylabel("speed-up  (endpoint / in-network)")
+    ax.set_title("AllReduce, |G| = 64, single-switch (pcm-sdk, measured)", fontsize=10)
+    ax.grid(ls=":", alpha=0.5, which="both")
+    ax.legend(fontsize=8, loc="upper right", framealpha=0.95)
+    fig.tight_layout()
+    for ext in ("pdf", "png"):
+        fig.savefig(os.path.join(outdir, f"figure1_allreduce_with_tree.{ext}"), dpi=150)
+    print("wrote figure1_allreduce_with_tree")
+    plt.close(fig)
 
 
 def speedup_overview(rows, outdir):
@@ -219,6 +271,7 @@ def main():
         sys.exit(f"no usable rows in {CSV}")
     topos = sorted({r["_topo"] for r in rows})
     colls = sorted({r["collective"] for r in rows})
+    figure1_allreduce_with_tree(rows, OUTDIR)
     speedup_overview(rows, OUTDIR)
     for topo in topos:                     # individual per-collective completion-time plots
         for coll in colls:

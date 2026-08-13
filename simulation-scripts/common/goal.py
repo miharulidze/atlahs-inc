@@ -3,7 +3,10 @@
 Two writers, matching the frozen scale-up-baseline A/B design:
   * gen_baseline_goal — endpoint arm via the GENERATOR's OWN decomposition
     (goal_gen/ai/nccl_generator_v2/communication.py; Ring / Recursive-doubling
-    per Demystifying-NCCL Tables V-VII). NOT hand-rolled.
+    per Demystifying-NCCL Tables V-VII).  The AllReduce ``tree`` arm is the one
+    explicit exception: the pinned generator exposes a TREE enum but does not
+    implement it in communication.py, so this module emits the textbook
+    binomial Reduce + Broadcast schedule directly.
   * gen_inc_goal — INC arm: one first-class `coll <kind>` op per rank + a .groups
     sidecar; rooted (bcast/reduce) or rootless (allreduce/reduce_scatter/allgather).
 
@@ -73,7 +76,7 @@ def coll_classes():
 
 
 def algo(name):
-    """Baseline algorithm name ('ring' | 'rdouble') -> generator CollAlgo."""
+    """Generator-backed baseline name ('ring' | 'rdouble') -> CollAlgo."""
     communication, _ = _generator()
     return {"ring": communication.CollAlgo.RING,
             "rdouble": communication.CollAlgo.RECURSIVE_DOUBLING}[name]
@@ -92,6 +95,12 @@ def gen_baseline_goal(path, n, size, collective, algo_name, tail_ns, root=0):
     rank ends in a dependent `calc tail_ns` so both arms share the same tail.
     `root` (comm-local rank) is used only by the rooted collectives (bcast/reduce);
     it is ignored for the rootless AllReduce/ReduceScatter/AllGather."""
+    if algo_name == "tree":
+        if collective != "allreduce":
+            raise ValueError("the binomial-tree endpoint writer supports AllReduce only")
+        gen_binomial_tree_allreduce_goal(path, n, size, tail_ns)
+        return
+
     communication, gen_goal = _generator()
     _reset_goal_state()
     devices = [communication.CollDevice(("gpu", i)) for i in range(n)]
@@ -117,6 +126,74 @@ def gen_baseline_goal(path, n, size, collective, algo_name, tail_ns, root=0):
             for ln in tail_lines:
                 f.write(f"{ln}\n")
             f.write(f"l{tail_start} requires l{end_id}\n")
+            f.write("}\n\n")
+
+
+def gen_binomial_tree_allreduce_goal(path, n, size, tail_ns):
+    """Emit a traffic-only, full-buffer binomial-tree AllReduce endpoint schedule.
+
+    The reduction is a binomial fan-in rooted at rank 0, followed by the reverse
+    binomial broadcast.  Every tree edge carries the full ``size`` buffer once in
+    each direction, so this deliberately realizes the tree row in Table I rather
+    than the bandwidth-optimal recursive-halving/doubling decomposition.  As with
+    the other endpoint arms, reduction arithmetic is not charged; ``tail_ns`` is
+    the identical final dependent calculation used in the A/B harness.
+
+    Only power-of-two communicators are accepted.  This keeps every rank's
+    round/partner relationship symmetric with the paper's 2 log2(N) step model
+    and with the recursive-doubling baseline's existing precondition.
+    """
+    if n < 2 or n & (n - 1):
+        raise ValueError(f"binomial-tree AllReduce needs a power-of-two N >= 2; got {n}")
+    if size <= 0:
+        raise ValueError(f"binomial-tree AllReduce needs a positive size; got {size}")
+
+    stages = n.bit_length() - 1
+
+    def tag(stage, phase):
+        # Match the generator's 6-digit message-id + 3-digit context tag layout.
+        # Each source/destination pair appears once per phase, so stage is enough
+        # to distinguish these direct point-to-point operations.
+        return f"{stage:06d}{phase:03d}"
+
+    with open(path, "w") as f:
+        f.write(f"num_ranks {n}\n\n")
+        for rank in range(n):
+            actions = []
+
+            # Binomial reduce: at stage i the lower member of each 2^(i+1)
+            # block receives the full partial result from its upper partner.
+            for stage in range(stages):
+                mask = 1 << stage
+                residue = rank % (2 * mask)
+                if residue == 0:
+                    actions.append(("recv", rank + mask, stage, 0))
+                elif residue == mask:
+                    actions.append(("send", rank - mask, stage, 0))
+
+            # Reverse the same tree for broadcast.  A rank which sent during the
+            # reduce waits here until its parent has received the completed result.
+            for stage in range(stages - 1, -1, -1):
+                mask = 1 << stage
+                residue = rank % (2 * mask)
+                if residue == 0:
+                    actions.append(("send", rank + mask, stage, 1))
+                elif residue == mask:
+                    actions.append(("recv", rank - mask, stage, 1))
+
+            f.write(f"rank {rank} {{\n")
+            previous = None
+            label = 1
+            for op, peer, stage, phase in actions:
+                direction = f"to {peer}" if op == "send" else f"from {peer}"
+                f.write(f"l{label}: {op} {size}b {direction} tag {tag(stage, phase)} cpu 0 nic 0\n")
+                if previous is not None:
+                    f.write(f"l{label} requires l{previous}\n")
+                previous = label
+                label += 1
+            f.write(f"l{label}: calc {tail_ns} cpu 0\n")
+            if previous is not None:
+                f.write(f"l{label} requires l{previous}\n")
             f.write("}\n\n")
 
 
@@ -211,15 +288,18 @@ def gen_multigroup_inc_goal(path, groups_path, num_ranks, groups, size, kind, ta
 
 
 def expected_steps(collective, n, algo_name):
-    """Busiest rank's send-op count (== count_steps). Rootless ring = n-1, rdouble =
-    2*log2(n) or 2*(n-1) per Demystifying-NCCL Tables V-VII. The rooted pipelined-ring
+    """Busiest rank's endpoint-step count.  ``count_steps`` measures sends, which
+    is equal to this quantity for the symmetric Ring/recursive-doubling schedules;
+    the binomial tree instead uses ``count_transfer_steps`` because its root
+    receives during fan-in and sends during fan-out.  Rootless ring = n-1;
+    recursive doubling and the full-buffer binomial tree = 2*log2(n) for AllReduce. The rooted pipelined-ring
     Broadcast/Reduce chop the message into K = max(n, size//SEG_BYTES) chunks streamed
     along the chain (communication.py), so the busiest sender -- root (bcast) / tail
     (reduce) -- emits all K. That count is SIZE-dependent, so the n returned here is only
     the small-message case (K == n); callers compile-check those two instead of
     comparing counts (see experiments/scaleup_coll_ab/run.py)."""
     if collective == "allreduce":
-        return 2 * (n.bit_length() - 1) if algo_name == "rdouble" else 2 * (n - 1)
+        return 2 * (n.bit_length() - 1) if algo_name in ("rdouble", "tree") else 2 * (n - 1)
     if collective in ("bcast", "reduce"):
         return n
     return n - 1
@@ -242,6 +322,30 @@ def count_steps(goal_path):
             elif s == "}":
                 cur = None
             elif cur is not None and re.search(r":\s*send ", s):
+                per_rank[cur] += 1
+    return max(per_rank.values()) if per_rank else 0
+
+
+def count_transfer_steps(goal_path):
+    """Busiest rank's send-or-recv count.
+
+    This is the dependent-transfer depth of the direct binomial-tree AllReduce:
+    the root receives log2(N) reduction messages and then sends log2(N) broadcast
+    messages.  It intentionally differs from ``count_steps`` (send-only), whose
+    historical definition is retained for validating the generator schedules.
+    """
+    per_rank = {}
+    cur = None
+    with open(goal_path) as f:
+        for line in f:
+            s = line.strip()
+            m = re.match(r"rank (\d+)\s*\{", s)
+            if m:
+                cur = int(m.group(1))
+                per_rank.setdefault(cur, 0)
+            elif s == "}":
+                cur = None
+            elif cur is not None and re.search(r":\s*(send|recv) ", s):
                 per_rank[cur] += 1
     return max(per_rank.values()) if per_rank else 0
 

@@ -226,9 +226,15 @@ def run_sim(binpath, so_topo, su_topo, nodes, gpus_per_node, groups=None,
         _lo = pfc_low
     if intranode_q is not None:
         _q = intranode_q
+    # The ATLAHS driver divides the scale-up queue by the scale-out queue while
+    # constructing its ECN thresholds.  Supplying only -intranode_q leaves the
+    # latter at zero and terminates the process with SIGFPE before a trace runs.
+    # Derive a non-zero, topology-matched scale-out cap as well.  It carries no
+    # collective traffic in the single-domain Figure-1 configuration.
+    _so_q = max(1, pfc_config(so_topo)[2])
     cmd = [paths.PCM_APP_HTSIM_ATLAHS_EXEC_PATH, "-goal", binpath,
            "-nodes", str(nodes), "-num_gpus_per_node", str(gpus_per_node),
-           "-topo", so_topo, "-intranode_topo", su_topo,
+           "-topo", so_topo, "-q", str(_so_q), "-intranode_topo", su_topo,
            "-intranode_linkspeed", str(intranode_linkspeed),
            "-end", str(end), "-sender_cc_only",
            "-intranode_cc", "none",
@@ -294,9 +300,10 @@ def run_sim_footprint(binpath, so_topo, su_topo, nodes, gpus_per_node, groups=No
     fd, lc_path = tempfile.mkstemp(prefix="lc_", suffix=".csv")
     os.close(fd)
     _hi, _lo, _q = pfc_config(su_topo)
+    _so_q = max(1, pfc_config(so_topo)[2])
     cmd = [paths.PCM_APP_HTSIM_ATLAHS_EXEC_PATH, "-goal", binpath,
            "-nodes", str(nodes), "-num_gpus_per_node", str(gpus_per_node),
-           "-topo", so_topo, "-intranode_topo", su_topo,
+           "-topo", so_topo, "-q", str(_so_q), "-intranode_topo", su_topo,
            "-intranode_linkspeed", str(intranode_linkspeed),
            "-end", str(end), "-sender_cc_only",
            "-intranode_cc", "none",
