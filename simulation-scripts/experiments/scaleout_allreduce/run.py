@@ -9,10 +9,14 @@ scale-up crossbar.
 
 The simulator's first-class INC primitive is intentionally node-local, so it
 cannot represent a single 64-rank in-network operation across scale-up domains.
-The default measurement therefore adds the semantically complete hierarchical
-variant: local INC ReduceScatter, lane-parallel Bine AllReduce across scale-out,
-then local INC AllGather.  ``plot.py`` labels it explicitly rather than
-presenting it as a hypothetical global in-network switch.
+The default measurement adds two valid multi-domain INC compositions.  The
+naive variant uses the existing node-local INC AllReduce followed by a
+full-buffer Bine AllReduce on every local-rank lane.  The hierarchical variant
+instead shards the buffer with local INC ReduceScatter, uses the same
+lane-parallel global AllReduce, then reconstructs it with local INC AllGather.
+The former is intentionally bandwidth-inefficient, but provides a direct
+baseline for the latter.  ``plot.py`` labels both explicitly rather than
+presenting either as a hypothetical global in-network switch.
 """
 import argparse
 import os
@@ -30,6 +34,7 @@ DEFAULT_SU_TOPO = "scaleup_single_switch_8_12800Gbps.topo"
 DEFAULT_SO_TOPO = "scaleout_2tier_64_oversub2_100Gbps.topo"
 DEFAULT_ALGOS = ("ring", "rdouble", "tree", "bine")
 HIERARCHICAL_INC_ALGO = "hier_inc_bine"
+NAIVE_INC_ALGO = "naive_inc_bine"
 INTRANODE_LINKSPEED = 12800000  # 12.8 Tbps, matched to DEFAULT_SU_TOPO.
 
 OUTPUT_DIR = os.environ.get("SCALEOUT_OUTPUT_DIR", paths.results_dir(EXP_NAME))
@@ -38,7 +43,7 @@ CSV_FIELDS = ["collective", "baseline_algo", "group_size", "gpus_per_node", "msg
               "intranode_linkspeed_mbps", "engine", "log_file", "command"]
 
 
-def run_exp(n, gpus_per_node, sizes, algos, hierarchical_inc,
+def run_exp(n, gpus_per_node, sizes, algos, hierarchical_inc, naive_inc, inc_only,
             su_topo, so_topo, tmpdir, timeout):
     """Generate and run direct endpoint schedules on a multi-domain fabric."""
     if n < 2 or n & (n - 1):
@@ -55,7 +60,7 @@ def run_exp(n, gpus_per_node, sizes, algos, hierarchical_inc,
     csv_path = os.path.join(OUTPUT_DIR, f"{EXP_NAME}.csv")
     failures = 0
     with report.CsvAppender(csv_path, CSV_FIELDS) as out:
-        for algo in algos:
+        for algo in (() if inc_only else algos):
             report.print_info(
                 f"=== allreduce baseline={algo} N={n} ({n // gpus_per_node} x {gpus_per_node}-GPU domains) ===")
             for size in sizes:
@@ -125,6 +130,42 @@ def run_exp(n, gpus_per_node, sizes, algos, hierarchical_inc,
                 })
                 print(f"  {size:>10}b  HIER-INC {str(base_ns):>6}  "
                       f"{'ok' if ok else f'{status}, drops={drops}'}")
+        if naive_inc:
+            report.print_info("=== allreduce naive INC (local AllReduce + full-buffer Bine lanes) "
+                              f"N={n} ({n // gpus_per_node} x {gpus_per_node}-GPU domains) ===")
+            for size in sizes:
+                if size % n:
+                    report.print_warning(f"{size}: skip (not divisible by N={n})")
+                    continue
+                stem = f"allreduce_{NAIVE_INC_ALGO}_{n}_{size}"
+                trace = os.path.join(tmpdir, stem + ".goal")
+                groups = trace[:-5] + ".groups"
+                goal.gen_naive_hierarchical_inc_allreduce_goal(
+                    trace, groups, n, gpus_per_node, size, "bine", TAIL_NS)
+                binary = trace[:-5] + ".bin"
+                goal.compile_goal(trace, binary)
+                finish, drops, status, command, _ = sim.run_sim(
+                    binary, so_topo, su_topo, nodes=n, gpus_per_node=gpus_per_node,
+                    groups=groups, timeout=timeout, intranode_linkspeed=INTRANODE_LINKSPEED)
+                base_ns = finish - TAIL_NS if finish else None
+                ok = bool(base_ns and status == "ok" and drops == 0)
+                if not ok:
+                    failures += 1
+                log = os.path.join(OUTPUT_DIR, "logs", stem + ".log")
+                os.makedirs(os.path.dirname(log), exist_ok=True)
+                with open(log, "w") as stream:
+                    stream.write(command + "\n")
+                out.write({
+                    "collective": "allreduce", "baseline_algo": NAIVE_INC_ALGO,
+                    "group_size": n, "gpus_per_node": gpus_per_node, "msg_bytes": size,
+                    "base_ns": base_ns or "", "base_makespan_ns": finish or "", "drops": drops,
+                    "fabric": "naive_inc_local_allreduce_full_buffer_lanes",
+                    "su_topo": os.path.basename(su_topo), "so_topo": os.path.basename(so_topo),
+                    "intranode_linkspeed_mbps": INTRANODE_LINKSPEED, "engine": "pcm-sdk",
+                    "log_file": log, "command": command,
+                })
+                print(f"  {size:>10}b  NAIVE-INC {str(base_ns):>5}  "
+                      f"{'ok' if ok else f'{status}, drops={drops}'}")
     if failures:
         report.print_error(f"{failures} simulation cell(s) failed; partial CSV: {csv_path}")
         return 1
@@ -142,6 +183,10 @@ def main():
                         help="comma-separated endpoint algorithms: ring,rdouble,tree,bine")
     parser.add_argument("--without-hierarchical-inc", action="store_false", dest="hierarchical_inc",
                         help="omit the local INC RS/AG + lane-Bine comparison arm")
+    parser.add_argument("--without-naive-inc", action="store_false", dest="naive_inc",
+                        help="omit the local INC AllReduce + full-buffer lane-Bine arm")
+    parser.add_argument("--inc-only", action="store_true",
+                        help="run only selected INC composition arms (reuse existing endpoint CSV rows)")
     parser.add_argument("--su-topo", default=DEFAULT_SU_TOPO)
     parser.add_argument("--so-topo", default=DEFAULT_SO_TOPO)
     parser.add_argument("--tmpdir", default="/tmp/scaleout_allreduce")
@@ -158,7 +203,10 @@ def main():
     goal.require_generator()
     sim.require_simulator()
     sizes = [int(s) for s in args.sizes.split(",")]
+    if args.inc_only and not (args.hierarchical_inc or args.naive_inc):
+        parser.error("--inc-only needs at least one INC arm")
     sys.exit(run_exp(args.n, args.gpus_per_node, sizes, algos, args.hierarchical_inc,
+                     args.naive_inc, args.inc_only,
                      paths.topo(args.su_topo), paths.topo(args.so_topo),
                      args.tmpdir, args.timeout))
 

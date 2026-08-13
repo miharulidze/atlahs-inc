@@ -446,6 +446,77 @@ def gen_hierarchical_inc_allreduce_goal(path, groups_path, n, gpus_per_node, siz
         f.write(" ".join(str(rank) for rank in range(gpus_per_node)) + "\n")
 
 
+def gen_naive_hierarchical_inc_allreduce_goal(path, groups_path, n, gpus_per_node, size,
+                                              global_algo, tail_ns):
+    """Emit the direct two-level composition of the existing local INC primitive.
+
+    First run the existing ``coll allreduce`` independently in every scale-up
+    domain.  Then every matching local-rank lane performs a *full-buffer*
+    endpoint AllReduce across scale-out domains.  The composition is correct,
+    but intentionally naive: all ``gpus_per_node`` lanes ship the entire S-byte
+    result over scale-out.  In contrast,
+    :func:`gen_hierarchical_inc_allreduce_goal` uses local ReduceScatter and
+    AllGather so every lane ships only S/gpus_per_node.
+
+    This is the closest valid multi-domain version of the pre-existing remote
+    local INC path.  A literal 64-rank ``coll allreduce`` is invalid because
+    the PCM INC groups and FIBs are deliberately node-local.
+    """
+    if n < 2 or n & (n - 1):
+        raise ValueError(f"naive hierarchical INC AllReduce needs power-of-two N >= 2; got {n}")
+    if gpus_per_node < 2 or gpus_per_node & (gpus_per_node - 1):
+        raise ValueError(f"gpus_per_node must be a power of two >= 2; got {gpus_per_node}")
+    if n % gpus_per_node:
+        raise ValueError(f"N={n} must be divisible by gpus_per_node={gpus_per_node}")
+    if size <= 0 or size % (n // gpus_per_node):
+        raise ValueError(f"size must be positive and divisible by domain count; got {size}")
+    if global_algo not in ("rdouble", "bine"):
+        raise ValueError(f"unsupported naive global algorithm {global_algo!r}")
+
+    domains = n // gpus_per_node
+    stages = domains.bit_length() - 1
+
+    def peer_index(index, stage):
+        return (index ^ (1 << stage) if global_algo == "rdouble"
+                else _bine_partner(index, stage, domains))
+
+    def tag(stage, phase):
+        return f"8{stage:05d}{phase:03d}"
+
+    with open(path, "w") as f:
+        f.write(f"num_ranks {n}\n\n")
+        for rank in range(n):
+            domain, local_rank = divmod(rank, gpus_per_node)
+            local_ar_id = domain
+            label = 1
+            f.write(f"rank {rank} {{\n")
+            # nic 0 preserves the trace's one-NIC P2P rank mapping; the INC
+            # implementation routes through its own scale-up NIC object.
+            f.write(f"l{label}: coll allreduce {size}b 0 {local_ar_id} -1 cpu 1 nic 0\n")
+            previous, label = label, label + 1
+            rounds = [(stage, 0, size >> (stage + 1)) for stage in range(stages)]
+            rounds += [(stage, 1, size >> (stage + 1))
+                       for stage in range(stages - 1, -1, -1)]
+            for stage, phase, chunk in rounds:
+                peer = peer_index(domain, stage) * gpus_per_node + local_rank
+                gate, recv, send, join = label, label + 1, label + 2, label + 3
+                f.write(f"l{gate}: calc 0 cpu 0\n")
+                f.write(f"l{gate} requires l{previous}\n")
+                f.write(f"l{recv}: recv {chunk}b from {peer} tag {tag(stage, phase)} cpu 0 nic 0\n")
+                f.write(f"l{recv} requires l{gate}\n")
+                f.write(f"l{send}: send {chunk}b to {peer} tag {tag(stage, phase)} cpu 0 nic 0\n")
+                f.write(f"l{send} requires l{gate}\n")
+                f.write(f"l{join}: calc 0 cpu 0\n")
+                f.write(f"l{join} requires l{recv}\n")
+                f.write(f"l{join} requires l{send}\n")
+                previous, label = join, label + 4
+            f.write(f"l{label}: calc {tail_ns} cpu 0\n")
+            f.write(f"l{label} requires l{previous}\n")
+            f.write("}\n\n")
+    with open(groups_path, "w") as f:
+        f.write(" ".join(str(rank) for rank in range(gpus_per_node)) + "\n")
+
+
 def expected_steps(collective, n, algo_name):
     """Busiest rank's endpoint-step count.  ``count_steps`` measures sends, which
     is equal to this quantity for the symmetric Ring/recursive-doubling schedules;
