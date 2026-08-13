@@ -54,6 +54,13 @@ FIGURE1_LINES = [
     ("tree",    "#9467bd", "o", "vs. binomial tree"),
     ("bine",    "#d62728", "X", "vs. Bine butterfly"),
 ]
+COMPLETION_TIME_LINES = [
+    ("ring",    "#ff7f0e", "s", "Ring"),
+    ("rdouble", "#2ca02c", "^", "Recursive doubling"),
+    ("tree",    "#9467bd", "o", "Binomial tree"),
+    ("bine",    "#d62728", "X", "Bine butterfly"),
+]
+INC_COMPLETION_LINE = ("#159588", "P", "In-network INC")
 TOPO_TITLE = {"single_switch": "single-switch crossbar", "fat3tier": "256-host 3-tier fat-tree"}
 
 
@@ -196,6 +203,50 @@ def allreduce_algorithm_speedup_by_fabric(rows, outdir):
         plt.close(fig)
 
 
+def allreduce_completion_time_by_fabric(rows, outdir):
+    """AllReduce completion-time plot with the scale-out plot's visual grammar."""
+    fabrics = sorted({r.get("su_topo", "") for r in rows
+                      if r["collective"] == "allreduce"
+                      and fnum(r, "group_size") == 64
+                      and fnum(r, "msg_bytes")
+                      and int(r["msg_bytes"]) <= 67108864})
+    for fabric in fabrics:
+        sub = [r for r in rows if r.get("su_topo", "") == fabric
+               and r["collective"] == "allreduce"
+               and fnum(r, "group_size") == 64
+               and fnum(r, "msg_bytes")
+               and int(r["msg_bytes"]) <= 67108864]
+        if not sub:
+            continue
+        fig, ax = plt.subplots(figsize=(6.7, 4.2))
+        for algo, color, marker, label in COMPLETION_TIME_LINES:
+            points = {int(r["msg_bytes"]): fnum(r, "base_ns") for r in sub
+                      if r["baseline_algo"] == algo and fnum(r, "base_ns")}
+            if not points:
+                continue
+            xs = sorted(points)
+            ax.plot(xs, [points[x] for x in xs], color=color, marker=marker,
+                    ms=5, lw=1.8, label=label)
+        inc = {int(r["msg_bytes"]): fnum(r, "inc_ns") for r in sub if fnum(r, "inc_ns")}
+        if inc:
+            color, marker, label = INC_COMPLETION_LINE
+            xs = sorted(inc)
+            ax.plot(xs, [inc[x] for x in xs], color=color, marker=marker,
+                    ms=5, lw=1.8, label=label)
+        ax.set_yscale("log")
+        _size_ticks(ax, sorted({int(r["msg_bytes"]) for r in sub}))
+        ax.set_ylabel("endpoint completion time (ns)")
+        ax.set_title(f"AllReduce, |G|=64, {fabric.replace('.topo', '')}", fontsize=9)
+        ax.grid(ls=":", alpha=0.5, which="both")
+        ax.legend(fontsize=8)
+        fig.tight_layout()
+        tag = fabric.replace(".topo", "")
+        for ext in ("pdf", "png"):
+            fig.savefig(os.path.join(outdir, f"allreduce_completion_time__{tag}.{ext}"), dpi=150)
+        print(f"wrote allreduce_completion_time__{tag}")
+        plt.close(fig)
+
+
 def speedup_overview(rows, outdir):
     topos = [t for t in ("single_switch", "fat3tier") if any(r["_topo"] == t for r in rows)]
     if not topos:
@@ -327,6 +378,7 @@ def main():
     colls = sorted({r["collective"] for r in rows})
     figure1_allreduce_with_tree_bine(rows, OUTDIR)
     allreduce_algorithm_speedup_by_fabric(rows, OUTDIR)
+    allreduce_completion_time_by_fabric(rows, OUTDIR)
     speedup_overview(rows, OUTDIR)
     for topo in topos:                     # individual per-collective completion-time plots
         for coll in colls:
