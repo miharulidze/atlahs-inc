@@ -1,0 +1,24 @@
+# 64-host, 2-tier 2:1-oversubscribed scale-out fabric.
+#
+# Used with -nodes 64 -num_gpus_per_node 8: ranks 0..7, 8..15, ... form eight
+# scale-up domains, while inter-domain messages traverse this tapered fabric.
+# Host links and upward links are both 100 Gbps; tapering is represented by four
+# uplinks for each eight-host leaf.  Contiguous rank placement makes Bine's
+# locality-aware partner sequence meaningful.
+Nodes 64
+Tiers 2
+Podsize 64
+
+Tier 0
+Downlink_speed_Gbps 100
+Radix_Down 8
+Radix_Up 4
+Downlink_Latency_ns 500
+Switch_Latency_ns 100
+Oversubscribed 2
+
+Tier 1
+Downlink_speed_Gbps 100
+Radix_Down 8
+Downlink_Latency_ns 500
+Switch_Latency_ns 100

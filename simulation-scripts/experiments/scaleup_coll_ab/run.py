@@ -207,6 +207,8 @@ def main():
     ap.add_argument("--baseline-algos", default=None,
                     help="comma-separated endpoint baselines to run (ring,rdouble,tree,bine); "
                          "default: all cases")
+    ap.add_argument("--allreduce-only", action="store_true",
+                    help="run only native AllReduce cases (useful for focused topology sweeps)")
     ap.add_argument("--validate", action="store_true",
                     help="generate all arms, check step counts vs the paper, compile — NO sim")
     args = ap.parse_args()
@@ -224,6 +226,11 @@ def main():
         cases = [case for case in COLL_CASES if case["algo"] in wanted]
         if not cases:
             ap.error("--baseline-algos selected no cases")
+    if args.allreduce_only:
+        cases = [case for case in cases
+                 if case["collective"] == "allreduce" and "inc_kind" not in case]
+        if not cases:
+            ap.error("--allreduce-only selected no cases")
 
     if args.validate:
         sys.exit(validate(args.n, sizes[0], args.tmpdir, cases))

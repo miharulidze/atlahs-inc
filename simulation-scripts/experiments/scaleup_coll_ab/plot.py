@@ -143,6 +143,59 @@ def figure1_allreduce_with_tree_bine(rows, outdir):
     plt.close(fig)
 
 
+def allreduce_algorithm_speedup_by_fabric(rows, outdir):
+    """Plot the Figure-1 metric for every measured 64-rank scale-up fabric.
+
+    The original Figure-1 plot deliberately stays on the paper's single-switch
+    fabric.  This companion keeps its metric and message sweep but keys the
+    series by the exact topology filename, which makes an oversubscription
+    sweep directly comparable without conflating it with the full-bisection
+    three-tier result.
+    """
+    fabrics = sorted({r.get("su_topo", "") for r in rows
+                      if r["collective"] == "allreduce"
+                      and fnum(r, "group_size") == 64
+                      and fnum(r, "msg_bytes")
+                      and int(r["msg_bytes"]) <= 67108864})
+    for fabric in fabrics:
+        sub = [r for r in rows if r.get("su_topo", "") == fabric
+               and r["collective"] == "allreduce"
+               and fnum(r, "group_size") == 64
+               and fnum(r, "msg_bytes")
+               and int(r["msg_bytes"]) <= 67108864]
+        if not sub:
+            continue
+        fig, ax = plt.subplots(figsize=(6.7, 4.1))
+        plotted = 0
+        for algo, color, marker, label in FIGURE1_LINES:
+            points = {int(r["msg_bytes"]): fnum(r, "speedup") for r in sub
+                      if r["baseline_algo"] == algo and fnum(r, "speedup")}
+            if not points:
+                continue
+            xs = sorted(points)
+            ax.plot(xs, [points[x] for x in xs], marker=marker, ms=5, lw=1.8,
+                    color=color, label=label)
+            plotted += 1
+        if not plotted:
+            plt.close(fig)
+            continue
+        xs_all = sorted({int(r["msg_bytes"]) for r in sub})
+        ax.axhline(1.0, color="#888", lw=1, ls=":")
+        ax.set_yscale("log")
+        _size_ticks(ax, xs_all)
+        ax.set_ylabel("speed-up  (endpoint / in-network)")
+        ax.set_title(f"AllReduce, |G| = 64, {fabric.replace('.topo', '')} (pcm-sdk, measured)",
+                     fontsize=9)
+        ax.grid(ls=":", alpha=0.5, which="both")
+        ax.legend(fontsize=8, loc="upper right", framealpha=0.95)
+        fig.tight_layout()
+        tag = fabric.replace(".topo", "")
+        for ext in ("pdf", "png"):
+            fig.savefig(os.path.join(outdir, f"allreduce_algorithm_speedup__{tag}.{ext}"), dpi=150)
+        print(f"wrote allreduce_algorithm_speedup__{tag}")
+        plt.close(fig)
+
+
 def speedup_overview(rows, outdir):
     topos = [t for t in ("single_switch", "fat3tier") if any(r["_topo"] == t for r in rows)]
     if not topos:
@@ -273,6 +326,7 @@ def main():
     topos = sorted({r["_topo"] for r in rows})
     colls = sorted({r["collective"] for r in rows})
     figure1_allreduce_with_tree_bine(rows, OUTDIR)
+    allreduce_algorithm_speedup_by_fabric(rows, OUTDIR)
     speedup_overview(rows, OUTDIR)
     for topo in topos:                     # individual per-collective completion-time plots
         for coll in colls:
