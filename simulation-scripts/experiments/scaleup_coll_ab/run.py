@@ -44,10 +44,13 @@ OUTPUT_DIR = os.environ.get("SCALEUP_OUTPUT_DIR", paths.results_dir(EXP_NAME))
 # needs >= N hosts.
 SO_TOPO_DEFAULT = "tree16_bw200Gbps.topo"
 
-# Single source of truth for the scale-up NIC rate: the SAME value is passed to
+# Single source of truth for the per-GPU NIC rate: the SAME value is passed to
 # run_sim (the -intranode_linkspeed flag) and recorded in the CSV column, so the
-# reported rate can never drift from the one actually simulated.
-INTRANODE_LINKSPEED = sim.INTRANODE_LINKSPEED_DEFAULT
+# reported rate can never drift from the one actually simulated. ATLAHS_NIC_MBPS
+# overrides it so the NIC can be matched to a fabric whose .topo link rate is not
+# the 4000 Gb/s default (an unmatched NIC silently rate-limits every receiver).
+INTRANODE_LINKSPEED = int(os.environ.get("ATLAHS_NIC_MBPS",
+                                         sim.INTRANODE_LINKSPEED_DEFAULT))
 
 # (collective, baseline algorithm[, inc_kind]). AllReduce runs both baselines;
 # RS/AG ring-only. Optional `inc_kind` overrides the INC-arm coll kind while the

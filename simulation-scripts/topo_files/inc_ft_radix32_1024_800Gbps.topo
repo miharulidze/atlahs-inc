@@ -1,0 +1,68 @@
+# inc_ft_radix32_1024_800Gbps.topo
+#
+# 1024-host radix-32 three-tier fat tree at 800 Gb/s per host: the INC-capable
+# fabric used for the isolated-collective experiments. Derived from
+# scaleup_ft_radix32_1024_4000Gbps.topo by setting the per-link rate to a
+# scale-out-class 800 Gb/s; latencies (50 ns link, 300 ns switch) and radices
+# are unchanged.
+#
+# scaleup_ft_radix32_1024_4000Gbps.topo
+#
+# DIRECT reproduction of the topology in Khalilov et al. SC24 Fig. 2:
+# "a 1024-node cluster connected with a Fat-Tree topology using radix 32 switches."
+# Minted for experiments/scaleup_coll_footprint to reproduce the paper's ABSOLUTE
+# Ring-vs-Recursive-Doubling bandwidth-usage-reduction numbers (Ring -> ~2x plateau,
+# RD -> ~3.6x at P=1024), not just the shape.
+#
+# WHY THIS MATCHES THE PAPER (hop-distance regimes set by radix 32):
+#   Leaf holds radix/2 = 16 hosts; a pod holds 16 leaves = 256 hosts; 4 pods = 1024.
+#   Contiguous rank->host placement (host i = rank i) then gives:
+#     same leaf  (|i-j| < 16)        : host->leaf->host                  = 2 hops
+#     same pod   (16 <= |i-j| < 256) : host->leaf->agg->leaf->host       = 4 hops
+#     diff pod   (|i-j| >= 256)      : host->leaf->agg->core->agg->..->  = 6 hops
+#   Recursive-Doubling step j exchanges a 2^(j-1)-block with a partner at stride
+#   2^(j-1): RD stays 2 hops for P<=16, enters the 4-hop regime at P=32, and the
+#   6-hop (inter-pod) regime at P=512 -- reproducing the paper's gradual RD rise.
+#   Ring is always nearest-neighbour -> stays ~2-2/P (the flat ~2x plateau).
+#
+# STRUCTURE (uniform radix-32 leaf & agg; all switches <= 96 ports):
+#   Tier 0 (leaf): Radix_Down 16 (hosts), Radix_Up 16.  #leaves = 1024/16 = 64.  ports 32.
+#   Tier 1 (agg) : Radix_Down 16 (leaves/pod), Radix_Up 16.  agg/pod = 16; #agg = 4x16 = 64.  ports 32.
+#   Tier 2 (core): Radix_Down 4 (= #pods).  #core = leaf_up x agg_up = 16x16 = 256.  ports 4.
+#   Full bisection / 1:1 oversubscription at every tier.
+#
+# HTSIM ABSTRACTION CAVEAT: the paper says "radix 32 switches" (uniform). Leaf and agg
+# ARE radix-32 here; the CORE tier lands at radix 4 because exactly 1024 hosts (not the
+# full k-ary-3-tree size k^3/4 = 8192) forces a partial Clos. The core radix only sets
+# the NUMBER of core switches, not the inter-pod hop count (always 6), so the RD/Ring
+# footprint RATIO -- which depends only on the leaf(16)/pod(256) regime thresholds -- is
+# unaffected. (Same style of documented cap/size artifact as the SUE 4096 file.)
+#
+# BANDWIDTH/LATENCY: footprint (link-crosses) is speed/latency-independent; 4000 Gbps
+# (exactly 2 ps/B, matching the -intranode_linkspeed 4000000 NIC rate; 3600 rounds to the
+# same) & idealized 50 ns link / 300 ns switch chosen for cross-topology comparability.
+Nodes 1024
+Tiers 3
+Podsize 256
+
+Tier 0
+Downlink_speed_Gbps 800
+Radix_Down 16
+Radix_Up 16
+Downlink_Latency_ns 50
+Switch_Latency_ns 300
+Oversubscribed 1
+
+Tier 1
+Downlink_speed_Gbps 800
+Radix_Down 16
+Radix_Up 16
+Downlink_Latency_ns 50
+Switch_Latency_ns 300
+Oversubscribed 1
+
+Tier 2
+Downlink_speed_Gbps 800
+Radix_Down 4
+Downlink_Latency_ns 50
+Switch_Latency_ns 300

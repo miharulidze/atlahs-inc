@@ -67,7 +67,8 @@ TOPOS = [
      "width": 256, "P": [2, 4, 8, 16, 32, 64, 128, 256]},
     # Direct reproduction of Khalilov Fig. 2's topology: radix-32 3-tier, 1024 hosts
     # (leaf=16, pod=256). Ring -> ~2x, RD -> ~3.6x at P=1024, per the paper.
-    {"cls": "paper_r32", "topo": "scaleup_ft_radix32_1024_4000Gbps.topo",
+    {"cls": "paper_r32", "topo": os.environ.get("ATLAHS_R32_TOPO",
+                                                "scaleup_ft_radix32_1024_4000Gbps.topo"),
      "width": 1024, "P": [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]},
 ]
 
@@ -81,7 +82,8 @@ COLL_CASES = [
     {"collective": "reduce",         "algos": ["ring"]},  # rooted; ring-only baseline vs INC aggregation
 ]
 
-INTRANODE_LINKSPEED = sim.INTRANODE_LINKSPEED_DEFAULT
+INTRANODE_LINKSPEED = int(os.environ.get("ATLAHS_NIC_MBPS",
+                                         sim.INTRANODE_LINKSPEED_DEFAULT))
 
 CSV_FIELDS = ["topology_class", "su_topo", "collective", "baseline_algo",
               "group_size", "msg_bytes", "size_mult",
